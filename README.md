@@ -39,6 +39,7 @@ npm run lint
 npm run typecheck
 npm test
 npm run build
+npm run offline:check
 npm run pack:check
 ```
 
