@@ -55,7 +55,7 @@ It only prints the project name; it does not inspect a repository.
 
 SourceMesh is pre-release and its graph model and public interfaces are not defined. Package publication, releases, hosted processing, and compatibility changes require separate authorization and issue-backed work.
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for the development workflow and [the technical baseline](docs/decisions/0001-technical-baseline.md) for the current stack decision.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the development workflow, [the technical baseline](docs/decisions/0001-technical-baseline.md) for the current stack decision, and [the source graph MVP architecture](docs/decisions/0002-source-graph-mvp-architecture.md) for the accepted graph and query contracts.
 
 ## License
 
