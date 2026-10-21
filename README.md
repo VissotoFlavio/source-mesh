@@ -16,7 +16,7 @@ These requirements cover SourceMesh itself. An editor, agent, model provider, sc
 
 Prerequisites:
 
-- Node.js 22 or 24
+- Node.js 22.13 or newer within the 22.x line, or Node.js 24.x
 - npm
 
 Install the locked development dependencies:
