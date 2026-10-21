@@ -3,7 +3,11 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
-import { extractDeclarationGraph, loadProject, repositoryId } from '../src/index.js';
+import {
+  extractDeclarationGraph,
+  loadProject,
+  repositoryId,
+} from '../src/index.js';
 
 function project(files: Record<string, string>) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sourcemesh-extractor-'));
@@ -12,7 +16,10 @@ function project(files: Record<string, string>) {
     fs.mkdirSync(path.dirname(target), { recursive: true });
     fs.writeFileSync(target, source, 'utf8');
   }
-  const loaded = loadProject({ repositoryRoot: root, approvedFiles: Object.keys(files).sort() });
+  const loaded = loadProject({
+    repositoryRoot: root,
+    approvedFiles: Object.keys(files).sort(),
+  });
   assert.ok(loaded.project, JSON.stringify(loaded.diagnostics));
   return { root, loaded: loaded.project };
 }
@@ -29,31 +36,89 @@ test('extracts the closed declaration set with direct containment only', () => {
     `,
     'src/other.js': 'export class Other { method(value) { return value; } }\n',
   });
-  const graph = extractDeclarationGraph({ repositoryRoot: root, project: loaded });
+  const graph = extractDeclarationGraph({
+    repositoryRoot: root,
+    project: loaded,
+  });
   assert.equal(graph.repository.name, 'repository');
   assert.equal(graph.repository.root, '.');
-  assert.ok(graph.nodes.some((node) => node.kind === 'interface' && node.name === 'User'));
-  assert.ok(graph.nodes.some((node) => node.kind === 'class' && node.name === 'Service'));
-  assert.ok(graph.nodes.some((node) => node.kind === 'type' && node.name === 'Name'));
-  assert.ok(graph.nodes.some((node) => node.kind === 'parameter' && node.name === 'value'));
-  assert.ok(graph.nodes.some((node) => node.kind === 'module' && node.name === 'Api'));
-  assert.ok(graph.nodes.some((node) => node.kind === 'function' && node.name === 'create' && node.memberRole === 'static'));
-  assert.ok(graph.nodes.some((node) => node.kind === 'function' && node.name === 'run' && node.memberRole === 'instance'));
+  assert.ok(
+    graph.nodes.some(
+      (node) => node.kind === 'interface' && node.name === 'User',
+    ),
+  );
+  assert.ok(
+    graph.nodes.some(
+      (node) => node.kind === 'class' && node.name === 'Service',
+    ),
+  );
+  assert.ok(
+    graph.nodes.some((node) => node.kind === 'type' && node.name === 'Name'),
+  );
+  assert.ok(
+    graph.nodes.some(
+      (node) => node.kind === 'parameter' && node.name === 'value',
+    ),
+  );
+  assert.ok(
+    graph.nodes.some((node) => node.kind === 'module' && node.name === 'Api'),
+  );
+  assert.ok(
+    graph.nodes.some(
+      (node) =>
+        node.kind === 'function' &&
+        node.name === 'create' &&
+        node.memberRole === 'static',
+    ),
+  );
+  assert.ok(
+    graph.nodes.some(
+      (node) =>
+        node.kind === 'function' &&
+        node.name === 'run' &&
+        node.memberRole === 'instance',
+    ),
+  );
   assert.ok(graph.nodes.every((node) => !JSON.stringify(node).includes(root)));
-  assert.ok(graph.nodes.every((node) => !JSON.stringify(node).includes('export interface')));
+  assert.ok(
+    graph.nodes.every(
+      (node) => !JSON.stringify(node).includes('export interface'),
+    ),
+  );
   assert.ok(graph.edges.every((edge) => edge.kind === 'contains'));
   assert.equal(graph.nodes.filter((node) => node.kind === 'file').length, 2);
   assert.equal(graph.nodes.filter((node) => node.kind === 'module').length, 3);
-  assert.equal(graph.repository.id, repositoryId());
+  const repositoryNode = graph.nodes.find((node) => node.kind === 'repository');
+  assert.ok(repositoryNode);
+  assert.equal(repositoryNode.id, repositoryId());
 });
 
 test('identity and ordering are independent of approved root order and comments', () => {
-  const first = project({ 'src/a.ts': 'export function run(value: string) { return value; }\n', 'src/b.ts': 'export const value = 1;\n' });
-  const second = loadProject({ repositoryRoot: first.root, approvedFiles: ['src/b.ts', 'src/a.ts'] });
+  const first = project({
+    'src/a.ts': 'export function run(value: string) { return value; }\n',
+    'src/b.ts': 'export const value = 1;\n',
+  });
+  const second = loadProject({
+    repositoryRoot: first.root,
+    approvedFiles: ['src/b.ts', 'src/a.ts'],
+  });
   assert.ok(second.project);
-  const left = extractDeclarationGraph({ repositoryRoot: first.root, project: first.loaded });
-  const right = extractDeclarationGraph({ repositoryRoot: first.root, project: { ...second.project, rootNames: [...second.project.rootNames].reverse() } });
+  const left = extractDeclarationGraph({
+    repositoryRoot: first.root,
+    project: first.loaded,
+  });
+  const right = extractDeclarationGraph({
+    repositoryRoot: first.root,
+    project: {
+      ...second.project,
+      rootNames: [...second.project.rootNames].reverse(),
+    },
+  });
   assert.deepEqual(left, right);
-  assert.ok(left.nodes.every((node) => !('parent' in node) && !('container' in node)));
-  assert.ok(left.nodes.every((node) => !JSON.stringify(node).match(/[A-Z]:\\|\\\\/u)));
+  assert.ok(
+    left.nodes.every((node) => !('parent' in node) && !('container' in node)),
+  );
+  assert.ok(
+    left.nodes.every((node) => !JSON.stringify(node).match(/[A-Z]:\\|\\\\/u)),
+  );
 });
