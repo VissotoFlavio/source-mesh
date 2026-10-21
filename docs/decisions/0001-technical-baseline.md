@@ -12,7 +12,7 @@ Repository analysis is required to stay on the user's machine. The runtime must 
 
 ## Decision
 
-SourceMesh will use TypeScript with ECMAScript modules on Node.js. Supported Node.js versions are the active LTS lines 22 and 24. Code must not depend unconditionally on APIs unavailable in Node.js 22.
+SourceMesh will use TypeScript with ECMAScript modules on Node.js. Supported Node.js major versions are 22 and 24. Code must not depend unconditionally on APIs unavailable in Node.js 22.
 
 The project will use:
 
@@ -32,7 +32,7 @@ The project is licensed under the Apache License 2.0. The canonical license text
 
 Application code and automation must support Windows, Linux, and macOS. Native dependencies should be avoided unless their benefit, platform support, installation behavior, and fallback strategy are documented.
 
-CI will validate supported Node.js versions separately. Dropping a supported runtime or operating system requires a new decision record and an explicit compatibility change.
+Compatibility validation must exercise supported Node.js versions separately. Dropping a supported runtime or operating system requires a new decision record and an explicit compatibility change.
 
 ## Local-first and network boundary
 
@@ -60,4 +60,4 @@ Rust could produce a single native executable, but it would increase implementat
 
 ## Deferred decisions
 
-This record does not choose parser libraries, the graph schema, persistence, visualization, MCP integration, release automation, or package publication. Those decisions belong to later, issue-backed work.
+This record does not choose parser libraries, the graph schema, persistence, visualization, MCP integration, CI implementation, release automation, or package publication. Those decisions belong to later, issue-backed work.
