@@ -14,6 +14,7 @@ import assert from 'node:assert/strict';
 import { afterEach, describe, it } from 'node:test';
 import os from 'node:os';
 import path from 'node:path';
+import { win32 as win32Path } from 'node:path';
 import {
   discoverSourceFiles,
   type DiscoveryFileSystem,
@@ -73,6 +74,77 @@ describe('discoverSourceFiles', () => {
     assert.deepEqual(result.sources, ['a.ts', 'nested.tsx', 'z.js']);
     assert.deepEqual(result.diagnostics, []);
     assert.deepEqual(await discoverSourceFiles(root), result);
+  });
+
+  it('covers Windows lexical containment and portable path normalization', () => {
+    const root = win32Path.normalize('C:\\Repository\\.');
+    const portable = (candidate: string): string | undefined => {
+      const relative = win32Path.relative(root, candidate);
+      if (
+        win32Path.isAbsolute(relative) ||
+        relative === '..' ||
+        relative.startsWith(`..${win32Path.sep}`)
+      ) {
+        return undefined;
+      }
+      return relative.split(win32Path.sep).join('/');
+    };
+
+    assert.equal(
+      portable(win32Path.join(root, 'Src', 'Main.ts')),
+      'Src/Main.ts',
+    );
+    assert.equal(
+      portable('C:\\Repository\\src\\.\\nested\\..\\Main.ts'),
+      'src/Main.ts',
+    );
+    assert.equal(portable('C:\\Repository\\..\\outside.ts'), undefined);
+    assert.equal(portable('D:\\Repository\\outside.ts'), undefined);
+    assert.equal(portable('\\\\server\\share\\outside.ts'), undefined);
+  });
+
+  it('produces identical results when directory enumeration is reversed', async () => {
+    const root = await fixture();
+    const disappearing = path.join(root, 'disappearing.ts');
+    await writeFile(path.join(root, 'z.ts'), '');
+    await writeFile(path.join(root, 'a.ts'), '');
+    await writeFile(disappearing, '');
+
+    const orderedFileSystem = (reverse: boolean): DiscoveryFileSystem => ({
+      ...nativeFileSystem,
+      readdir: async (directory) => {
+        const entries = [
+          ...(await readdir(directory, { withFileTypes: true })),
+        ];
+        return reverse ? entries.reverse() : entries;
+      },
+      lstat: async (candidate) => {
+        if (candidate === disappearing) {
+          const error = new Error('disappeared') as NodeJS.ErrnoException;
+          error.code = 'ENOENT';
+          throw error;
+        }
+        return lstat(candidate);
+      },
+    });
+
+    const forward = await discoverSourceFiles(root, {
+      filesystem: orderedFileSystem(false),
+    });
+    const reversed = await discoverSourceFiles(root, {
+      filesystem: orderedFileSystem(true),
+    });
+    assert.deepEqual(reversed, forward);
+    assert.deepEqual(forward.sources, ['a.ts', 'z.ts']);
+    assert.deepEqual(forward.diagnostics, [
+      {
+        code: 'path_invalid',
+        severity: 'error',
+        message: 'Repository-relative path is invalid.',
+        reason: 'entry_missing',
+        path: 'disappearing.ts',
+      },
+    ]);
   });
 
   it('applies exact extensions, declaration exclusions, reserved directories, and secrets', async () => {
