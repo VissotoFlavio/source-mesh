@@ -80,7 +80,10 @@ function compareOrdinal(left: string, right: string): number {
   return Buffer.from(left, 'utf8').compare(Buffer.from(right, 'utf8'));
 }
 
-function compareOptionalPath(left: string | undefined, right: string | undefined): number {
+function compareOptionalPath(
+  left: string | undefined,
+  right: string | undefined,
+): number {
   if (left === undefined && right !== undefined) return 1;
   if (left !== undefined && right === undefined) return -1;
   if (left === undefined || right === undefined) return 0;
@@ -112,7 +115,12 @@ function sortDiagnostics(diagnostics: DiscoveryDiagnostic[]): void {
 
 function isContained(root: string, candidate: string): boolean {
   const relative = path.relative(root, candidate);
-  return relative !== '' && !path.isAbsolute(relative) && relative !== '..' && !relative.startsWith(`..${path.sep}`);
+  return (
+    relative !== '' &&
+    !path.isAbsolute(relative) &&
+    relative !== '..' &&
+    !relative.startsWith(`..${path.sep}`)
+  );
 }
 
 function toRepositoryPath(root: string, candidate: string): string | undefined {
@@ -123,7 +131,9 @@ function toRepositoryPath(root: string, candidate: string): string | undefined {
     portable.length === 0 ||
     portable.startsWith('/') ||
     Buffer.byteLength(portable, 'utf8') > MAX_SERIALIZED_PATH_BYTES ||
-    portable.split('/').some((segment) => segment === '' || segment === '.' || segment === '..')
+    portable
+      .split('/')
+      .some((segment) => segment === '' || segment === '.' || segment === '..')
   ) {
     return undefined;
   }
@@ -131,9 +141,9 @@ function toRepositoryPath(root: string, candidate: string): string | undefined {
 }
 
 function hasReservedDirectory(relativePath: string): boolean {
-  return relativePath.split('/').some((segment) =>
-    RESERVED_DIRECTORY_NAMES.has(segment.toLowerCase()),
-  );
+  return relativePath
+    .split('/')
+    .some((segment) => RESERVED_DIRECTORY_NAMES.has(segment.toLowerCase()));
 }
 
 function isSecretFile(relativePath: string): boolean {
@@ -169,31 +179,51 @@ function addDiagnostic(state: DiscoveryState, item: DiscoveryDiagnostic): void {
   state.diagnostics.push(item);
 }
 
-function failLimit(state: DiscoveryState, reason: DiscoveryReason, relativePath?: string): void {
+function failLimit(
+  state: DiscoveryState,
+  reason: DiscoveryReason,
+  relativePath?: string,
+): void {
   state.failed = true;
   state.sources.length = 0;
   addDiagnostic(state, diagnostic(reason, relativePath));
 }
 
-async function inspectDirectory(state: DiscoveryState, directory: string): Promise<void> {
+async function inspectDirectory(
+  state: DiscoveryState,
+  directory: string,
+): Promise<void> {
   if (state.failed) return;
 
   try {
     const directoryStats = await fs.lstat(directory);
     if (directoryStats.isSymbolicLink() || !directoryStats.isDirectory()) {
-      addDiagnostic(state, diagnostic('entry_not_regular', toRepositoryPath(state.root, directory)));
+      addDiagnostic(
+        state,
+        diagnostic(
+          'entry_not_regular',
+          toRepositoryPath(state.root, directory),
+        ),
+      );
       return;
     }
     const canonicalDirectory = await fs.realpath(directory);
     if (
       canonicalDirectory !== directory ||
-      (canonicalDirectory !== state.root && !isContained(state.root, canonicalDirectory))
+      (canonicalDirectory !== state.root &&
+        !isContained(state.root, canonicalDirectory))
     ) {
-      addDiagnostic(state, diagnostic('path_escape', toRepositoryPath(state.root, directory)));
+      addDiagnostic(
+        state,
+        diagnostic('path_escape', toRepositoryPath(state.root, directory)),
+      );
       return;
     }
   } catch {
-    addDiagnostic(state, diagnostic('entry_missing', toRepositoryPath(state.root, directory)));
+    addDiagnostic(
+      state,
+      diagnostic('entry_missing', toRepositoryPath(state.root, directory)),
+    );
     return;
   }
 
@@ -207,7 +237,11 @@ async function inspectDirectory(state: DiscoveryState, directory: string): Promi
   }
 
   if (state.inspectedEntries + entries.length > MAX_DIRECTORY_ENTRIES) {
-    failLimit(state, 'directory_entries_exceeded', toRepositoryPath(state.root, directory));
+    failLimit(
+      state,
+      'directory_entries_exceeded',
+      toRepositoryPath(state.root, directory),
+    );
     return;
   }
   state.inspectedEntries += entries.length;
@@ -226,7 +260,8 @@ async function inspectDirectory(state: DiscoveryState, directory: string): Promi
       failLimit(state, 'path_depth_exceeded', relativePath);
       return;
     }
-    if (hasReservedDirectory(relativePath) || isSecretFile(relativePath)) continue;
+    if (hasReservedDirectory(relativePath) || isSecretFile(relativePath))
+      continue;
 
     if (entry.isSymbolicLink()) {
       addDiagnostic(state, diagnostic('symlink_skipped', relativePath));
@@ -237,9 +272,10 @@ async function inspectDirectory(state: DiscoveryState, directory: string): Promi
     try {
       stats = await fs.lstat(candidate);
     } catch (error) {
-      const reason = (error as NodeJS.ErrnoException).code === 'ENOENT'
-        ? 'entry_missing'
-        : 'entry_inaccessible';
+      const reason =
+        (error as NodeJS.ErrnoException).code === 'ENOENT'
+          ? 'entry_missing'
+          : 'entry_inaccessible';
       addDiagnostic(state, diagnostic(reason, relativePath));
       continue;
     }
@@ -271,10 +307,15 @@ async function inspectDirectory(state: DiscoveryState, directory: string): Promi
       failLimit(state, 'discovery_roots_exceeded', relativePath);
       return;
     }
-    if (stats.size > MAX_SOURCE_BYTES || state.sourceBytes > MAX_AGGREGATE_SOURCE_BYTES - stats.size) {
+    if (
+      stats.size > MAX_SOURCE_BYTES ||
+      state.sourceBytes > MAX_AGGREGATE_SOURCE_BYTES - stats.size
+    ) {
       failLimit(
         state,
-        stats.size > MAX_SOURCE_BYTES ? 'source_size_exceeded' : 'source_bytes_exceeded',
+        stats.size > MAX_SOURCE_BYTES
+          ? 'source_size_exceeded'
+          : 'source_bytes_exceeded',
         relativePath,
       );
       return;
@@ -307,7 +348,11 @@ async function inspectDirectory(state: DiscoveryState, directory: string): Promi
       addDiagnostic(state, diagnostic('path_escape', relativePath));
       continue;
     }
-    if (hasReservedDirectory(canonicalRelativePath) || isSecretFile(canonicalRelativePath)) continue;
+    if (
+      hasReservedDirectory(canonicalRelativePath) ||
+      isSecretFile(canonicalRelativePath)
+    )
+      continue;
     state.sources.push(canonicalRelativePath);
     state.sourceBytes += stats.size;
   }
@@ -318,7 +363,9 @@ async function inspectDirectory(state: DiscoveryState, directory: string): Promi
  * The function never reads source contents, follows links, invokes processes,
  * or accesses the network. Errors are sanitized into stable diagnostics.
  */
-export async function discoverSourceFiles(selectedRoot: string): Promise<DiscoveryResult> {
+export async function discoverSourceFiles(
+  selectedRoot: string,
+): Promise<DiscoveryResult> {
   const empty = (diagnostics: DiscoveryDiagnostic[]): DiscoveryResult => ({
     sources: [],
     diagnostics,
@@ -336,7 +383,8 @@ export async function discoverSourceFiles(selectedRoot: string): Promise<Discove
   } catch {
     return empty([diagnostic('root_inaccessible')]);
   }
-  if (!rootStats.isDirectory()) return empty([diagnostic('root_not_directory')]);
+  if (!rootStats.isDirectory())
+    return empty([diagnostic('root_not_directory')]);
 
   const state: DiscoveryState = {
     root,

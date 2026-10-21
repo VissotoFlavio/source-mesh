@@ -1,4 +1,11 @@
-import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import {
+  mkdir,
+  mkdtemp,
+  realpath,
+  rm,
+  symlink,
+  writeFile,
+} from 'node:fs/promises';
 import assert from 'node:assert/strict';
 import { afterEach, describe, it } from 'node:test';
 import os from 'node:os';
@@ -41,7 +48,13 @@ describe('discoverSourceFiles', () => {
     await writeFile(path.join(root, 'notes.txt'), '');
     await writeFile(path.join(root, '.env.ts'), '');
     await writeFile(path.join(root, 'token.key'), '');
-    for (const directory of ['.git', 'node_modules', 'dist', 'generated', '.sourcemesh']) {
+    for (const directory of [
+      '.git',
+      'node_modules',
+      'dist',
+      'generated',
+      '.sourcemesh',
+    ]) {
       await mkdir(path.join(root, directory));
       await writeFile(path.join(root, directory, 'ignored.ts'), '');
     }
@@ -57,8 +70,14 @@ describe('discoverSourceFiles', () => {
     await writeFile(path.join(outside, 'escape.ts'), '');
     try {
       await symlink(path.join(root, 'real.ts'), path.join(root, 'inside.ts'));
-      await symlink(path.join(outside, 'escape.ts'), path.join(root, 'outside.ts'));
-      await symlink(path.join(root, 'missing.ts'), path.join(root, 'dangling.ts'));
+      await symlink(
+        path.join(outside, 'escape.ts'),
+        path.join(root, 'outside.ts'),
+      );
+      await symlink(
+        path.join(root, 'missing.ts'),
+        path.join(root, 'dangling.ts'),
+      );
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'EPERM') {
         t.skip('symlink fixtures are unavailable on this host');
@@ -69,11 +88,17 @@ describe('discoverSourceFiles', () => {
 
     const result = await discoverSourceFiles(root);
     assert.deepEqual(result.sources, ['real.ts']);
-    assert.deepEqual(result.diagnostics.map(({ path: itemPath, reason }) => [itemPath, reason]), [
-      ['dangling.ts', 'symlink_skipped'],
-      ['inside.ts', 'symlink_skipped'],
-      ['outside.ts', 'symlink_skipped'],
-    ]);
+    assert.deepEqual(
+      result.diagnostics.map(({ path: itemPath, reason }) => [
+        itemPath,
+        reason,
+      ]),
+      [
+        ['dangling.ts', 'symlink_skipped'],
+        ['inside.ts', 'symlink_skipped'],
+        ['outside.ts', 'symlink_skipped'],
+      ],
+    );
   });
 
   it('rejects invalid roots with sanitized diagnostics', async () => {
@@ -82,11 +107,22 @@ describe('discoverSourceFiles', () => {
     await writeFile(file, '');
     assert.deepEqual(
       (await discoverSourceFiles(path.join(root, 'missing'))).diagnostics,
-      [{ code: 'path_invalid', severity: 'error', message: 'Repository-relative path is invalid.', reason: 'root_missing' }],
+      [
+        {
+          code: 'path_invalid',
+          severity: 'error',
+          message: 'Repository-relative path is invalid.',
+          reason: 'root_missing',
+        },
+      ],
     );
-    assert.deepEqual(
-      (await discoverSourceFiles(file)).diagnostics,
-      [{ code: 'path_invalid', severity: 'error', message: 'Repository-relative path is invalid.', reason: 'root_not_directory' }],
-    );
+    assert.deepEqual((await discoverSourceFiles(file)).diagnostics, [
+      {
+        code: 'path_invalid',
+        severity: 'error',
+        message: 'Repository-relative path is invalid.',
+        reason: 'root_not_directory',
+      },
+    ]);
   });
 });
