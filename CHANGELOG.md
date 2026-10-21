@@ -21,5 +21,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   DTOs, byte determinism, overload identity, and fail-closed path containment.
 - Finalized structural edge semantics, NodeNext no-`tsconfig` behavior, compiler
   context exclusions, declaration identity, and bounded query continuation rules.
+- Closed the source graph contract gaps for diagnostic identity and pagination,
+  exclusion and generated-file authority, standard-library context, #23–#25 query
+  mappings, edge locations/status, repository naming, package type validation, and
+  deterministic fixture requirements.
 
 [Unreleased]: https://github.com/VissotoFlavio/source-mesh/commits/develop
