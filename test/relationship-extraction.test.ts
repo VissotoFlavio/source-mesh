@@ -81,3 +81,112 @@ test('does not fabricate external or dynamic relationships', () => {
     result.diagnostics.every((item) => !item.message.includes('node:')),
   );
 });
+
+test('indexes variable bindings for exports, local calls, and aliases', () => {
+  const result = graph({
+    'src/bindings.ts': `
+      export const arrow = () => {};
+      export const expression = function () {};
+      export const Klass = class {};
+      const local = () => {};
+      export function invoke() { arrow(); expression(); local(); }
+    `,
+    'src/consumer.ts': `
+      import { arrow as aliased } from './bindings.js';
+      export function consume() { aliased(); }
+    `,
+  });
+  const bindingsModule = result.nodes.find(
+    (node) => node.kind === 'module' && node.path === 'src/bindings.ts',
+  );
+  const consumerModule = result.nodes.find(
+    (node) => node.kind === 'module' && node.path === 'src/consumer.ts',
+  );
+  assert.ok(bindingsModule && consumerModule);
+  for (const name of ['arrow', 'expression', 'Klass']) {
+    const node = result.nodes.find(
+      (item) =>
+        item.kind === (name === 'Klass' ? 'class' : 'function') &&
+        item.name === name,
+    );
+    assert.ok(node, `missing binding node ${name}`);
+    assert.ok(
+      result.edges.some(
+        (edge) =>
+          edge.kind === 'exports' &&
+          edge.from === bindingsModule.id &&
+          edge.to === node.id,
+      ),
+      `missing export edge for ${name}`,
+    );
+  }
+  const consume = result.nodes.find(
+    (node) => node.kind === 'function' && node.name === 'consume',
+  );
+  const arrow = result.nodes.find(
+    (node) => node.kind === 'function' && node.name === 'arrow',
+  );
+  assert.ok(consume && arrow);
+  assert.ok(
+    result.edges.some(
+      (edge) =>
+        edge.kind === 'calls' &&
+        edge.from === consume.id &&
+        edge.to === arrow.id,
+    ),
+  );
+  assert.ok(consumerModule);
+});
+
+test('resolves anonymous default exports and explicit default re-exports', () => {
+  const result = graph({
+    'src/default-function.ts': 'export default function () {}\n',
+    'src/default-class.ts': 'export default class {}\n',
+    'src/reexports.ts': `
+      export { default as DefaultFunction } from './default-function.js';
+      export { default as DefaultClass } from './default-class.js';
+    `,
+  });
+  const defaults = result.nodes.filter(
+    (node) =>
+      node.name === 'default' &&
+      (node.kind === 'function' || node.kind === 'class'),
+  );
+  assert.equal(defaults.length, 2);
+  for (const target of defaults) {
+    const owner = result.nodes.find(
+      (node) =>
+        node.kind === 'module' &&
+        target.kind !== 'repository' &&
+        target.kind !== 'file' &&
+        node.path === target.path,
+    );
+    assert.ok(owner);
+    assert.ok(
+      result.edges.some(
+        (edge) =>
+          edge.kind === 'exports' &&
+          edge.from === owner.id &&
+          edge.to === target.id &&
+          edge.locations?.length === 1,
+      ),
+    );
+    const reexport = result.nodes.find(
+      (node) => node.kind === 'module' && node.path === 'src/reexports.ts',
+    );
+    assert.ok(reexport);
+    assert.ok(
+      result.edges.some(
+        (edge) =>
+          edge.kind === 'exports' &&
+          edge.from === reexport.id &&
+          edge.to === target.id &&
+          edge.locations?.length === 1,
+      ),
+    );
+  }
+  assert.equal(
+    result.diagnostics.some((item) => item.relationKind === 'exports'),
+    false,
+  );
+});

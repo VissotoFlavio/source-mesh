@@ -14,6 +14,7 @@ import {
 export interface RelationshipDeclaration {
   readonly id: string;
   readonly node: ts.Node;
+  readonly binding?: ts.Node;
   readonly kind: Exclude<NodeKind, 'repository' | 'file'>;
   readonly path: string;
 }
@@ -23,6 +24,7 @@ export interface RelationshipContext {
   readonly program: ts.Program;
   readonly sources: ReadonlyMap<string, ts.SourceFile>;
   readonly moduleIds: ReadonlyMap<string, string>;
+  readonly defaultIds: ReadonlyMap<string, string>;
   readonly declarations: readonly RelationshipDeclaration[];
   readonly nodes: ReadonlyMap<string, NodeV1>;
 }
@@ -139,6 +141,66 @@ function sourceModuleTarget(
   return targetForSymbol(checker, symbol, symbolIds, context);
 }
 
+function defaultTargetForModule(
+  checker: ts.TypeChecker,
+  moduleNode: ts.Node,
+  context: RelationshipContext,
+): Target {
+  const symbol = checker.getSymbolAtLocation(moduleNode);
+  const ids = new Set<string>();
+  for (const item of symbol ? aliases(checker, symbol) : []) {
+    for (const declaration of item.declarations ?? []) {
+      const id = context.defaultIds.get(
+        relative(context.repositoryRoot, declaration.getSourceFile().fileName),
+      );
+      if (id) ids.add(id);
+    }
+  }
+  return { ids: [...ids].sort(compare), external: false };
+}
+
+function defaultTargetForSource(
+  source: ts.SourceFile,
+  context: RelationshipContext,
+): Target {
+  const id = context.defaultIds.get(
+    relative(context.repositoryRoot, source.fileName),
+  );
+  return id ? { ids: [id], external: false } : { ids: [], external: false };
+}
+
+function targetForDeclaration(
+  checker: ts.TypeChecker,
+  node: ts.Node,
+  symbolIds: ReadonlyMap<ts.Symbol, ReadonlySet<string>>,
+  context: RelationshipContext,
+  nodeIds: ReadonlyMap<ts.Node, string>,
+): Target {
+  const target = targetForSymbol(
+    checker,
+    declarationSymbol(checker, node),
+    symbolIds,
+    context,
+  );
+  const defaultId = nodeIds.get(node);
+  return target.ids.length === 0 && defaultId
+    ? { ids: [defaultId], external: false }
+    : target;
+}
+
+function targetForResolvedDeclaration(
+  checker: ts.TypeChecker,
+  node: ts.Node,
+  symbolIds: ReadonlyMap<ts.Symbol, ReadonlySet<string>>,
+  context: RelationshipContext,
+  nodeIds: ReadonlyMap<ts.Node, string>,
+): Target {
+  const id = nodeIds.get(node);
+  return id
+    ? { ids: [id], external: false }
+    : targetForDeclaration(checker, node, symbolIds, context, nodeIds);
+}
+
 function diagnostic(
   code: DiagnosticV1['code'],
   relationKind: EdgeKindV1,
@@ -214,12 +276,19 @@ export function extractRelationships(context: RelationshipContext): {
   const nodeIds = new Map<ts.Node, string>();
   for (const declaration of context.declarations) {
     nodeIds.set(declaration.node, declaration.id);
-    const symbol = declarationSymbol(checker, declaration.node);
-    if (!symbol) continue;
-    for (const item of aliases(checker, symbol)) {
-      const ids = symbolIds.get(item) ?? new Set<string>();
-      ids.add(declaration.id);
-      symbolIds.set(item, ids);
+    if (declaration.binding) nodeIds.set(declaration.binding, declaration.id);
+    for (const symbol of [
+      declarationSymbol(checker, declaration.node),
+      declaration.binding
+        ? declarationSymbol(checker, declaration.binding)
+        : undefined,
+    ]) {
+      if (!symbol) continue;
+      for (const item of aliases(checker, symbol)) {
+        const ids = symbolIds.get(item) ?? new Set<string>();
+        ids.add(declaration.id);
+        symbolIds.set(item, ids);
+      }
     }
   }
 
@@ -352,11 +421,12 @@ export function extractRelationships(context: RelationshipContext): {
           add(
             'exports',
             moduleId,
-            targetForSymbol(
+            targetForDeclaration(
               checker,
-              declarationSymbol(checker, declaration),
+              declaration,
               symbolIds,
               context,
+              nodeIds,
             ),
             source,
             declaration,
@@ -366,12 +436,7 @@ export function extractRelationships(context: RelationshipContext): {
         add(
           'exports',
           moduleId,
-          targetForSymbol(
-            checker,
-            declarationSymbol(checker, node),
-            symbolIds,
-            context,
-          ),
+          targetForDeclaration(checker, node, symbolIds, context, nodeIds),
           source,
           node,
         );
@@ -420,14 +485,16 @@ export function extractRelationships(context: RelationshipContext): {
             add(
               'exports',
               moduleId,
-              targetForSymbol(
-                checker,
-                checker.getSymbolAtLocation(
-                  specifier.propertyName ?? specifier.name,
-                ),
-                symbolIds,
-                context,
-              ),
+              specifier.propertyName?.text === 'default'
+                ? defaultTargetForModule(checker, node.moduleSpecifier, context)
+                : targetForSymbol(
+                    checker,
+                    checker.getSymbolAtLocation(
+                      specifier.propertyName ?? specifier.name,
+                    ),
+                    symbolIds,
+                    context,
+                  ),
               source,
               specifier,
             );
@@ -453,12 +520,14 @@ export function extractRelationships(context: RelationshipContext): {
           add(
             'exports',
             moduleId,
-            targetForSymbol(
-              checker,
-              checker.getSymbolAtLocation(specifier.name),
-              symbolIds,
-              context,
-            ),
+            specifier.name.text === 'default'
+              ? defaultTargetForSource(source, context)
+              : targetForSymbol(
+                  checker,
+                  checker.getSymbolAtLocation(specifier.name),
+                  symbolIds,
+                  context,
+                ),
             source,
             specifier,
           );
@@ -537,13 +606,18 @@ export function extractRelationships(context: RelationshipContext): {
         } else {
           const signature = checker.getResolvedSignature(node);
           const declaration = signature?.declaration;
-          const symbol = declaration
-            ? declarationSymbol(checker, declaration)
-            : undefined;
           add(
             'calls',
             caller,
-            targetForSymbol(checker, symbol, symbolIds, context),
+            declaration
+              ? targetForResolvedDeclaration(
+                  checker,
+                  declaration,
+                  symbolIds,
+                  context,
+                  nodeIds,
+                )
+              : { ids: [], external: false },
             source,
             node,
           );

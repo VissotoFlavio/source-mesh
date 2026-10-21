@@ -45,6 +45,7 @@ interface Candidate {
   readonly locations: LocationV1[];
   readonly signature: string;
   readonly node: ts.Node;
+  readonly binding?: ts.Node;
 }
 
 interface PendingNode {
@@ -390,15 +391,22 @@ export function extractDeclarationGraph(
     edges.push(makeEdge(candidate.parentId, id, locations));
   }
   const nodesById = new Map(nodes.map((item) => [item.id, item]));
+  const defaultIds = new Map<string, string>();
+  for (const [id, candidate] of ids) {
+    if (candidate.name === 'default' && hasDefaultExport(candidate.node))
+      defaultIds.set(candidate.path, id);
+  }
   const relationshipResult = extractRelationships({
     repositoryRoot: request.repositoryRoot,
     program: request.project.program,
     sources: sourceByPath,
     moduleIds,
+    defaultIds,
     nodes: nodesById,
     declarations: [...ids.entries()].map(([id, candidate]) => ({
       id,
       node: candidate.node,
+      ...(candidate.binding ? { binding: candidate.binding } : {}),
       kind: candidate.kind,
       path: candidate.path,
     })),
@@ -631,6 +639,7 @@ function visitVariable(
     locations: [location(root, source, variable)],
     signature: signature(variable, kind, name),
     node: expression ?? variable,
+    ...(expression ? { binding: variable.name } : {}),
   };
   candidates.push(candidate);
   if (
