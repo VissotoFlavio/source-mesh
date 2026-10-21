@@ -25,5 +25,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   exclusion and generated-file authority, standard-library context, #23–#25 query
   mappings, edge locations/status, repository naming, package type validation, and
   deterministic fixture requirements.
+- Reconciled ADR 0002 with the expanded #17 contract for strict project loading,
+  fail-closed isolation, hard resource caps, canonical snapshot decoding and
+  atomic replacement, closed graph relationships, canonical identity hashing,
+  stable diagnostics, and the six shared CLI/MCP query operations.
 
 [Unreleased]: https://github.com/VissotoFlavio/source-mesh/commits/develop
