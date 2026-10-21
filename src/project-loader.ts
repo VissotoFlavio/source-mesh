@@ -45,15 +45,14 @@ function inside(root: string, candidate: string): boolean {
 }
 
 function diagnostic(
-  phase: 'configuration',
-  message: string,
+  phase: 'config',
   pathName?: string,
 ): ProjectLoaderDiagnostic {
   return {
     phase,
     code: 'compiler.configuration',
     severity: 'error',
-    message,
+    message: 'Compiler configuration is invalid.',
     ...(pathName === undefined ? {} : { path: pathName }),
   };
 }
@@ -77,7 +76,7 @@ function validateRoots(
   const absolute: string[] = [];
   const seen = new Set<string>();
   if (values.length > 10_000) {
-    diagnostics.push(diagnostic('configuration', 'resource limit exceeded'));
+    diagnostics.push(diagnostic('config'));
     return { absolute, diagnostics };
   }
   for (const value of values) {
@@ -88,40 +87,20 @@ function validateRoots(
       !extensionSet.has(extension) ||
       /\.d\.(?:ts|mts|cts)$/iu.test(value)
     ) {
-      diagnostics.push(
-        diagnostic('configuration', 'invalid approved source root'),
-      );
+      diagnostics.push(diagnostic('config'));
       continue;
     }
     if (!fs.existsSync(canonical) || !fs.statSync(canonical).isFile()) {
-      diagnostics.push(
-        diagnostic(
-          'configuration',
-          'approved source root is unavailable',
-          value,
-        ),
-      );
+      diagnostics.push(diagnostic('config', value));
       continue;
     }
     if (fs.statSync(canonical).size > 4 * 1024 * 1024) {
-      diagnostics.push(
-        diagnostic(
-          'configuration',
-          'source file resource limit exceeded',
-          value,
-        ),
-      );
+      diagnostics.push(diagnostic('config', value));
       continue;
     }
     const real = fs.realpathSync.native(canonical);
     if (real !== canonical || !inside(root, real)) {
-      diagnostics.push(
-        diagnostic(
-          'configuration',
-          'approved source root escapes repository',
-          value,
-        ),
-      );
+      diagnostics.push(diagnostic('config', value));
       continue;
     }
     if (!seen.has(real)) {
@@ -155,20 +134,12 @@ function validatePackageTypes(
             parsed.type !== 'commonjs'
           ) {
             diagnostics.push(
-              diagnostic(
-                'configuration',
-                'unsupported package type',
-                relativePath(root, packagePath),
-              ),
+              diagnostic('config', relativePath(root, packagePath)),
             );
           }
         } catch {
           diagnostics.push(
-            diagnostic(
-              'configuration',
-              'invalid package metadata',
-              relativePath(root, packagePath),
-            ),
+            diagnostic('config', relativePath(root, packagePath)),
           );
         }
         break;
@@ -212,14 +183,12 @@ function loadConfigured(
   } catch {
     return {
       project: null,
-      diagnostics: [
-        diagnostic('configuration', 'invalid project configuration'),
-      ],
+      diagnostics: [diagnostic('config')],
     };
   }
   const configuration = normalizeCompilerDiagnostics(
     root,
-    'configuration',
+    'config',
     config.error ? [config.error] : [],
   );
   if (config.config === undefined || state.blockedPaths.size > 0) {
@@ -227,7 +196,7 @@ function loadConfigured(
       project: null,
       diagnostics: configuration.length
         ? configuration
-        : [diagnostic('configuration', 'invalid project configuration')],
+        : [diagnostic('config')],
     };
   }
   const options = { ...fallbackOptions };
@@ -242,17 +211,12 @@ function loadConfigured(
   );
   const parseDiagnostics = normalizeCompilerDiagnostics(
     root,
-    'configuration',
+    'config',
     parsed.errors,
   );
   const allConfigDiagnostics = [...configuration, ...parseDiagnostics];
   if (hostState.blockedPaths.size > 0)
-    allConfigDiagnostics.push(
-      diagnostic(
-        'configuration',
-        'configuration reads outside repository are not allowed',
-      ),
-    );
+    allConfigDiagnostics.push(diagnostic('config'));
   const approvedSet = new Set(approved);
   const parsedRoots = parsed.fileNames.map((fileName) =>
     ts.sys.resolvePath(fileName),
@@ -267,12 +231,7 @@ function loadConfigured(
         !approvedSet.has(fileName) && !/\.d\.(?:ts|mts|cts)$/iu.test(fileName),
     )
   ) {
-    allConfigDiagnostics.push(
-      diagnostic(
-        'configuration',
-        'configuration selected an unapproved source root',
-      ),
-    );
+    allConfigDiagnostics.push(diagnostic('config'));
   }
   if (
     parsed.projectReferences?.some((reference) => {
@@ -283,9 +242,7 @@ function loadConfigured(
       }
     })
   ) {
-    allConfigDiagnostics.push(
-      diagnostic('configuration', 'project reference escapes repository'),
-    );
+    allConfigDiagnostics.push(diagnostic('config'));
   }
   if (allConfigDiagnostics.length > 0)
     return { project: null, diagnostics: allConfigDiagnostics };
@@ -310,9 +267,7 @@ function loadConfigured(
     ),
   ];
   if (bounded.state.blockedPaths.size > 0)
-    compilerDiagnostics.push(
-      diagnostic('configuration', 'module resolution escaped repository'),
-    );
+    compilerDiagnostics.push(diagnostic('config'));
   return {
     project: {
       program,
@@ -331,7 +286,7 @@ export function loadProject(request: LoadProjectRequest): LoadProjectResult {
   } catch {
     return {
       project: null,
-      diagnostics: [diagnostic('configuration', 'invalid repository root')],
+      diagnostics: [diagnostic('config')],
     };
   }
   const roots = validateRoots(root, request.approvedFiles);
@@ -358,9 +313,7 @@ export function loadProject(request: LoadProjectRequest): LoadProjectResult {
     ) {
       return {
         project: null,
-        diagnostics: [
-          diagnostic('configuration', 'invalid project configuration'),
-        ],
+        diagnostics: [diagnostic('config')],
       };
     }
     const result = loadConfigured(root, configPath, roots.absolute);
@@ -397,9 +350,7 @@ export function loadProject(request: LoadProjectRequest): LoadProjectResult {
     ),
   ];
   if (state.blockedPaths.size > 0)
-    compilerDiagnostics.push(
-      diagnostic('configuration', 'module resolution escaped repository'),
-    );
+    compilerDiagnostics.push(diagnostic('config'));
   return { project: result, diagnostics: sortDiagnostics(compilerDiagnostics) };
 }
 

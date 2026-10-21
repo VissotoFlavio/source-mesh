@@ -1,12 +1,11 @@
 import ts from 'typescript';
 import type {
   CompilerDiagnosticPhase,
-  DiagnosticSeverity,
   ProjectLoaderDiagnostic,
 } from './types.js';
 
 const phaseOrder: Record<CompilerDiagnosticPhase, number> = {
-  configuration: 0,
+  config: 0,
   options: 1,
   syntax: 2,
   semantic: 3,
@@ -16,24 +15,18 @@ const diagnosticCode: Record<
   CompilerDiagnosticPhase,
   ProjectLoaderDiagnostic['code']
 > = {
-  configuration: 'compiler.configuration',
+  config: 'compiler.configuration',
   options: 'compiler.options',
   syntax: 'compiler.syntax',
   semantic: 'compiler.semantic',
 };
 
-function severity(category: ts.DiagnosticCategory): DiagnosticSeverity {
-  switch (category) {
-    case ts.DiagnosticCategory.Error:
-      return 'error';
-    case ts.DiagnosticCategory.Warning:
-      return 'warning';
-    case ts.DiagnosticCategory.Suggestion:
-      return 'suggestion';
-    default:
-      return 'message';
-  }
-}
+const diagnosticMessage: Record<CompilerDiagnosticPhase, string> = {
+  config: 'Compiler configuration is invalid.',
+  options: 'Compiler options are invalid.',
+  syntax: 'Source syntax is invalid.',
+  semantic: 'Source semantics are invalid.',
+};
 
 function portablePath(
   repositoryRoot: string,
@@ -54,17 +47,6 @@ function portablePath(
     return undefined;
   }
   return relative.replaceAll('\\', '/');
-}
-
-function flattenMessage(
-  repositoryRoot: string,
-  message: string | ts.DiagnosticMessageChain,
-): string {
-  const flattened = ts.flattenDiagnosticMessageText(message, '\n');
-  return flattened
-    .replaceAll(repositoryRoot, '<repository>')
-    .replaceAll(repositoryRoot.replaceAll('\\', '/'), '<repository>')
-    .replace(/\b[A-Za-z]:[\\/][^\n ]+/gu, '<external-path>');
 }
 
 function compare(
@@ -110,8 +92,8 @@ export function normalizeCompilerDiagnostics(
     return {
       phase,
       code: diagnosticCode[phase],
-      severity: severity(diagnostic.category),
-      message: flattenMessage(repositoryRoot, diagnostic.messageText),
+      severity: 'error',
+      message: diagnosticMessage[phase],
       compilerCode: diagnostic.code,
       ...(path === undefined ? {} : { path }),
       ...(location === undefined ? {} : { location }),

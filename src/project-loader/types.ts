@@ -14,7 +14,7 @@ export const PROJECT_ROOT_EXTENSIONS = [
 export type ProjectRootExtension = (typeof PROJECT_ROOT_EXTENSIONS)[number];
 
 export type CompilerDiagnosticPhase =
-  'configuration' | 'options' | 'syntax' | 'semantic';
+  'config' | 'options' | 'syntax' | 'semantic';
 
 export type DiagnosticSeverity = 'error' | 'warning' | 'suggestion' | 'message';
 

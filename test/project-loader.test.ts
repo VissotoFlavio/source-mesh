@@ -98,6 +98,11 @@ test('invalid configuration is deterministic and does not fall back', () => {
 
   assert.equal(first.project, null);
   assert.deepEqual(first.diagnostics, second.diagnostics);
+  assert.ok(
+    first.diagnostics.every(
+      (item) => item.message === 'Compiler configuration is invalid.',
+    ),
+  );
   assert.ok(first.diagnostics.every((item) => !item.message.includes(root)));
 });
 
@@ -111,7 +116,15 @@ test('syntax diagnostics retain the program and are sanitized', () => {
   });
 
   assert.ok(result.project);
-  assert.ok(result.diagnostics.some((item) => item.code === 'compiler.syntax'));
+  const syntaxDiagnostics = result.diagnostics.filter(
+    (item) => item.code === 'compiler.syntax',
+  );
+  assert.ok(syntaxDiagnostics.length > 0);
+  assert.ok(
+    syntaxDiagnostics.every(
+      (item) => item.message === 'Source syntax is invalid.',
+    ),
+  );
   assert.ok(result.diagnostics.every((item) => !item.message.includes(root)));
   assert.ok(
     result.diagnostics.every(
