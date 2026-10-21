@@ -87,6 +87,14 @@ function blockScope(parentId: string, nodes: readonly ts.Node[]): string {
   bindings.sort(ordinal); kinds.sort(ordinal); signatures.sort(ordinal);
   return `block:${digest('b', ['sourcemesh-block-v1', '1', parentId, 'block', JSON.stringify(bindings), JSON.stringify(kinds), JSON.stringify(signatures)])}`;
 }
+function scopeForChild(parentScope: string, parentId: string, kind: string, qualifiedName: string): string {
+  return `${parentScope.slice(0, parentScope.indexOf('#scope'))}/${parentId}#scope=${kind}:${qualifiedName}`;
+}
+function scopeForBlock(parentScope: string, descriptor: string): string {
+  const marker = parentScope.indexOf('#scope');
+  const lexical = parentScope.slice(marker + '#scope='.length);
+  return `${parentScope.slice(0, marker)}#scope=${lexical}/${descriptor}`;
+}
 
 export function extractDeclarationGraph(request: ExtractDeclarationGraphRequest): DeclarationGraph {
   const requestedName = request.repositoryName?.normalize('NFC');
@@ -108,9 +116,10 @@ export function extractDeclarationGraph(request: ExtractDeclarationGraphRequest)
     const file: FileNodeV1 = { id: fileId(canonicalPath), kind: 'file', name: path.posix.basename(canonicalPath), path: canonicalPath };
     nodes.push(file); edges.push(makeEdge(repository.id, file.id));
     const moduleName = canonicalPath;
-    const module: SymbolNodeV1 = { id: nodeId('module', canonicalPath, `${file.id}#scope=root`, moduleName, 'none'), kind: 'module', name: moduleName, path: canonicalPath, qualifiedName: moduleName, memberRole: 'none' };
+    const moduleParentScope = `${repository.id}/${file.id}#scope=root`;
+    const module: SymbolNodeV1 = { id: nodeId('module', canonicalPath, moduleParentScope, moduleName, 'none'), kind: 'module', name: moduleName, path: canonicalPath, qualifiedName: moduleName, memberRole: 'none' };
     nodes.push(module); edges.push(makeEdge(file.id, module.id));
-    visitSource(request.repositoryRoot, source, module.id, module.qualifiedName, `${module.id}#scope=module:${module.qualifiedName}`, candidates, diagnostics);
+    visitSource(request.repositoryRoot, source, module.id, module.qualifiedName, `${repository.id}/${file.id}/${module.id}#scope=module:${module.qualifiedName}`, candidates, diagnostics);
   }
 
   const grouped = new Map<string, Candidate[]>();
@@ -140,7 +149,7 @@ export function extractDeclarationGraph(request: ExtractDeclarationGraphRequest)
     if (first.kind === 'function' && isFunctionLikeNode(first.node)) {
       for (const parameter of first.node.parameters) {
         const parameterName = nameOf(parameter) ?? 'parameter';
-        const parameterCandidate: Candidate = { kind: 'parameter', name: parameterName, qualifiedName: qualified(first.qualifiedName, parameterName), path: first.path, memberRole: 'none', parentId: id, scope: `${id}#scope=function:${first.qualifiedName}`, locations: [location(request.repositoryRoot, sourceByPath.get(first.path)!, parameter)], signature: signature(parameter, 'parameter', parameterName), node: parameter };
+        const parameterCandidate: Candidate = { kind: 'parameter', name: parameterName, qualifiedName: qualified(first.qualifiedName, parameterName), path: first.path, memberRole: 'none', parentId: id, scope: scopeForChild(first.scope, id, 'function', first.qualifiedName), locations: [location(request.repositoryRoot, sourceByPath.get(first.path)!, parameter)], signature: signature(parameter, 'parameter', parameterName), node: parameter };
         const parameterId = nodeId('parameter', parameterCandidate.path, parameterCandidate.scope, parameterName, 'none');
         if (!ids.has(parameterId)) { ids.set(parameterId, parameterCandidate); nodes.push({ id: parameterId, kind: 'parameter', name: parameterName, path: parameterCandidate.path, qualifiedName: parameterCandidate.qualifiedName, memberRole: 'none', locations: parameterCandidate.locations }); edges.push(makeEdge(id, parameterId, parameterCandidate.locations)); }
       }
@@ -160,7 +169,7 @@ function visitSource(root: string, source: ts.SourceFile, parentId: string, pare
       candidates.push(candidate);
       const id = nodeId(candidate.kind, candidate.path, candidate.scope, name, 'none');
       const body = node.body;
-      if (body !== undefined) visit(body, id, candidate.qualifiedName, `${id}#scope=module:${candidate.qualifiedName}`);
+      if (body !== undefined) visit(body, id, candidate.qualifiedName, scopeForChild(currentScope, id, 'module', candidate.qualifiedName));
       return;
     }
     if (ts.isModuleBlock(node)) { for (const child of node.statements) visit(child, parent, parentName, currentScope); return; }
@@ -172,11 +181,11 @@ function visitSource(root: string, source: ts.SourceFile, parentId: string, pare
       const candidate: Candidate = { kind, name, qualifiedName: qualified(parentName, name), path: relative(root, source.fileName), memberRole: 'none', parentId: parent, scope: currentScope, locations: [location(root, source, node)], signature: signature(node, kind, name), node };
       candidates.push(candidate);
       if (ts.isClassDeclaration(node) || ts.isInterfaceDeclaration(node)) for (const member of node.members) visitMember(member, candidate, source, root, candidates, diagnostics);
-      if (ts.isFunctionDeclaration(node)) for (const statement of node.body?.statements ?? []) visit(statement, nodeId(candidate.kind, candidate.path, candidate.scope, candidate.name, candidate.memberRole), candidate.qualifiedName, `${nodeId(candidate.kind, candidate.path, candidate.scope, candidate.name, candidate.memberRole)}#scope=function:${candidate.qualifiedName}`);
+      if (ts.isFunctionDeclaration(node)) { const id = nodeId(candidate.kind, candidate.path, candidate.scope, candidate.name, candidate.memberRole); for (const statement of node.body?.statements ?? []) visit(statement, id, candidate.qualifiedName, scopeForChild(candidate.scope, id, 'function', candidate.qualifiedName)); }
       return;
     }
     if (ts.isVariableStatement(node)) { for (const variable of node.declarationList.declarations) visitVariable(variable, parent, parentName, currentScope, source, root, candidates, diagnostics); return; }
-    if (ts.isBlock(node) || ts.isSourceFile(node)) { const next = ts.isBlock(node) ? `${currentScope}/${blockScope(parent, node.statements)}` : currentScope; for (const child of node.statements) visit(child, parent, parentName, next); return; }
+    if (ts.isBlock(node) || ts.isSourceFile(node)) { const next = ts.isBlock(node) ? scopeForBlock(currentScope, blockScope(parent, node.statements)) : currentScope; for (const child of node.statements) visit(child, parent, parentName, next); return; }
     if (ts.isExpressionStatement(node)) visit(node.expression, parent, parentName, currentScope);
   };
   for (const statement of source.statements) visit(statement, parentId, parentQualified, scope);
@@ -195,12 +204,13 @@ function visitMember(member: ts.ClassElement | ts.TypeElement, owner: Candidate,
     const nameNode = member.name; const name = nameNode && ts.isIdentifier(nameNode) ? nameNode.text.normalize('NFC') : undefined;
     if (name === undefined) { diagnostics.push(makeDiagnostic('unsupported_declaration', relative(root, source.fileName), location(root, source, member))); return; }
     const role: MemberRole = ts.isMethodDeclaration(member) && member.modifiers?.some((item) => item.kind === ts.SyntaxKind.StaticKeyword) ? 'static' : 'instance';
-    candidates.push({ kind: 'function', name, qualifiedName: qualified(owner.qualifiedName, name), path: owner.path, memberRole: role, parentId: nodeId(owner.kind, owner.path, owner.scope, owner.name, owner.memberRole), scope: `${owner.parentId}#scope=class:${owner.qualifiedName}`, locations: [location(root, source, member)], signature: signature(member, 'function', name), node: member });
+    const ownerId = nodeId(owner.kind, owner.path, owner.scope, owner.name, owner.memberRole);
+    candidates.push({ kind: 'function', name, qualifiedName: qualified(owner.qualifiedName, name), path: owner.path, memberRole: role, parentId: ownerId, scope: scopeForChild(owner.scope, ownerId, 'class', owner.qualifiedName), locations: [location(root, source, member)], signature: signature(member, 'function', name), node: member });
     return;
   }
   if (ts.isPropertyDeclaration(member) || ts.isPropertySignature(member)) {
     const name = member.name && ts.isIdentifier(member.name) ? member.name.text.normalize('NFC') : undefined;
-    if (name !== undefined) candidates.push({ kind: 'variable', name, qualifiedName: qualified(owner.qualifiedName, name), path: owner.path, memberRole: 'instance', parentId: nodeId(owner.kind, owner.path, owner.scope, owner.name, owner.memberRole), scope: `${owner.parentId}#scope=class:${owner.qualifiedName}`, locations: [location(root, source, member)], signature: signature(member, 'variable', name), node: member });
+    if (name !== undefined) { const ownerId = nodeId(owner.kind, owner.path, owner.scope, owner.name, owner.memberRole); candidates.push({ kind: 'variable', name, qualifiedName: qualified(owner.qualifiedName, name), path: owner.path, memberRole: 'instance', parentId: ownerId, scope: scopeForChild(owner.scope, ownerId, 'class', owner.qualifiedName), locations: [location(root, source, member)], signature: signature(member, 'variable', name), node: member }); }
     return;
   }
   if (unsupported.has(ts.SyntaxKind[member.kind])) diagnostics.push(makeDiagnostic('unsupported_declaration', relative(root, source.fileName), location(root, source, member)));
