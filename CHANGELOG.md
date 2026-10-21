@@ -34,5 +34,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   deterministic diagnostics, regular-file and deadline limits, snapshot
   create-only/replace semantics, and named reordered-traversal and replacement
   fixtures.
+- Finalized ADR 0002 with race-safe no-replace snapshot installation, canonical
+  snapshot-path containment, an effective analysis worker deadline and bounded
+  project metadata, exact cursor tuples and diagnostic IDs, stable lexical
+  identity rules, closed file/symbol query DTOs, declaration-root exclusions,
+  explicit query/MCP read-only boundaries, and fixtures for each corrected case.
 
 [Unreleased]: https://github.com/VissotoFlavio/source-mesh/commits/develop

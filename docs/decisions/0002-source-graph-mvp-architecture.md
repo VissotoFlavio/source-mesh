@@ -38,7 +38,10 @@ filesystem authority, or duplicate query behavior.
 
 - Supported source languages are TypeScript and JavaScript. Discovery recognizes
   exactly `.ts`, `.tsx`, `.mts`, `.cts`, `.js`, `.jsx`, `.mjs`, and `.cjs`.
-  Declaration files ending in `.d.ts` are never discovery roots.
+  Declaration roots ending in `.d.ts`, `.d.mts`, or `.d.cts` are never discovery
+  roots. Such declarations are compiler context-only: they may participate in
+  contained type checking when explicitly reached by a valid project, but never
+  become source roots, graph nodes, edge endpoints, or diagnostic sources.
 - The implementation uses the TypeScript Compiler API already pinned by the
   repository. No second parser, code execution, or runtime JavaScript analysis is
   introduced for the MVP.
@@ -154,15 +157,42 @@ The following are hard caps, not implementation hints:
 | Snapshot diagnostics                        |  10,000 |
 | Path depth                                  |     256 |
 | Module-resolution candidates per source     |  10,000 |
+| Config files inspected                      |       1 |
+| Config bytes (one file)                     |   4 MiB |
+| `extends` target bytes (one file)           |   4 MiB |
+| Project reference bytes (one config)        |   4 MiB |
+| Aggregate project metadata bytes            |  64 MiB |
+| `extends` targets                           |      32 |
+| Project references                          |     256 |
+| Package manifests inspected                 |  10,000 |
+| Package manifest bytes (one file)           |   4 MiB |
 | Any serialized string field                 |  16 KiB |
 | Cursor bytes                                |   4 KiB |
 
-Analysis also has one cooperative 30-second deadline. The implementation checks
-the deadline and cancellation token at every directory, file, compiler, and
-serialization boundary; expiry or cancellation fails closed with the bounded
-`resource_limit` diagnostic and a partial result. A cancelled operation never
-continues in the background. Directory-entry, source-file, path-depth, and
-module-candidate counts are charged before opening or following the next item.
+Counts and byte sizes for configuration files, `extends` targets, project
+references, and package manifests are charged after metadata inspection and
+before opening or parsing the next item. A limit failure therefore cannot be
+used to parse an unbounded config, package manifest, or reference graph. The
+explicit `tsconfigPath` counts as the one config file; there is no autodiscovery
+that can consume more config files.
+
+Analysis has one effective 30-second deadline. Repository and compiler work runs
+inside an interruptible worker/process boundary owned by the analysis service.
+The deadline is enforced by the supervisor, which sends cancellation and
+terminates the worker/process when the deadline expires; a timed-out worker is
+not allowed to continue in the background. A direct in-process embedder may opt
+in only when it supplies an explicit finite cancellation contract that can
+interrupt every repository and compiler operation within the same deadline. A
+cooperative token alone is not an effective deadline contract for an in-process
+embedder. Expiry or cancellation fails closed with the bounded `resource_limit`
+diagnostic and a partial result. Directory-entry, source-file, path-depth,
+module-candidate, config, package, `extends`, and reference counts are charged
+before opening or following the next item.
+
+These limits do not promise a hard peak-memory bound against compiler or kernel
+allocations made before termination, durability against power loss beyond the
+host filesystem's successful sync semantics, or protection from a hostile
+kernel/filesystem that mutates objects after the last permitted identity check.
 
 Exceeding an analysis limit yields a deterministic error diagnostic and a partial
 result. Exceeding a decode limit rejects with `invalid_snapshot`; decode limits are
@@ -191,6 +221,16 @@ Lines and columns are one-based and end-exclusive. Node and edge locations are
 `LocationV1[]`, sorted lexicographically and deduplicated. Diagnostics retain one
 optional `LocationV1`. Absolute paths, source text, timestamps, and host metadata
 are never serialized.
+
+Snapshot paths use the same canonical repository root as source loading. The
+default `.sourcemesh/graph.json` and every selected relative snapshot path must
+resolve beneath that canonical root by path segments and realpath. Absolute,
+drive-letter, UNC, traversal, escaping symlink, and escaping junction paths are
+rejected. Every parent directory is an existing no-follow directory with the
+same verified identity from validation through installation; the destination is
+absent or an existing no-follow regular file, never a directory, device, socket,
+FIFO, junction, or symlink. A disappearance, replacement, parent swap, or
+identity mismatch fails closed rather than reopening a new target.
 
 ### Schema version 1
 
@@ -246,15 +286,41 @@ sequence of canonical parent node IDs, joined by `/`, followed by `#scope=` and
 a canonical lexical binding scope. The lexical binding scope is a `/`-joined
 sequence of NFC-normalized, case-sensitive binding segments in source semantic
 scope order (`module:<qualifiedName>`, `class:<qualifiedName>`,
-`function:<qualifiedName>`, or `block:<canonicalBindingKey>`). A
-`canonicalBindingKey` is the compiler's stable lexical binding identity after
-normalization; it never contains an array position, traversal ordinal, timestamp,
-or host path. The empty root scope is `#scope=root`. If two block-scoped
-same-name declarations cannot be distinguished by that stable binding identity,
-both declarations are omitted and exactly one deterministic diagnostic is
-emitted with code `graph.node_id_collision` or `declaration.unstable_identity`
-as applicable. The implementation never disambiguates them with a traversal
-ordinal.
+`function:<qualifiedName>`, or `block:<canonicalBindingKey>`). The empty root
+scope is `#scope=root`.
+
+`canonicalBindingKey` is the compact canonical UTF-8 JSON string of this exact
+array, with array elements in the shown order:
+
+```text
+["sourcemesh-binding-v1", [[scopeKind, scopePath, containingNodeId], ...],
+ declarationKind, memberRole, normalizedExplicitSignature]
+```
+
+`scopeKind` is exactly `root`, `module`, `class`, `function`, or `block`;
+`scopePath` is the NFC-normalized, case-sensitive source semantic path for that
+scope; and `containingNodeId` is the canonical ID of the containing node, with
+`"root"` for the root scope. `declarationKind` and `memberRole` use the closed
+contract values above. `normalizedExplicitSignature` is one of these exact
+arrays: `function` declarations use `["function", name, typeParameters,
+parameters, returnType]`, where each type parameter is `[name, constraint,
+default]` and each parameter is `[name, optional, rest, explicitType]`; class,
+interface, and type declarations use `["declaration", kind, name,
+typeParameters]`; variables use `["variable", name, explicitType]`; parameters
+use `["parameter", name, explicitType]`; and modules use `["module", name]`.
+Names are NFC strings, booleans are JSON booleans, and an absent explicit type,
+constraint, or default is the literal string `absent`. `explicitType` is the
+NFC-normalized, trivia-free, compiler-independent token spelling of a declared
+TypeScript type. A declaration whose required signature field cannot be
+normalized to this closed form is omitted and emits only
+`declaration.unstable_identity`.
+
+The key is based only on these source semantic fields and containing node IDs.
+It never contains compiler object identity, source offsets, traversal ordinals,
+array positions, timestamps, or absolute paths. If two otherwise valid keys
+produce the same node ID, both nodes are omitted and exactly one
+`graph.node_id_collision` diagnostic is emitted. The implementation never
+disambiguates either case with an ordinal or another unstable field.
 
 Same-name declarations are emitted only when their canonical lexical scopes are
 unique. A collision is ordered by canonical path, qualified name, kind, and
@@ -375,7 +441,7 @@ canonical request `{"operation":"searchSymbols","query":"User","kind":"function"
 exact base64url cursor is:
 
 ```text
-eyJzY2hlbWFWZXJzaW9uIjoxLCJzbmFwc2hvdERpZ2VzdCI6IjI0MDQ1OTIxZjZkMjg0ZDVkZmM1NjI0NTMzOTRiOTFiNTBhNjM1YTdhNWQ3YjQ4ZTAzMDBkYjEwMzRlNDQzMDIiLCJvcGVyYXRpb24iOiJzZWFyY2hTeW1ib2xzIiwiZmlsdGVyRmluZ2VycHJpbnQiOiJmOTAxZjY0N2M3YzI2MDFkNzZhNmUwMTBjOTA1ODE0N2RmNjk2MzhiZDI2MTgwZjRiMjY0NzY5YjI1MzdkMzM3IiwibGFzdFNvcnRLZXkiOlsic3JjL2luZGV4LnRzIiwibG9hZFVzZXIiLCJmdW5jdGlvbiIsIm46YWJjIl19
+  eyJzY2hlbWFWZXJzaW9uIjoxLCJzbmFwc2hvdERpZ2VzdCI6IjI0MDQ1OTIxZjZkMjg0ZDVkZmM1NjI0NTMzOTRiOTFiNTBhNjM1YTdhNWQ3YjQ4ZTAzMDBkYjEwMzRlNDQzMDIiLCJvcGVyYXRpb24iOiJzZWFyY2hTeW1ib2xzIiwiZmlsdGVyRmluZ2VycHJpbnQiOiJmOTAxZjY0N2M3YzI2MDFkNzZhNmUwMTBjOTA1ODE0N2RmNjk2MzhiZDI2MTgwZjRiMjY0NzY5YjI1MzdkMzM3IiwibGFzdFNvcnRLZXkiOltbMCwic3JjL2luZGV4LnRzIl0sImxvYWRVc2VyIiwiZnVuY3Rpb24iLCJuOmFiYyJdfQ
 ```
 
 Diagnostic codes, severities, and messages are closed and stable. Messages never
@@ -408,13 +474,39 @@ kinds when applicable. `reason` is a closed producer reason string, not compiler
 text. Messages never contain compiler wording, source excerpts, paths, or
 absolute machine data.
 
-The diagnostic ID hashes schema version, producer rule ID, normalized diagnostic
-fields, and a canonical `occurrenceKey`. The occurrence key is a canonical frame
-of source path/span (when present), producer rule ID, relation kind/reason,
-normalized semantic endpoint IDs, and normalized declaration signature. It never
-contains traversal order, array position, or a same-anchor occurrence index.
-Identical semantic duplicates normalize to one diagnostic; distinct stable keys
-remain distinct. Diagnostics are sorted only after this normalization.
+The diagnostic ID is exactly:
+
+```text
+diagnosticId = d:<sha256(frame([
+  "sourcemesh-diagnostic-v1", "1", code, severity, message,
+  relationKindOrAbsent, reasonOrAbsent, pathOrAbsent,
+  locationCanonicalOrAbsent, sortedRelatedNodeIds, occurrenceKey
+]))>
+```
+
+`relationKindOrAbsent`, `reasonOrAbsent`, `pathOrAbsent`, and
+`locationCanonicalOrAbsent` are `absent` when the corresponding optional field is
+omitted, otherwise they are `present:<canonical-value>`. `sortedRelatedNodeIds`
+is `absent` when there are no related nodes; otherwise it is the compact
+canonical JSON array of unique related node IDs sorted by ordinal UTF-8 bytes.
+An explicitly empty related-node list is invalid. A present location is the
+exact string `path#start.line:start.column-end.line:end.column`, using decimal
+one-based coordinates and the canonical repository-relative path. The
+`occurrenceKey` is the compact canonical JSON array
+`[pathOrAbsent,locationCanonicalOrAbsent,relationKindOrAbsent,reasonOrAbsent,
+sortedRelatedNodeIds]`. It contains only semantic source/relationship fields;
+it never contains compiler object identity, traversal order, array position,
+timestamps, or a same-anchor occurrence index.
+
+Identical semantic duplicates normalize to one diagnostic before IDs are
+assigned; distinct stable occurrence keys remain distinct. Diagnostics are
+sorted only after this normalization. The following literal golden vectors use
+the framing algorithm above:
+
+| Code                   | Framed field values after the first five fields                                                                                                                                                              | Expected diagnostic ID                                               |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------- |
+| `resource_limit`       | `absent`, `absent`, `absent`, `absent`, `absent`, `["absent","absent","absent","absent","absent"]`                                                                                                           | `d:d2f847dccc7bbddeb051705e560169d4e0f15732ba99527a640b06a3ed40d501` |
+| `relationship_dynamic` | `present:calls`, `present:dynamic`, `present:src/app.ts`, `present:src/app.ts#2:5-2:17`, `["n:aaa"]`, `["present:src/app.ts","present:src/app.ts#2:5-2:17","present:calls","present:dynamic","[\"n:aaa\"]"]` | `d:1ba9391eba018aef2c70cd7b95352d73463d201313ad26e1c5bdbec1dd37b086` |
 
 Diagnostic ordering is the total lexicographic order:
 
@@ -440,20 +532,38 @@ rejects malformed JSON, unsupported schema, unknown fields, invalid paths,
 duplicate IDs, broken endpoints, invalid locations, invalid identities, and
 invariant violations. It has no migrations; unsupported versions are rejected.
 
+Snapshot writes return the closed error union
+`SnapshotWriteError = "invalid_snapshot" | "path_invalid" |
+"snapshot_conflict" | "snapshot_io"`. `snapshot_conflict` is the typed
+EEXIST-equivalent result for a `create-only` no-replace install; it is distinct
+from validation, path, and I/O failures.
+
 Snapshot writing has explicit `create-only` and `replace` modes. Both modes
-validate the complete normalized snapshot before touching the destination. In
-`create-only`, an existing destination is an error; in `replace`, an existing
-valid or invalid destination is never deleted before the replacement is ready.
-For #22, the writer creates one cryptographically random exact temporary name in
-the destination's same directory with exclusive `wx` creation, verifies the
-parent identity and temporary handle as regular no-follow files, writes through
-the opened handle, syncs, closes, and renames only after complete validation.
+validate the complete normalized snapshot and the canonical root/path identity
+before touching the destination. In `create-only`, final installation is an
+atomic no-replace operation: if the destination appears after validation, the
+operation returns the typed `snapshot_conflict` error with an EEXIST-equivalent
+cause, preserves the existing bytes, and removes only the exact temporary name.
+There is no fallback to delete-then-rename or to an ordinary replace-capable
+rename. A host without a reliable atomic no-replace primitive fails closed.
+
+`replace` is explicit authorization to atomically replace an existing regular
+destination, or install when it is absent; it never replaces a symlink, junction,
+directory, device, socket, FIFO, or other special file. The writer creates one
+cryptographically random exact temporary name in the destination's same
+directory with exclusive `wx` creation, verifies the parent identity and
+temporary handle as no-follow regular objects, writes through the opened handle,
+syncs, closes, revalidates the canonical parent and destination identity, and
+performs the selected atomic install primitive. The final operation is the only
+point at which `replace` can replace bytes.
+
 The destination is the old complete snapshot or the new complete snapshot, never
-a partial one. There is no delete-then-rename. Cleanup may remove only that exact
-temporary path, and only after the handle is closed. Target swap, parent change,
-disappearance, special-file detection, or rename uncertainty fails closed. This
-does not promise power-loss or concurrent-locking guarantees beyond the host
-filesystem's normal behavior.
+a partial one. Cleanup may remove only that exact temporary path, and only after
+the handle is closed; a cleanup failure is reported without touching any other
+path. Target swap, parent change, disappearance, special-file detection, or
+rename uncertainty fails closed. These guarantees do not promise a hard
+peak-memory bound, power-loss durability beyond successful sync semantics, or
+protection from a hostile kernel/filesystem after the last identity check.
 
 ### Query service and adapters
 
@@ -474,28 +584,42 @@ stable error union. Optional fields are omitted, never `null`.
 
 The transport-neutral DTOs are closed. Unknown fields are rejected, optional
 fields are omitted rather than set to `null`, and the only request discriminants
-are these four DTOs:
+are these four DTOs. A symbol is exactly one of `module`, `class`, `interface`,
+`function`, `variable`, `type`, or `parameter`; `repository` and `file` are not
+symbol kinds.
 
 ```text
-NodeSummaryV1 = {
-  id: string, kind: NodeKindV1, name: string,
-  path: string, qualifiedName: string,
+SymbolKindV1 = "module" | "class" | "interface" | "function" |
+  "variable" | "type" | "parameter"
+
+FileSummaryV1 = {
+  id: string, kind: "file", name: string, path: string,
+  locations?: LocationV1[]
+}
+
+SymbolSummaryV1 = {
+  id: string, kind: SymbolKindV1, name: string, path: string,
+  qualifiedName: string,
   memberRole: "none" | "static" | "instance",
   locations?: LocationV1[]
 }
 
 SearchRequestV1 = {
-  operation: "searchSymbols", query: string, kind?: NodeKindV1,
-  path?: string, limit?: number, cursor?: string, allowPartial?: boolean
+  operation: "searchSymbols", query: string, kind?: SymbolKindV1,
+  path?: string, containerId?: string, limit?: number, cursor?: string,
+  allowPartial?: boolean
 }
+
 GetSymbolRequestV1 = {
   operation: "getSymbol", nodeId?: string, selector?: SymbolSelectorV1,
   limit?: number, cursor?: string, allowPartial?: boolean
 }
+
 FileRelationRequestV1 = {
-  operation: "listFileDependencies" | "listFileDependents", file: FileSelectorV1,
+  operation: "listFileDependencies" | "listFileDependents", fileId: string,
   limit?: number, cursor?: string, allowPartial?: boolean
 }
+
 CallRelationRequestV1 = {
   operation: "listCallers" | "listCallees", function: FunctionSelectorV1,
   limit?: number, cursor?: string, allowPartial?: boolean
@@ -508,40 +632,61 @@ QueryPageV1<T> = {
   total: number, truncated: boolean, continuation?: string
 }
 
-QueryResponseV1 =
-  | QueryPageV1<NodeSummaryV1>
-  | { operation: "getSymbol", schemaVersion: 1,
-      completeness: "complete" | "partial", symbol: NodeSummaryV1,
-      container?: NodeSummaryV1, children: QueryPageV1<NodeSummaryV1> }
+SearchResponseV1 = { operation: "searchSymbols", page: QueryPageV1<SymbolSummaryV1> }
+GetSymbolResponseV1 = {
+  operation: "getSymbol", schemaVersion: 1,
+  completeness: "complete" | "partial", symbol: SymbolSummaryV1,
+  container?: FileSummaryV1 | SymbolSummaryV1,
+  children: QueryPageV1<SymbolSummaryV1>
+}
+FileRelationResponseV1 = {
+  operation: "listFileDependencies" | "listFileDependents",
+  page: QueryPageV1<FileSummaryV1>
+}
+CallRelationResponseV1 = {
+  operation: "listCallers" | "listCallees",
+  page: QueryPageV1<SymbolSummaryV1>
+}
+QueryResponseV1 = SearchResponseV1 | GetSymbolResponseV1 |
+  FileRelationResponseV1 | CallRelationResponseV1
 
 QueryErrorV1 = {
   code: "invalid_request" | "limit_exceeded" | "not_found" | "ambiguous" |
     "entity_type_mismatch" | "unsupported_schema" | "invalid_snapshot" |
     "partial_not_allowed" | "internal",
   message: string, field?: string,
-  candidates?: NodeSummaryV1[], totalCandidates?: number,
+  candidates?: Array<FileSummaryV1 | SymbolSummaryV1>, totalCandidates?: number,
   truncated?: boolean, continuation?: string
 }
 ```
 
 `SymbolSelectorV1` is the closed object `{ kind?, name?, qualifiedName?, path?,
-memberRole? }`, `FileSelectorV1` is `{ path: string }`, and
-`FunctionSelectorV1` is `{ nodeId?: string, qualifiedName?: string, path?: string,
-name?: string }`; each rejects unknown fields and must contain enough fields to
-identify its operation's entity type. `nodeId` and `selector` are mutually
-exclusive and exactly one is required for `getSymbol`. A `QueryPageV1` always has
-the same page bounds; an ambiguity error's `candidates` is bounded by the
-requested limit and uses `totalCandidates`, `truncated`, and `continuation` to
-represent the remainder. No error ever returns an unbounded candidate list.
+memberRole?, containerId? }`, and `FunctionSelectorV1` is the same closed shape
+with `kind` restricted to `function`. A selector must contain at least one field.
+For `getSymbol`, `nodeId` and `selector` are mutually exclusive and exactly one
+is required; `nodeId` is the alternative to selector matching, not another
+selector predicate. Every supplied selector field is an AND predicate on the
+same node. Names, paths, qualified names, kinds, member roles, and container IDs
+are normalized to Unicode NFC before comparison; qualified name, path, kind, and
+container ID matching is exact and case-sensitive. `name` and `memberRole` are
+also exact after NFC normalization. No selector field is an OR predicate.
+
+A `QueryPageV1` always has the same page bounds; an ambiguity error's candidates
+are bounded by the requested limit and uses `totalCandidates`, `truncated`, and
+`continuation` to represent the remainder. No error ever returns an unbounded
+candidate list.
 
 `searchSymbols` performs a literal, case-sensitive substring search over `name` or
-`qualifiedName`. `query` is required, trimmed, and 1..256 UTF-16 code units;
-requests outside that range are `invalid_request`.
-Only `kind` and repository-relative `path` are filters. `getSymbol` accepts a
-unique `nodeId` or structured selector. A found result includes the symbol, its
-immediate container, and paged direct children. Ambiguity never chooses a symbol;
+`qualifiedName`, after NFC normalization. `query` is required, trimmed, and
+1..256 UTF-16 code units; requests outside that range are `invalid_request`.
+The optional `kind`, repository-relative `path`, and `containerId` filters are
+ANDed with the query. Search returns `SymbolSummaryV1` values only: it never
+returns repository or file summaries. `getSymbol` accepts a unique `nodeId` or
+structured selector. A found result includes the symbol, its immediate
+container, and paged direct symbol children. Ambiguity never chooses a symbol;
 it returns deterministically ordered candidates. Relationship operations return
-unique one-hop counterpart nodes.
+unique one-hop counterpart nodes, and file relation requests identify their
+source with `fileId`.
 
 File dependencies and dependents use only resolved `imports` and `exports`
 relationships projected between the files that own their module endpoints.
@@ -561,7 +706,7 @@ compact canonical UTF-8 JSON with exactly these fields and key order:
   "snapshotDigest": "<lowercase sha256 of canonical snapshot bytes>",
   "operation": "<operation>",
   "filterFingerprint": "<lowercase sha256 of canonical request fields excluding cursor and limit>",
-  "lastSortKey": ["<sort field>", "<sort value>"]
+  "lastSortKey": <closed operation-specific tuple>
 }
 ```
 
@@ -573,11 +718,22 @@ stale. The replacement fixture must prove that a cursor from snapshot A is
 rejected after a valid replacement produces snapshot B, even when the request is
 otherwise unchanged.
 
-Results use these exact total sort orders, with present path values before the
-absent-path sentinel: search and ambiguity candidates `(pathKey,
-qualifiedName, kind, id)`; children `(kind, qualifiedName, id)`; file relations
-`(path, id)`; and call relations `(qualifiedName, path, kind, id)`. Counterpart
-nodes are unique by node ID after projection.
+`lastSortKey` is a closed JSON-array union with no other shapes:
+
+```text
+search and ambiguity candidates: [[0, path] | [1, ""], qualifiedName, kind, id]
+children:                         [kind, qualifiedName, id]
+file relations:                   [path, id]
+call relations:                   [qualifiedName, [0, path] | [1, ""], kind, id]
+```
+
+The `[0, path]` branch means a present canonical path and `[1, ""]` is the only
+absent-path sentinel. Tuples use strict ordinal comparison from left to right:
+the first unequal element decides; numbers compare numerically, and strings
+compare lexicographically by the bytes of their NFC-normalized UTF-8 encoding.
+Nested path keys use the same rule. No locale, case folding, numeric coercion,
+or implementation-specific comparator is permitted. Results use these exact
+orders, and counterpart nodes are unique by node ID after projection.
 
 A non-integer or otherwise malformed `limit` is `invalid_request`; a value below
 1 or above 100 is `limit_exceeded`. The default 25 is applied only when `limit`
@@ -619,6 +775,19 @@ create-only/replace contract above; query and MCP never create, replace, or
 delete `.sourcemesh/graph.json`. The default path, encoding, line ending, and
 canonical JSON rules are identical for analysis output and codec re-emission.
 
+The boundary is explicit:
+
+| Surface                            | Reads                                                        | Writes                                                                  |
+| ---------------------------------- | ------------------------------------------------------------ | ----------------------------------------------------------------------- |
+| Query service and CLI/MCP adapters | validated in-memory graph and snapshot data                  | none; never source files or snapshots                                   |
+| Analysis service                   | repository/compiler inputs under the bounded worker contract | only the validated snapshot through `create-only` or explicit `replace` |
+
+Analysis is therefore allowed to write only the controlled snapshot path after
+validation; query and MCP are read-only even when invoked by the same process.
+All snapshot writes and re-emissions retain the authoritative compact canonical
+UTF-8 JSON format, LF line endings, one trailing newline, and default path
+`.sourcemesh/graph.json`.
+
 ### Deterministic fixture and test requirements
 
 Before implementation is considered contract-complete, synthetic fixtures and
@@ -628,18 +797,22 @@ assertions must cover:
    configured `allowJs`/`checkJs`, exact no-config options, and `types: []`/
    `@types` isolation.
 2. Reserved and configured output exclusions, lexical/canonical disagreement,
-   symlink and junction cycles, contained target swaps, disappearance, regular
-   file/no-follow checks, visited identities, and fail-closed behavior.
+   declaration-root suffixes (`.d.ts`, `.d.mts`, `.d.cts`), symlink and junction
+   cycles, contained target swaps, disappearance, regular-file/no-follow checks,
+   visited identities, and fail-closed behavior.
 3. Every normative resource limit, including directory entries, source files,
-   path depth, module candidates, and the cooperative deadline/cancellation;
-   deterministic limit diagnostics and no silent truncation.
+   path depth, module candidates, config/package bytes and counts, `extends`,
+   references, the supervised worker deadline, cancellation, and worker
+   termination; deterministic limit diagnostics and no silent truncation.
 4. Non-canonical collection order decoding, unknown-field and invariant
    rejection, normalization, and exact canonical re-emission with UTF-8/no BOM,
    LF, compact JSON, and trailing newline.
-5. Atomic snapshot `create-only` and `replace` behavior, including
-   validation-before-touch, same-directory random `wx` temporary creation,
-   parent/handle identity, write/sync/close/rename ordering, old-or-new
-   visibility, and exact-temp cleanup scope.
+5. Atomic snapshot `create-only` and `replace` behavior, including canonical
+   root containment, external symlink/junction links, parent/destination swaps,
+   special files, validation-before-touch, same-directory random `wx` temporary
+   creation, opened-handle write/sync/close ordering, final no-replace versus
+   explicit replace installation, typed EEXIST conflict, old-or-new visibility,
+   and exact-temp cleanup scope.
 6. Overload and same-kind merges, cross-kind separation, anonymous/default
    handling, variable-bound expressions, static/instance `memberRole`, lexical
    same-name collisions, direct-parent `contains`, every closed endpoint matrix,
@@ -649,16 +822,21 @@ assertions must cover:
    newline. The vectors in this ADR are literal fixture inputs and expected
    bytes/digests, not illustrative pseudocode.
 8. Closed diagnostics with exact code/severity/message tables, optional field
-   order, stable occurrence keys, reordered traversal, duplicate normalization,
-   distinct semantic occurrences, collision handling, and total ordering.
+   order, the exact `d:sha256(frame(...))` formula, absent encodings, canonical
+   locations, both literal golden vectors, reordered traversal, duplicate
+   normalization, distinct semantic occurrences, collision handling, and total
+   ordering.
 9. All six query operations, closed `SearchRequestV1`, `GetSymbolRequestV1`,
-   `FileRelationRequestV1`, `CallRelationRequestV1`, `NodeSummaryV1`,
-   `QueryPageV1`, and bounded `QueryErrorV1`, including UTF-16 trim, limit
+   `FileRelationRequestV1`, `CallRelationRequestV1`, the closed
+   `FileSummaryV1`/`SymbolSummaryV1` union, `QueryPageV1`, and bounded
+   `QueryErrorV1`, including NFC/AND selector semantics, allowed symbol kinds,
+   exact case-sensitive fields, file-ID relations, UTF-16 trim, limit
    bounds/default, exact totals, and absent-path sort sentinels.
 10. Cursor golden and replacement fixtures: canonical compact fields, snapshot
-    digest, request fingerprint excluding cursor/limit, last sort key, base64url
-    encoding, 4096-byte rejection, malformed/mismatched/stale rejection, and
-    the exact vector above.
+    digest, request fingerprint excluding cursor/limit, each exact closed
+    `lastSortKey` tuple shape, strict ordinal comparison, base64url encoding,
+    4096-byte rejection, malformed/mismatched/stale rejection, and the exact
+    vector above.
 11. Ambiguity/entity-type errors with the same bounded page bounds as normal
     results, `totalCandidates`, `truncated`, and `continuation`; partial opt-in;
     unique one-hop counterparts; and dependency/dependent and caller/callee
@@ -666,6 +844,18 @@ assertions must cover:
 12. CLI/MCP DTO and error equivalence, closed MCP schemas,
     `--cursor`/`--allow-partial`, `--offset` rejection, query/MCP read-only
     behavior, and analysis-only snapshot writes through #22.
+13. The lexical identity grammar, NFC-only names, containing node IDs, lexical
+    scope kind/path, declaration kind, member role, every normalized explicit
+    signature form, unsupported-signature omission, compiler-instance and
+    traversal-order independence, `declaration.unstable_identity`, and
+    `graph.node_id_collision`.
+14. Query and file/symbol fixtures that prove search returns symbols only,
+    selector predicates are exact AND matches after NFC normalization, casing is
+    significant for qualified names/paths/kinds/container IDs, node ID is the
+    selector alternative, and file relations require `fileId`.
+15. The read-only query/MCP boundary versus the analysis-only controlled snapshot
+    write, including default-path enforcement and compact canonical UTF-8
+    re-emission.
 
 The minimum named fixture corpus is:
 
@@ -686,9 +876,30 @@ The minimum named fixture corpus is:
   fail with `invalid_request` after replacement, while a newly issued cursor for B
   succeeds.
 - `snapshot-modes-v1`: absent destination in `create-only`, existing destination
-  rejected by `create-only`, and old complete bytes retained until a validated
-  `replace` completes; injected write/sync/close/rename failures leave only the
-  old complete bytes and clean the exact temporary name.
+  rejected by `create-only`, a destination race returning `snapshot_conflict`
+  without overwriting existing bytes, and old complete bytes retained until a
+  validated explicit `replace` completes; injected write/sync/close/install
+  failures leave only the old complete bytes and clean the exact temporary name.
+- `snapshot-path-containment-v1`: default and selected relative snapshot paths,
+  external symlink/junction links, parent and destination swaps, traversal,
+  absolute/drive/UNC paths, and directory/device/socket/FIFO/symlink/special
+  destinations; every escape or identity change fails closed.
+- `analysis-boundary-v1`: config/package/`extends`/reference counts and byte
+  caps charged before parsing, deadline expiry that cancels and terminates the
+  worker, no background continuation, and rejection of an in-process embedder
+  without an explicit finite cancellation contract.
+- `diagnostic-v1`: both literal diagnostic golden vectors above, reordered
+  traversal, duplicate normalization, and distinct semantic occurrences.
+- `lexical-identity-v1`: equivalent compiler instances and traversal orders,
+  NFC-equivalent names, every supported explicit signature form, unsupported
+  declarations producing only `declaration.unstable_identity`, and valid-key
+  collisions producing `graph.node_id_collision`.
+- `query-dto-v1`: file and symbol result variants, symbol-only search, exact
+  NFC/case-sensitive AND selectors, node-ID alternative, allowed symbol kinds,
+  file-ID relation requests, and the six operation response unions.
+- `cursor-tuples-v1`: one golden and one boundary case for every closed
+  `lastSortKey` union, including present/absent path sentinels, strict ordinal
+  ordering, snapshot digest binding, and filter-fingerprint binding.
 
 Issue #26 remains the end-to-end proof of the complete contract. This ADR does not
 add its runtime implementation.
@@ -762,5 +973,6 @@ same bounded query service DTOs and typed errors.
    allowed.
 6. A structured selector matching two declarations returns ordered candidates and
    never silently chooses one.
-7. A `.d.ts` reached for NodeNext resolution can affect checking when contained,
-   but never becomes a root, node, endpoint, or diagnostic source.
+7. A `.d.ts`, `.d.mts`, or `.d.cts` reached for NodeNext resolution can affect
+   checking when contained, but never becomes a root, node, endpoint, or
+   diagnostic source.
