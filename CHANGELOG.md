@@ -39,5 +39,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   project metadata, exact cursor tuples and diagnostic IDs, stable lexical
   identity rules, closed file/symbol query DTOs, declaration-root exclusions,
   explicit query/MCP read-only boundaries, and fixtures for each corrected case.
+- Reconciled the final issue #17 contract findings: hard count/byte/deadline and
+  cancellation limits now discard all accumulated graph data without returning or
+  persisting a snapshot; only recoverable compiler diagnostics may produce a
+  partial snapshot. Ambiguity uses the ordinary selector request cursor and
+  bounded candidate page, lexical blocks use framed descriptors, normalized
+  fingerprints bind canonical defaults, and snapshot JSON has exact NFC, escaping,
+  integer, UTF-8, and digest rules. The contract also records fail-closed
+  snapshot privacy, sanitized compiler/bootstrap errors, `.sourcemesh`-only
+  output containment, the closed node/selector matrix, and consistent cursor
+  tuples. No unresolved ambiguity is represented as a closed behavior.
 
 [Unreleased]: https://github.com/VissotoFlavio/source-mesh/commits/develop
