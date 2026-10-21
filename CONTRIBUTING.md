@@ -46,7 +46,7 @@ Install dependencies reproducibly with `npm ci`. Before opening a pull request, 
 npm run check
 ```
 
-It runs `format:check`, `lint`, `typecheck`, `test`, `build`, and `pack:check`. Do not commit generated `dist/`, dependency, coverage, cache, log, environment, or secret files.
+It runs `format:check`, `lint`, `typecheck`, `test`, `build`, `offline:check`, and `pack:check`. Do not commit generated `dist/`, dependency, coverage, cache, log, environment, or secret files.
 
 ## Pull requests
 
