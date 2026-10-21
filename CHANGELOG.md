@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- Bounded local TypeScript/JavaScript project loader for deterministic analysis (#19).
 - Accepted the source graph MVP architecture and schema/query contract in ADR 0002.
 - Initial TypeScript project scaffold and local quality commands.
 - Repository purpose, privacy boundary, and contribution workflow documentation.

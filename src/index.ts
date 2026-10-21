@@ -11,3 +11,18 @@ export type {
   DiscoveryResult,
   DiscoveryStats,
 } from './discovery.js';
+export {
+  loadProject,
+  PROJECT_LOADER_FALLBACK_OPTIONS,
+  PROJECT_ROOT_EXTENSIONS,
+} from './project-loader.js';
+export type {
+  CompilerDiagnosticPhase,
+  DiagnosticLocation,
+  DiagnosticSeverity,
+  LoadProjectRequest,
+  LoadProjectResult,
+  LoadedProject,
+  ProjectLoaderDiagnostic,
+  ProjectRootExtension,
+} from './project-loader.js';
