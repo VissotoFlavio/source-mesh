@@ -45,6 +45,26 @@ export {
   PROJECT_LOADER_FALLBACK_OPTIONS,
   PROJECT_ROOT_EXTENSIONS,
 } from './project-loader.js';
+
+export {
+  decode,
+  decodeSnapshot,
+  encode,
+  encodeSnapshot,
+  snapshotDigest,
+} from './snapshot/codec.js';
+export { DEFAULT_SNAPSHOT_PATH, resolveSnapshotPath } from './snapshot/path.js';
+export { openValidatedSnapshot } from './snapshot/bootstrap.js';
+export { writeSnapshot } from './snapshot/writer.js';
+export { SnapshotError } from './snapshot/types.js';
+export type {
+  SnapshotCompleteness,
+  SnapshotLoadRequest,
+  SnapshotV1,
+  SnapshotWriteMode,
+  SnapshotWriteRequest,
+  SnapshotWriteResult,
+} from './snapshot/types.js';
 export type {
   CompilerDiagnosticPhase,
   DiagnosticLocation,

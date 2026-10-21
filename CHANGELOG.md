@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- Versioned schema-v1 local graph snapshots with canonical UTF-8 encoding, validated loading, contained `.sourcemesh` paths, and explicit atomic create-only/replace writes (#22).
+
 - Checker-backed local import, export, inheritance, implementation, and direct-call relationships with deterministic edges and sanitized diagnostics (#21).
 - Deterministic repository, file, module, and declaration graph extraction with containment-only edges (#20).
 - Bounded local TypeScript/JavaScript project loader for deterministic analysis (#19).
