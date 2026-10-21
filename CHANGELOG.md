@@ -15,4 +15,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Automated reconciliation of merged release and hotfix pull requests from `master` into `develop`.
 - Documentation of the first protected, governed delivery-path validation.
 
+### Changed
+
+- Clarified ADR 0002 graph roots, module extensions, partial-result opt-in, query
+  DTOs, byte determinism, overload identity, and fail-closed path containment.
+
 [Unreleased]: https://github.com/VissotoFlavio/source-mesh/commits/develop

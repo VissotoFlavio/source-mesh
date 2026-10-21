@@ -36,8 +36,11 @@ duplicate query behavior.
 
 ### Runtime and parser boundary
 
-- The supported source languages are TypeScript and JavaScript, including the
-  corresponding JSX/TSX source forms supported by the selected compiler options.
+- The supported source languages are TypeScript and JavaScript. Discovery recognizes
+  exactly `.ts`, `.tsx`, `.mts`, `.cts`, `.js`, `.jsx`, `.mjs`, and `.cjs`, including
+  the corresponding JSX/TSX source forms supported by the selected compiler options.
+  Declaration files ending in `.d.ts` are not discovery roots, but a `.d.ts` inside
+  the repository may be loaded as compiler context when TypeScript resolves it.
 - The implementation uses the TypeScript Compiler API already pinned by the
   repository. No second parser is introduced for the MVP.
 - Discovery returns a deterministic set of repository-relative candidate source paths
@@ -49,14 +52,24 @@ duplicate query behavior.
   compiler program plus the normalized source-file set. It does not execute project
   code.
 - When no `tsconfig.json` is found, the loader creates a documented configuration-free
-  program from discovered `.ts`, `.tsx`, `.js`, and `.jsx` files using stable MVP
-  defaults: ES2022 syntax, ES2022 module semantics, Node-style module resolution,
-  JSX preservation, and `allowJs` enabled. The exact compiler options remain an
-  implementation detail only where they do not change graph identity or supported
-  file selection.
+  program from the eight discovered extensions using stable MVP defaults: ES2022
+  syntax, ES2022 module semantics, Node-style module resolution, JSX preservation,
+  and `allowJs` enabled. The exact compiler options remain an implementation detail
+  only where they do not change graph identity or supported file selection.
 - A malformed or unsupported configuration is a deterministic diagnostic and does
   not silently fall back to a different project. A missing configuration is the only
   case that uses the configuration-free program.
+- The loader establishes the repository's canonical root with `realpath` before
+  resolving any input. Every `tsconfig.json`, `extends` target, project reference,
+  `files`/`include` result, source file, declaration file, and module-resolution
+  candidate must have a successful realpath contained by that root. Containment uses
+  path-segment boundaries, not string prefixes. A symlink or junction is accepted
+  only when its resolved target is verifiably inside the root; a broken link,
+  unresolved realpath, or target outside the root is a fail-closed error diagnostic.
+  An `extends` chain or project reference outside the root invalidates the loaded
+  project. An `include`/`files` match or module/source resolution outside the root is
+  excluded from the graph and recorded as an error diagnostic; it is never followed
+  to create nodes or edges. These containment cases require negative tests.
 - The extractor consumes compiler symbols and syntax and emits semantic candidates;
   it does not persist the full AST or source text.
 
@@ -93,6 +106,7 @@ Every snapshot has `schemaVersion: 1` and this top-level shape:
 ```text
 SnapshotV1 {
   schemaVersion: 1
+  completeness: "complete" | "partial"
   repository: { root: ".", name: string }
   nodes: NodeV1[]
   edges: EdgeV1[]
@@ -107,24 +121,31 @@ required fields cannot be inferred by consumers.
 #### Node kinds and required fields
 
 Each node has `id`, `kind`, `name`, and optional `location`. `id` is a string with
-the prefix `n:` followed by the semantic identity described below.
+the prefix `n:` followed by the semantic identity described below. The `repository`
+node is part of the graph, not merely snapshot metadata; it is the single graph root.
 
-| Kind        | Meaning                                                | Additional required fields |
-| ----------- | ------------------------------------------------------ | -------------------------- |
-| `file`      | A supported source file                                | `path`                     |
-| `module`    | A module/declaration namespace                         | `path`, `qualifiedName`    |
-| `class`     | A class declaration or expression with a stable symbol | `path`, `qualifiedName`    |
-| `interface` | An interface declaration                               | `path`, `qualifiedName`    |
-| `function`  | A function or method with a stable symbol              | `path`, `qualifiedName`    |
-| `variable`  | A variable or property with a stable symbol            | `path`, `qualifiedName`    |
-| `type`      | A type alias or enum-like type declaration             | `path`, `qualifiedName`    |
-| `parameter` | A named function or method parameter                   | `path`, `qualifiedName`    |
+| Kind         | Meaning                                                | Additional required fields |
+| ------------ | ------------------------------------------------------ | -------------------------- |
+| `repository` | The analyzed repository graph root                     | `path` (`"."`)             |
+| `file`       | A supported source file                                | `path`                     |
+| `module`     | A module/declaration namespace                         | `path`, `qualifiedName`    |
+| `class`      | A class declaration or expression with a stable symbol | `path`, `qualifiedName`    |
+| `interface`  | An interface declaration                               | `path`, `qualifiedName`    |
+| `function`   | A function or method with a stable symbol              | `path`, `qualifiedName`    |
+| `variable`   | A variable or property with a stable symbol            | `path`, `qualifiedName`    |
+| `type`       | A type alias or enum-like type declaration             | `path`, `qualifiedName`    |
+| `parameter`  | A named function or method parameter                   | `path`, `qualifiedName`    |
 
 `qualifiedName` is the compiler-symbol name relative to the module, using `.` for
 semantic nesting. Anonymous declarations without a stable symbol are not nodes in
 schema v1; their relationships become diagnostics when relevant. Declaration kind
 names are case-sensitive and cannot be extended by an implementation without a new
-schema decision.
+schema decision. The repository node has `name` from snapshot metadata and `path: "."`;
+its identity tuple is `(schemaVersion, "repository", ".")`. Every source `file` node
+has exactly one `contains` edge from the repository node. A module node is contained
+by its defining file, and declarations are contained by their defining module or
+file according to the semantic nesting available from the compiler. Containment is
+structural and does not imply imports, calls, or other semantic relationships.
 
 #### Edge kinds and required fields
 
@@ -162,19 +183,32 @@ the lowercase hexadecimal digest is appended after `n:`. The file identity tuple
 digest after `e:` of `(schemaVersion, edgeKind, from, to)`.
 
 The overload discriminator is `""` for a unique declaration. For overloads or
-otherwise same-named declarations, it is a deterministic ordinal assigned after
-sorting declaration signatures by normalized module path, qualified name, kind, and
-compiler-provided signature text. Signature text is used only during extraction to
-disambiguate the identity; it is not persisted in the snapshot. If the compiler
-cannot provide a stable discriminator, the declaration is diagnosed rather than
-assigned a line-based or random identity.
+otherwise same-named declarations, it is `sha256("overload\\0" + signature)` where
+`signature` is a compiler-derived normalized signature: generic parameter count and
+normalized constraints, parameter count and each parameter's optional/rest marker
+and normalized type, followed by the normalized return type. Normalization removes
+whitespace, source positions, declaration order, and aliases that resolve to the
+same compiler type; it preserves explicit type structure and distinguishes overloads
+with different semantics. The digest is independent of the overload's ordinal in
+the full overload set. A duplicate normalized signature is an ambiguity diagnostic,
+not an identity collision to resolve by position. If the compiler cannot provide a
+stable normalized signature, the declaration is diagnosed rather than assigned a
+line-based, random, or ordinal identity.
 
 Nodes sort by `(kind, id)`; edges sort by `(kind, from, to, id)`; diagnostics sort by
-`(path, start line, start column, code, message, related IDs)`. Object keys are
-serialized in the documented order and arrays use these orders. Snapshot encoding is
-canonical UTF-8 JSON with no insignificant whitespace and a trailing newline. The
-same repository and compiler inputs therefore produce byte-for-byte identical
-snapshots.
+`(path, start line, start column, code, message, related IDs)`. Every serialized
+object has a fixed key order: snapshot `schemaVersion`, `completeness`,
+`repository`, `nodes`, `edges`, `diagnostics`; repository `root`, `name`; node `id`,
+`kind`, `name`, `path`, `qualifiedName`, `location`; edge `id`, `kind`, `from`,
+`to`; diagnostic `code`, `severity`, `message`, `path`, `location`,
+`relatedNodeIds`; location `path`, `start`, `end`; and positions `line`, `column`.
+Optional fields that have no value are absent, never `null`; required fields are
+always present. Arrays use the ordering above, and `relatedNodeIds` sorts by node ID.
+Snapshot encoding is canonical UTF-8 JSON with no insignificant whitespace and one
+trailing newline. The repository must maintain at least one synthetic canonical
+fixture whose expected bytes are asserted exactly, including key order, omitted
+optional fields, array order, and trailing newline. The same repository and compiler
+inputs therefore produce byte-for-byte identical snapshots.
 
 ### Diagnostics and unsupported relationships
 
@@ -187,9 +221,10 @@ external-module relationships, dynamic imports or calls, computed property acces
 ambiguous overload or symbol resolution, unsupported syntax, invalid paths, and
 configuration errors. A dynamic JavaScript relationship is not made certain by a
 name match. An external relationship may be reported, but no external node is
-created. A snapshot with `error` diagnostics is not queryable unless the caller
-explicitly opts into partial results; partial results still contain only valid local
-edges.
+created. `completeness` is `complete` only when there are no `error` diagnostics;
+any snapshot containing an error diagnostic is `partial`. Partial snapshots retain
+all valid local nodes and edges but are rejected by query operations unless the
+caller explicitly opts in with `allowPartial: true`.
 
 ### Snapshot codec port
 
@@ -200,11 +235,12 @@ encode(snapshot: SnapshotV1) -> UTF-8 bytes
 decode(bytes) -> SnapshotV1 | SnapshotError
 ```
 
-Encoding validates schema, IDs, paths, endpoints, closed unions, and ordering before
-writing. Decoding rejects malformed JSON, unsupported `schemaVersion`, unknown kinds,
-invalid paths, duplicate IDs, dangling endpoints, and non-canonical ordering. The MVP
-rejects unsupported versions; it has no migrations. A future schema requires a new
-ADR and an explicit compatibility policy.
+Encoding validates schema, completeness, IDs, paths, endpoints, closed unions, and
+ordering before writing. Decoding rejects malformed JSON, unsupported `schemaVersion`,
+unknown kinds, invalid paths, duplicate IDs, dangling endpoints, inconsistent
+completeness, and non-canonical ordering. The MVP rejects unsupported versions; it
+has no migrations. A future schema requires a new ADR and an explicit compatibility
+policy.
 
 ### Query service port
 
@@ -223,27 +259,41 @@ QueryRequestV1 {
   edgeKinds?: EdgeKindV1[]
   direction?: "in" | "out" | "both"
   severity?: "warning" | "error"
+  allowPartial?: boolean // default false
   limit?: integer // 1..1000; default 100
 }
 ```
 
-`getNode` requires `nodeId`; `findNodes` may filter by kind, name, and path;
-`neighbors` requires `nodeId` and uses `direction` (default `both`);
-`diagnostics` may filter by path and severity. Responses contain only bounded,
-deterministically ordered node, edge, or diagnostic DTOs. A response includes
-`schemaVersion: 1`, `items`, and `truncated`; it never includes source text or an
-absolute path.
+`allowPartial` defaults to `false` for every operation. `getNode` requires `nodeId`
+and returns zero or one `NodeV1`; `findNodes` may filter by kind, name, and path and
+returns all matching `NodeV1` candidates; `neighbors` requires `nodeId` and uses
+`direction` (default `both`) and returns ordered `{ edge, node }` items; and
+`diagnostics` may filter by path and severity and returns `DiagnosticV1` items. Each
+operation has its own bounded `items` DTO but shares `schemaVersion: 1`,
+`completeness`, and `truncated` response fields. Responses never include source text
+or an absolute path.
+
+Selectors are never resolved by choosing the first or best name match. An ID is
+always unique. If a future selector requires one node but matches multiple nodes, the
+service returns `ambiguous` with all bounded, deterministically ordered candidate
+nodes; `findNodes` is the explicit operation for retrieving those candidates. No
+ambiguous selector creates an edge or silently narrows a result.
 
 The typed error codes are `invalid_request`, `not_found`, `unsupported_schema`,
-`invalid_snapshot`, `limit_exceeded`, and `internal`. Errors have a stable `code`, a
-human-readable `message`, and optional field names; they do not expose stack traces,
-host paths, or source contents. `internal` is for an unexpected local failure and
-must be logged only under the repository's local privacy rules.
+`invalid_snapshot`, `limit_exceeded`, `ambiguous`, `partial_not_allowed`, and
+`internal`. Errors have a stable `code`, a human-readable `message`, optional field
+names, and optional `candidates` for `ambiguous`; they do not expose stack traces,
+host paths, or source contents. `partial_not_allowed` is returned before any query
+against an error-bearing snapshot when `allowPartial` is false. `internal` is for an
+unexpected local failure and must be logged only under the repository's local privacy
+rules.
 
-The CLI parses arguments and serializes these same DTOs as local stdout/stderr. MCP
-uses local `stdio`, exposes the same read-only operations, and maps transport errors
-to the same query error codes. Neither adapter may access the filesystem, compiler,
-or graph directly outside the shared application ports.
+The CLI parses arguments and serializes these same DTOs as local stdout/stderr. Its
+explicit `--allow-partial` option maps to `allowPartial: true`; without that option
+it maps to the default `false` and reports `partial_not_allowed`. MCP uses local
+`stdio`, exposes the same operations and `allowPartial` field, and maps the same
+error code without changing the default. Neither adapter may access the filesystem,
+compiler, or graph directly outside the shared application ports.
 
 ### Privacy, runtime, and security boundaries
 
@@ -315,3 +365,10 @@ These synthetic examples are contract walkthroughs, not implementation fixtures:
 4. Two same-name overloads receive deterministic discriminators when the compiler
    exposes stable signatures; otherwise both are diagnosed and neither gets an
    invented line-number identity.
+5. A snapshot with only warnings is `complete` and is queryable with the default
+   `allowPartial: false`; a snapshot with an unresolved configuration error is
+   `partial`, returns `partial_not_allowed` by default, and is queryable only when
+   the CLI flag or MCP/request field explicitly opts in to partial results.
+6. A name selector matching two declarations returns both ordered candidates (or an
+   `ambiguous` error with those candidates when a unique selector is required); it
+   never chooses one declaration or emits a guessed edge.
