@@ -35,7 +35,7 @@ const MAX_SOURCE_BYTES = 4 * 1024 * 1024;
 const MAX_AGGREGATE_SOURCE_BYTES = 256 * 1024 * 1024;
 const MAX_SERIALIZED_PATH_BYTES = 16 * 1024;
 
-type DiscoveryReason =
+export type DiscoveryPathReason =
   | 'root_missing'
   | 'root_not_directory'
   | 'root_inaccessible'
@@ -44,20 +44,62 @@ type DiscoveryReason =
   | 'entry_not_regular'
   | 'symlink_skipped'
   | 'path_escape'
+  | 'entry_replaced';
+
+export type DiscoveryLimitReason =
   | 'path_depth_exceeded'
   | 'source_size_exceeded'
   | 'discovery_roots_exceeded'
   | 'directory_entries_exceeded'
-  | 'source_bytes_exceeded';
+  | 'source_bytes_exceeded'
+  | 'serialized_path_exceeded';
 
-/** The closed, sanitized diagnostic shape used by local discovery. */
-export interface DiscoveryDiagnostic {
+export interface DiscoveryStats {
+  readonly dev: number;
+  readonly ino: number;
+  readonly size: number;
+  isDirectory(): boolean;
+  isFile(): boolean;
+  isSymbolicLink(): boolean;
+}
+
+export interface DiscoveryDirent {
+  readonly name: string;
+  isDirectory(): boolean;
+  isSymbolicLink(): boolean;
+}
+
+/** Filesystem boundary kept injectable for deterministic race-condition tests. */
+export interface DiscoveryFileSystem {
+  realpath(path: string): Promise<string>;
+  stat(path: string): Promise<DiscoveryStats>;
+  lstat(path: string): Promise<DiscoveryStats>;
+  readdir(path: string): Promise<readonly DiscoveryDirent[]>;
+}
+
+export interface DiscoverSourceFilesOptions {
+  readonly filesystem?: DiscoveryFileSystem;
+}
+
+interface PathInvalidDiagnostic {
   readonly code: 'path_invalid';
   readonly severity: 'error';
   readonly message: 'Repository-relative path is invalid.';
-  readonly reason: DiscoveryReason;
+  readonly reason: DiscoveryPathReason;
   readonly path?: string;
 }
+
+interface ResourceLimitDiagnostic {
+  readonly code: 'resource_limit';
+  readonly severity: 'error';
+  readonly message: 'The analysis resource limit was exceeded.';
+  readonly reason: DiscoveryLimitReason;
+  readonly path?: string;
+}
+
+/** The closed, sanitized diagnostic shape used by local discovery. */
+export type DiscoveryDiagnostic =
+  PathInvalidDiagnostic | ResourceLimitDiagnostic;
 
 /** Discovery output. A limit failure returns no partial source list. */
 export interface DiscoveryResult {
@@ -68,6 +110,7 @@ export interface DiscoveryResult {
 
 interface DiscoveryState {
   readonly root: string;
+  readonly filesystem: DiscoveryFileSystem;
   readonly sources: string[];
   readonly diagnostics: DiscoveryDiagnostic[];
   readonly visitedDirectories: Set<string>;
@@ -75,6 +118,13 @@ interface DiscoveryState {
   sourceBytes: number;
   failed: boolean;
 }
+
+const defaultFilesystem: DiscoveryFileSystem = {
+  realpath: (candidate) => fs.realpath(candidate),
+  stat: (candidate) => fs.stat(candidate),
+  lstat: (candidate) => fs.lstat(candidate),
+  readdir: async (directory) => fs.readdir(directory, { withFileTypes: true }),
+};
 
 function compareOrdinal(left: string, right: string): number {
   return Buffer.from(left, 'utf8').compare(Buffer.from(right, 'utf8'));
@@ -91,13 +141,26 @@ function compareOptionalPath(
 }
 
 function diagnostic(
-  reason: DiscoveryReason,
+  reason: DiscoveryPathReason,
   relativePath?: string,
 ): DiscoveryDiagnostic {
   return {
     code: 'path_invalid',
     severity: 'error',
     message: 'Repository-relative path is invalid.',
+    reason,
+    ...(relativePath === undefined ? {} : { path: relativePath }),
+  };
+}
+
+function limitDiagnostic(
+  reason: DiscoveryLimitReason,
+  relativePath?: string,
+): DiscoveryDiagnostic {
+  return {
+    code: 'resource_limit',
+    severity: 'error',
+    message: 'The analysis resource limit was exceeded.',
     reason,
     ...(relativePath === undefined ? {} : { path: relativePath }),
   };
@@ -123,6 +186,10 @@ function isContained(root: string, candidate: string): boolean {
   );
 }
 
+function isSerializedPathTooLong(relativePath: string): boolean {
+  return Buffer.byteLength(relativePath, 'utf8') > MAX_SERIALIZED_PATH_BYTES;
+}
+
 function toRepositoryPath(root: string, candidate: string): string | undefined {
   const relative = path.relative(root, candidate);
   if (!isContained(root, candidate)) return undefined;
@@ -130,7 +197,6 @@ function toRepositoryPath(root: string, candidate: string): string | undefined {
   if (
     portable.length === 0 ||
     portable.startsWith('/') ||
-    Buffer.byteLength(portable, 'utf8') > MAX_SERIALIZED_PATH_BYTES ||
     portable
       .split('/')
       .some((segment) => segment === '' || segment === '.' || segment === '..')
@@ -181,12 +247,36 @@ function addDiagnostic(state: DiscoveryState, item: DiscoveryDiagnostic): void {
 
 function failLimit(
   state: DiscoveryState,
-  reason: DiscoveryReason,
+  reason: DiscoveryLimitReason,
+  relativePath?: string,
+): void {
+  state.failed = true;
+  state.sources.length = 0;
+  addDiagnostic(state, limitDiagnostic(reason, relativePath));
+}
+
+function failClosed(
+  state: DiscoveryState,
+  reason: DiscoveryPathReason,
   relativePath?: string,
 ): void {
   state.failed = true;
   state.sources.length = 0;
   addDiagnostic(state, diagnostic(reason, relativePath));
+}
+
+function classifyFilesystemError(error: unknown): 'missing' | 'inaccessible' {
+  const code = (error as NodeJS.ErrnoException).code;
+  return code === 'ENOENT' || code === 'ENOTDIR' ? 'missing' : 'inaccessible';
+}
+
+function sameIdentity(left: DiscoveryStats, right: DiscoveryStats): boolean {
+  return (
+    left.dev === right.dev &&
+    left.ino === right.ino &&
+    left.isDirectory() === right.isDirectory() &&
+    left.isSymbolicLink() === right.isSymbolicLink()
+  );
 }
 
 async function inspectDirectory(
@@ -195,8 +285,9 @@ async function inspectDirectory(
 ): Promise<void> {
   if (state.failed) return;
 
+  let directoryStats: DiscoveryStats;
   try {
-    const directoryStats = await fs.lstat(directory);
+    directoryStats = await state.filesystem.lstat(directory);
     if (directoryStats.isSymbolicLink() || !directoryStats.isDirectory()) {
       addDiagnostic(
         state,
@@ -207,32 +298,72 @@ async function inspectDirectory(
       );
       return;
     }
-    const canonicalDirectory = await fs.realpath(directory);
+    const canonicalDirectory = await state.filesystem.realpath(directory);
+    const afterRealpathStats = await state.filesystem.lstat(directory);
+    if (!sameIdentity(directoryStats, afterRealpathStats)) {
+      failClosed(
+        state,
+        'entry_replaced',
+        toRepositoryPath(state.root, directory),
+      );
+      return;
+    }
     if (
       canonicalDirectory !== directory ||
       (canonicalDirectory !== state.root &&
         !isContained(state.root, canonicalDirectory))
     ) {
-      addDiagnostic(
-        state,
-        diagnostic('path_escape', toRepositoryPath(state.root, directory)),
-      );
+      failClosed(state, 'path_escape', toRepositoryPath(state.root, directory));
       return;
     }
-  } catch {
+  } catch (error) {
+    const reason = classifyFilesystemError(error);
     addDiagnostic(
       state,
-      diagnostic('entry_missing', toRepositoryPath(state.root, directory)),
+      diagnostic(
+        reason === 'missing' ? 'entry_missing' : 'entry_inaccessible',
+        toRepositoryPath(state.root, directory),
+      ),
     );
     return;
   }
 
-  let entries;
+  let entries: DiscoveryDirent[];
   try {
-    entries = await fs.readdir(directory, { withFileTypes: true });
-  } catch {
+    entries = [...(await state.filesystem.readdir(directory))];
+  } catch (error) {
     const relativePath = toRepositoryPath(state.root, directory);
-    addDiagnostic(state, diagnostic('entry_inaccessible', relativePath));
+    addDiagnostic(
+      state,
+      diagnostic(
+        classifyFilesystemError(error) === 'missing'
+          ? 'entry_missing'
+          : 'entry_inaccessible',
+        relativePath,
+      ),
+    );
+    return;
+  }
+
+  let afterReadStats: DiscoveryStats;
+  try {
+    afterReadStats = await state.filesystem.lstat(directory);
+  } catch (error) {
+    failClosed(
+      state,
+      classifyFilesystemError(error) === 'missing'
+        ? 'entry_missing'
+        : 'entry_inaccessible',
+      toRepositoryPath(state.root, directory),
+    );
+    return;
+  }
+  if (!sameIdentity(directoryStats, afterReadStats)) {
+    failClosed(
+      state,
+      'entry_replaced',
+      toRepositoryPath(state.root, directory),
+    );
     return;
   }
 
@@ -253,7 +384,11 @@ async function inspectDirectory(
     const candidate = path.join(directory, entry.name);
     const relativePath = toRepositoryPath(state.root, candidate);
     if (relativePath === undefined) {
-      failLimit(state, 'path_escape');
+      failClosed(state, 'path_escape');
+      return;
+    }
+    if (isSerializedPathTooLong(relativePath)) {
+      failLimit(state, 'serialized_path_exceeded');
       return;
     }
     if (pathDepth(relativePath) > MAX_PATH_DEPTH) {
@@ -270,22 +405,34 @@ async function inspectDirectory(
 
     let stats;
     try {
-      stats = await fs.lstat(candidate);
+      stats = await state.filesystem.lstat(candidate);
     } catch (error) {
-      const reason =
-        (error as NodeJS.ErrnoException).code === 'ENOENT'
-          ? 'entry_missing'
-          : 'entry_inaccessible';
-      addDiagnostic(state, diagnostic(reason, relativePath));
+      addDiagnostic(
+        state,
+        diagnostic(
+          classifyFilesystemError(error) === 'missing'
+            ? 'entry_missing'
+            : 'entry_inaccessible',
+          relativePath,
+        ),
+      );
       continue;
     }
 
     if (stats.isDirectory()) {
       let canonicalDirectory: string;
       try {
-        canonicalDirectory = await fs.realpath(candidate);
-      } catch {
-        addDiagnostic(state, diagnostic('entry_missing', relativePath));
+        canonicalDirectory = await state.filesystem.realpath(candidate);
+      } catch (error) {
+        addDiagnostic(
+          state,
+          diagnostic(
+            classifyFilesystemError(error) === 'missing'
+              ? 'entry_missing'
+              : 'entry_inaccessible',
+            relativePath,
+          ),
+        );
         continue;
       }
       if (!isContained(state.root, canonicalDirectory)) {
@@ -323,16 +470,32 @@ async function inspectDirectory(
 
     let canonicalFile: string;
     try {
-      canonicalFile = await fs.realpath(candidate);
-    } catch {
-      addDiagnostic(state, diagnostic('entry_missing', relativePath));
+      canonicalFile = await state.filesystem.realpath(candidate);
+    } catch (error) {
+      addDiagnostic(
+        state,
+        diagnostic(
+          classifyFilesystemError(error) === 'missing'
+            ? 'entry_missing'
+            : 'entry_inaccessible',
+          relativePath,
+        ),
+      );
       continue;
     }
     let finalStats;
     try {
-      finalStats = await fs.lstat(candidate);
-    } catch {
-      addDiagnostic(state, diagnostic('entry_missing', relativePath));
+      finalStats = await state.filesystem.lstat(candidate);
+    } catch (error) {
+      addDiagnostic(
+        state,
+        diagnostic(
+          classifyFilesystemError(error) === 'missing'
+            ? 'entry_missing'
+            : 'entry_inaccessible',
+          relativePath,
+        ),
+      );
       continue;
     }
     if (
@@ -347,6 +510,10 @@ async function inspectDirectory(
     if (canonicalRelativePath === undefined) {
       addDiagnostic(state, diagnostic('path_escape', relativePath));
       continue;
+    }
+    if (isSerializedPathTooLong(canonicalRelativePath)) {
+      failLimit(state, 'serialized_path_exceeded');
+      return;
     }
     if (
       hasReservedDirectory(canonicalRelativePath) ||
@@ -363,31 +530,58 @@ async function inspectDirectory(
  * The function never reads source contents, follows links, invokes processes,
  * or accesses the network. Errors are sanitized into stable diagnostics.
  */
+function isRemoteRoot(selectedRoot: string): boolean {
+  return (
+    /^[\\/]{2}/.test(selectedRoot) ||
+    /^[a-z][a-z\d+.-]*:\/\//i.test(selectedRoot)
+  );
+}
+
 export async function discoverSourceFiles(
   selectedRoot: string,
+  options: DiscoverSourceFilesOptions = {},
 ): Promise<DiscoveryResult> {
   const empty = (diagnostics: DiscoveryDiagnostic[]): DiscoveryResult => ({
     sources: [],
     diagnostics,
   });
 
+  if (isRemoteRoot(selectedRoot)) {
+    return empty([diagnostic('path_escape')]);
+  }
+
+  const filesystem = options.filesystem ?? defaultFilesystem;
+
   let root: string;
   try {
-    root = await fs.realpath(selectedRoot);
-  } catch {
-    return empty([diagnostic('root_missing')]);
+    root = await filesystem.realpath(selectedRoot);
+  } catch (error) {
+    return empty([
+      diagnostic(
+        classifyFilesystemError(error) === 'missing'
+          ? 'root_missing'
+          : 'root_inaccessible',
+      ),
+    ]);
   }
   let rootStats;
   try {
-    rootStats = await fs.stat(root);
-  } catch {
-    return empty([diagnostic('root_inaccessible')]);
+    rootStats = await filesystem.stat(root);
+  } catch (error) {
+    return empty([
+      diagnostic(
+        classifyFilesystemError(error) === 'missing'
+          ? 'root_missing'
+          : 'root_inaccessible',
+      ),
+    ]);
   }
   if (!rootStats.isDirectory())
     return empty([diagnostic('root_not_directory')]);
 
   const state: DiscoveryState = {
     root,
+    filesystem,
     sources: [],
     diagnostics: [],
     visitedDirectories: new Set([root]),
