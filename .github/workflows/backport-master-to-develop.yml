@@ -58,6 +58,10 @@ jobs:
             fail "The pull request head must belong to this repository."
           fi
 
+          if (( ${#SOURCE_BRANCH} > 100 )); then
+            fail "The source branch exceeds the 100-character repository limit."
+          fi
+
           if [[ ! "$MERGE_SHA" =~ ^[[:xdigit:]]{40}$ ]]; then
             fail "The merged pull request does not provide a full merge commit SHA."
           fi
@@ -77,6 +81,9 @@ jobs:
           fi
 
           backport_branch="backport/${source_type}-${version_segment}"
+          if (( ${#backport_branch} > 100 )); then
+            fail "The generated backport branch exceeds the 100-character repository limit."
+          fi
           branch_ref="refs/heads/${backport_branch}"
 
           refs_json="$(gh api --method GET "repos/${REPOSITORY}/git/matching-refs/heads/${backport_branch}")"
