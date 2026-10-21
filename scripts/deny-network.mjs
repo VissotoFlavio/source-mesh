@@ -20,6 +20,19 @@ function replaceMethod(target, method) {
   }
 }
 
+function replaceMatchingMethods(target, predicate) {
+  for (const method of Object.getOwnPropertyNames(target)) {
+    if (predicate(method) && typeof target[method] === 'function') {
+      replaceMethod(target, method);
+    }
+  }
+}
+
+const isDnsNetworkMethod = (method) =>
+  method.startsWith('lookup') ||
+  method.startsWith('resolve') ||
+  method === 'reverse';
+
 const guardedMethods = [
   [
     childProcess,
@@ -34,8 +47,6 @@ const guardedMethods = [
     ],
   ],
   [dgram, ['createSocket']],
-  [dns, ['lookup', 'resolve', 'resolve4', 'resolve6', 'reverse']],
-  [dns.promises, ['lookup', 'resolve', 'resolve4', 'resolve6', 'reverse']],
   [http, ['get', 'request']],
   [http2, ['connect']],
   [https, ['get', 'request']],
@@ -49,15 +60,17 @@ for (const [module, methods] of guardedMethods) {
   }
 }
 
-for (const method of ['connect', 'send']) {
+for (const method of ['bind', 'connect', 'send']) {
   replaceMethod(dgram.Socket.prototype, method);
 }
 
-for (const method of ['resolve', 'resolve4', 'resolve6', 'reverse']) {
-  replaceMethod(dns.Resolver.prototype, method);
-}
+replaceMatchingMethods(dns, isDnsNetworkMethod);
+replaceMatchingMethods(dns.promises, isDnsNetworkMethod);
+replaceMatchingMethods(dns.Resolver.prototype, isDnsNetworkMethod);
+replaceMatchingMethods(dns.promises.Resolver.prototype, isDnsNetworkMethod);
 
 replaceMethod(net.Socket.prototype, 'connect');
+replaceMethod(net.Server.prototype, 'listen');
 replaceMethod(globalThis, 'fetch');
 replaceMethod(globalThis, 'WebSocket');
 

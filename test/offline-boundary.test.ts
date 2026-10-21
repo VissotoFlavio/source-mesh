@@ -15,16 +15,40 @@ const prohibitedAttempts = [
     "const { lookup } = await import('node:dns'); lookup('localhost')",
   ],
   [
+    'DNS lookup service',
+    "const { lookupService } = await import('node:dns'); lookupService('127.0.0.1', 80, () => {})",
+  ],
+  [
+    'DNS resolve any',
+    "const { resolveAny } = await import('node:dns'); resolveAny('localhost')",
+  ],
+  [
+    'DNS typed resolver',
+    "const { resolveCaa } = await import('node:dns'); resolveCaa('localhost')",
+  ],
+  [
+    'promise DNS resolver',
+    "const { resolveMx } = await import('node:dns/promises'); await resolveMx('localhost')",
+  ],
+  [
     'socket instance',
     "const net = await import('node:net'); new net.Socket().connect(9, '127.0.0.1')",
   ],
   [
     'resolver instance',
-    "const { Resolver } = await import('node:dns'); new Resolver().resolve4('localhost')",
+    "const { Resolver } = await import('node:dns'); new Resolver().resolveTxt('localhost')",
   ],
   [
     'UDP socket',
     "const dgram = await import('node:dgram'); dgram.createSocket('udp4')",
+  ],
+  [
+    'UDP bind',
+    "const { Socket } = await import('node:dgram'); new Socket('udp4').bind(0)",
+  ],
+  [
+    'TCP listener',
+    "const net = await import('node:net'); net.createServer().listen(0)",
   ],
   [
     'subprocess',
