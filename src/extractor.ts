@@ -25,6 +25,12 @@ export interface ExtractDeclarationGraphRequest {
   readonly repositoryRoot: string;
   readonly project: LoadedProject;
   readonly repositoryName?: string;
+  /** @internal Deterministic collision seam used by extractor tests. */
+  readonly identity?: ExtractorIdentity;
+}
+
+export interface ExtractorIdentity {
+  readonly nodeId?: typeof nodeId;
 }
 
 interface Candidate {
@@ -40,6 +46,12 @@ interface Candidate {
   readonly node: ts.Node;
 }
 
+interface PendingNode {
+  readonly id: string;
+  readonly candidate: Candidate;
+  readonly locations: LocationV1[];
+}
+
 const unsupported = new Set(['Constructor', 'GetAccessor', 'SetAccessor']);
 
 function ordinal(left: string, right: string): number {
@@ -53,10 +65,27 @@ function nameOf(node: ts.NamedDeclaration): string | undefined {
     ? node.name.text.normalize('NFC')
     : undefined;
 }
-function typeText(node: ts.Node | undefined): string {
+function explicitType(node: ts.Node | undefined): string {
   if (node === undefined) return 'absent';
-  return node.getText().replace(/\s+/gu, ' ').trim().normalize('NFC');
+  const source = node.getSourceFile();
+  return ts
+    .createPrinter({ removeComments: true, newLine: ts.NewLineKind.LineFeed })
+    .printNode(ts.EmitHint.Unspecified, node, source)
+    .replace(/\s+/gu, ' ')
+    .trim()
+    .normalize('NFC');
 }
+
+function typeParameters(
+  parameters: readonly ts.TypeParameterDeclaration[] | undefined,
+): readonly (readonly [string, string, string])[] {
+  return (parameters ?? []).map((parameter) => [
+    parameter.name.text.normalize('NFC'),
+    explicitType(parameter.constraint),
+    explicitType(parameter.default),
+  ]);
+}
+
 function signature(node: ts.Node, kind: string, name: string): string {
   if (
     ts.isFunctionDeclaration(node) ||
@@ -66,20 +95,31 @@ function signature(node: ts.Node, kind: string, name: string): string {
     return JSON.stringify([
       'function',
       name,
-      [],
+      typeParameters(node.typeParameters),
       node.parameters.map((p) => [
         nameOf(p) ?? 'parameter',
         !!p.questionToken,
         !!p.dotDotDotToken,
-        typeText(p.type),
+        explicitType(p.type),
       ]),
-      typeText(node.type),
+      explicitType(node.type),
     ]);
   if (ts.isVariableDeclaration(node))
-    return JSON.stringify(['variable', name, typeText(node.type)]);
+    return JSON.stringify(['variable', name, explicitType(node.type)]);
   if (ts.isParameter(node))
-    return JSON.stringify(['parameter', name, typeText(node.type)]);
+    return JSON.stringify(['parameter', name, explicitType(node.type)]);
   if (ts.isModuleDeclaration(node)) return JSON.stringify(['module', name]);
+  if (
+    ts.isClassDeclaration(node) ||
+    ts.isInterfaceDeclaration(node) ||
+    ts.isTypeAliasDeclaration(node)
+  )
+    return JSON.stringify([
+      'declaration',
+      kind,
+      name,
+      typeParameters(node.typeParameters),
+    ]);
   return JSON.stringify(['declaration', kind, name, []]);
 }
 function location(
@@ -133,10 +173,52 @@ function scopeForBlock(parentScope: string, descriptor: string): string {
   return `${parentScope.slice(0, marker)}#scope=${lexical}/${descriptor}`;
 }
 
+function compareCandidates(left: Candidate, right: Candidate): number {
+  return (
+    ordinal(left.path, right.path) ||
+    ordinal(left.qualifiedName, right.qualifiedName) ||
+    ordinal(left.kind, right.kind) ||
+    ordinal(left.signature, right.signature) ||
+    ordinal(left.name, right.name)
+  );
+}
+
+function validPendingNodes(
+  pending: readonly PendingNode[],
+  diagnostics: DiagnosticV1[],
+): PendingNode[] {
+  const byId = new Map<string, PendingNode[]>();
+  for (const item of pending) {
+    const group = byId.get(item.id) ?? [];
+    group.push(item);
+    byId.set(item.id, group);
+  }
+  const valid: PendingNode[] = [];
+  for (const group of byId.values()) {
+    if (group.length > 1) {
+      const ordered = [...group].sort((left, right) =>
+        compareCandidates(left.candidate, right.candidate),
+      );
+      const first = ordered[0]!;
+      diagnostics.push(
+        makeDiagnostic(
+          'graph.node_id_collision',
+          first.candidate.path,
+          first.locations[0],
+        ),
+      );
+      continue;
+    }
+    valid.push(group[0]!);
+  }
+  return valid;
+}
+
 export function extractDeclarationGraph(
   request: ExtractDeclarationGraphRequest,
 ): DeclarationGraph {
   const requestedName = request.repositoryName?.normalize('NFC');
+  const identityNodeId = request.identity?.nodeId ?? nodeId;
   const repositoryName =
     requestedName &&
     !hasControlCharacter(requestedName) &&
@@ -178,7 +260,7 @@ export function extractDeclarationGraph(
     const moduleName = canonicalPath;
     const moduleParentScope = `${repository.id}/${file.id}#scope=root`;
     const module: SymbolNodeV1 = {
-      id: nodeId(
+      id: identityNodeId(
         'module',
         canonicalPath,
         moduleParentScope,
@@ -201,6 +283,7 @@ export function extractDeclarationGraph(
       `${repository.id}/${file.id}/${module.id}#scope=module:${module.qualifiedName}`,
       candidates,
       diagnostics,
+      identityNodeId,
     );
   }
 
@@ -211,7 +294,7 @@ export function extractDeclarationGraph(
     group.push(candidate);
     grouped.set(key, group);
   }
-  const ids = new Map<string, Candidate>();
+  const pending: PendingNode[] = [];
   for (const group of grouped.values()) {
     const first = group[0]!;
     const duplicates = new Set(group.map((item) => item.signature));
@@ -223,26 +306,23 @@ export function extractDeclarationGraph(
       continue;
     }
     const locations = sortLocations(group.flatMap((item) => item.locations));
-    const id = nodeId(
+    const id = identityNodeId(
       first.kind,
       first.path,
       first.scope,
       first.name,
       first.memberRole,
     );
-    const prior = ids.get(id);
-    if (prior !== undefined) {
-      diagnostics.push(
-        makeDiagnostic(
-          'graph.node_id_collision',
-          first.path,
-          first.locations[0],
-        ),
-      );
-      continue;
-    }
+    pending.push({ id, candidate: first, locations });
+  }
+
+  const ids = new Map<string, Candidate>();
+  const validDeclarations = validPendingNodes(pending, diagnostics);
+  const parameterPending: PendingNode[] = [];
+  for (const item of validDeclarations) {
+    const { id, candidate: first, locations } = item;
     ids.set(id, first);
-    const node: SymbolNodeV1 = {
+    nodes.push({
       id,
       kind: first.kind,
       name: first.name,
@@ -250,57 +330,61 @@ export function extractDeclarationGraph(
       qualifiedName: first.qualifiedName,
       memberRole: first.memberRole,
       ...(locations.length ? { locations } : {}),
-    };
-    nodes.push(node);
+    });
     edges.push(makeEdge(first.parentId, id, locations));
-    if (first.kind === 'function' && isFunctionLikeNode(first.node)) {
-      for (const parameter of first.node.parameters) {
-        const parameterName = nameOf(parameter) ?? 'parameter';
-        const parameterCandidate: Candidate = {
-          kind: 'parameter',
-          name: parameterName,
-          qualifiedName: qualified(first.qualifiedName, parameterName),
-          path: first.path,
-          memberRole: 'none',
-          parentId: id,
-          scope: scopeForChild(
-            first.scope,
-            id,
-            'function',
-            first.qualifiedName,
+    if (first.kind !== 'function' || !isFunctionLikeNode(first.node)) continue;
+    for (const parameter of first.node.parameters) {
+      const parameterName = nameOf(parameter) ?? 'parameter';
+      const parameterCandidate: Candidate = {
+        kind: 'parameter',
+        name: parameterName,
+        qualifiedName: qualified(first.qualifiedName, parameterName),
+        path: first.path,
+        memberRole: 'none',
+        parentId: id,
+        scope: scopeForChild(first.scope, id, 'function', first.qualifiedName),
+        locations: [
+          location(
+            request.repositoryRoot,
+            sourceByPath.get(first.path)!,
+            parameter,
           ),
-          locations: [
-            location(
-              request.repositoryRoot,
-              sourceByPath.get(first.path)!,
-              parameter,
-            ),
-          ],
-          signature: signature(parameter, 'parameter', parameterName),
-          node: parameter,
-        };
-        const parameterId = nodeId(
+        ],
+        signature: signature(parameter, 'parameter', parameterName),
+        node: parameter,
+      };
+      parameterPending.push({
+        id: identityNodeId(
           'parameter',
           parameterCandidate.path,
           parameterCandidate.scope,
           parameterName,
           'none',
-        );
-        if (!ids.has(parameterId)) {
-          ids.set(parameterId, parameterCandidate);
-          nodes.push({
-            id: parameterId,
-            kind: 'parameter',
-            name: parameterName,
-            path: parameterCandidate.path,
-            qualifiedName: parameterCandidate.qualifiedName,
-            memberRole: 'none',
-            locations: parameterCandidate.locations,
-          });
-          edges.push(makeEdge(id, parameterId, parameterCandidate.locations));
-        }
-      }
+        ),
+        candidate: parameterCandidate,
+        locations: parameterCandidate.locations,
+      });
     }
+  }
+  for (const item of validPendingNodes(parameterPending, diagnostics)) {
+    const { id, candidate, locations } = item;
+    if (ids.has(id)) {
+      diagnostics.push(
+        makeDiagnostic('graph.node_id_collision', candidate.path, locations[0]),
+      );
+      continue;
+    }
+    ids.set(id, candidate);
+    nodes.push({
+      id,
+      kind: 'parameter',
+      name: candidate.name,
+      path: candidate.path,
+      qualifiedName: candidate.qualifiedName,
+      memberRole: 'none',
+      locations,
+    });
+    edges.push(makeEdge(candidate.parentId, id, locations));
   }
   const uniqueDiagnostics = new Map<string, DiagnosticV1>();
   for (const item of diagnostics.map(withDiagnosticId))
@@ -322,6 +406,7 @@ function visitSource(
   scope: string,
   candidates: Candidate[],
   diagnostics: DiagnosticV1[],
+  identityNodeId: typeof nodeId,
 ): void {
   const visit = (
     node: ts.Node,
@@ -354,7 +439,7 @@ function visitSource(
         node,
       };
       candidates.push(candidate);
-      const id = nodeId(
+      const id = identityNodeId(
         candidate.kind,
         candidate.path,
         candidate.scope,
@@ -417,9 +502,17 @@ function visitSource(
       candidates.push(candidate);
       if (ts.isClassDeclaration(node) || ts.isInterfaceDeclaration(node))
         for (const member of node.members)
-          visitMember(member, candidate, source, root, candidates, diagnostics);
+          visitMember(
+            member,
+            candidate,
+            source,
+            root,
+            candidates,
+            diagnostics,
+            identityNodeId,
+          );
       if (ts.isFunctionDeclaration(node)) {
-        const id = nodeId(
+        const id = identityNodeId(
           candidate.kind,
           candidate.path,
           candidate.scope,
@@ -452,6 +545,7 @@ function visitSource(
           root,
           candidates,
           diagnostics,
+          identityNodeId,
         );
       return;
     }
@@ -479,6 +573,7 @@ function visitVariable(
   root: string,
   candidates: Candidate[],
   diagnostics: DiagnosticV1[],
+  identityNodeId: typeof nodeId,
 ): void {
   const name = nameOf(variable);
   if (name === undefined) {
@@ -525,7 +620,15 @@ function visitVariable(
     ts.isClassExpression(expression)
   )
     for (const member of expression.members)
-      visitMember(member, candidate, source, root, candidates, diagnostics);
+      visitMember(
+        member,
+        candidate,
+        source,
+        root,
+        candidates,
+        diagnostics,
+        identityNodeId,
+      );
 }
 function visitMember(
   member: ts.ClassElement | ts.TypeElement,
@@ -534,6 +637,7 @@ function visitMember(
   root: string,
   candidates: Candidate[],
   diagnostics: DiagnosticV1[],
+  identityNodeId: typeof nodeId,
 ): void {
   if (ts.isMethodDeclaration(member) || ts.isMethodSignature(member)) {
     const nameNode = member.name;
@@ -558,7 +662,7 @@ function visitMember(
       )
         ? 'static'
         : 'instance';
-    const ownerId = nodeId(
+    const ownerId = identityNodeId(
       owner.kind,
       owner.path,
       owner.scope,
@@ -585,7 +689,7 @@ function visitMember(
         ? member.name.text.normalize('NFC')
         : undefined;
     if (name !== undefined) {
-      const ownerId = nodeId(
+      const ownerId = identityNodeId(
         owner.kind,
         owner.path,
         owner.scope,
@@ -597,7 +701,10 @@ function visitMember(
         name,
         qualifiedName: qualified(owner.qualifiedName, name),
         path: owner.path,
-        memberRole: 'instance',
+        memberRole:
+          ts.isPropertyDeclaration(member) && hasStaticModifier(member)
+            ? 'static'
+            : 'instance',
         parentId: ownerId,
         scope: scopeForChild(
           owner.scope,
@@ -627,6 +734,15 @@ function hasDefaultExport(node: ts.Node): boolean {
     ts
       .getModifiers(node)
       ?.some((item) => item.kind === ts.SyntaxKind.DefaultKeyword) === true
+  );
+}
+
+function hasStaticModifier(node: ts.Node): boolean {
+  return (
+    ts.canHaveModifiers(node) &&
+    ts
+      .getModifiers(node)
+      ?.some((item) => item.kind === ts.SyntaxKind.StaticKeyword) === true
   );
 }
 function hasControlCharacter(value: string): boolean {

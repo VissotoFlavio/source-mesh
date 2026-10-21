@@ -23,7 +23,10 @@ export type {
   RepositoryNodeV1,
   SymbolNodeV1,
 } from './graph.js';
-export type { ExtractDeclarationGraphRequest } from './extractor.js';
+export type {
+  ExtractDeclarationGraphRequest,
+  ExtractorIdentity,
+} from './extractor.js';
 
 export { discoverSourceFiles } from './discovery.js';
 export type {
