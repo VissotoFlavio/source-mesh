@@ -219,12 +219,10 @@ jobs:
             fail "The existing backport pull request has an unexpected state."
           fi
 
-          created_branch="false"
           if [[ -z "$branch_sha" ]]; then
             gh api --method POST "repos/${REPOSITORY}/git/refs" \
               -f ref="$branch_ref" \
               -f sha="$MERGE_SHA" >/dev/null
-            created_branch="true"
           fi
 
           title="chore: backport ${SOURCE_BRANCH} to develop"
@@ -246,10 +244,7 @@ jobs:
             -f head="$BACKPORT_BRANCH" \
             -f base=develop \
             -f body="$body")"; then
-            if [[ "$created_branch" == "true" ]]; then
-              gh api --method DELETE "repos/${REPOSITORY}/git/refs/heads/${BACKPORT_BRANCH}" || true
-            fi
-            fail "GitHub did not create the backport pull request."
+            fail "GitHub did not confirm backport pull request creation; deterministic state was preserved for safe reconciliation."
           fi
 
           pr_url="$(jq -r '.html_url' <<<"$pr_json")"
@@ -260,26 +255,41 @@ jobs:
           created_head_repository="$(jq -r '.head.repo.full_name' <<<"$pr_json")"
           created_head_sha="$(jq -r '.head.sha' <<<"$pr_json")"
 
-          rollback_created_state() {
-            if [[ "$created_pr_number" =~ ^[0-9]+$ ]]; then
-              gh api --method PATCH "repos/${REPOSITORY}/pulls/${created_pr_number}" \
-                -f state=closed >/dev/null || true
-            fi
-            if [[ "$created_branch" == "true" ]]; then
-              gh api --method DELETE "repos/${REPOSITORY}/git/refs/heads/${BACKPORT_BRANCH}" || true
-            fi
-          }
-
           if [[ -z "$pr_url" || "$pr_url" == "null" ]]; then
-            rollback_created_state
             fail "GitHub did not return the created backport pull request URL."
           fi
 
           if [[ "$created_base" != "develop" || "$created_base_repository" != "$REPOSITORY" ||
             "$created_head" != "$BACKPORT_BRANCH" || "$created_head_repository" != "$REPOSITORY" ||
             "$created_head_sha" != "$MERGE_SHA" ]]; then
-            rollback_created_state
             fail "The created backport pull request does not match the expected repositories, refs, and commit."
+          fi
+
+          final_refs_json="$(gh api --method GET "repos/${REPOSITORY}/git/matching-refs/heads/${BACKPORT_BRANCH}")"
+          final_branch_sha="$(jq -r --arg ref "$branch_ref" '.[] | select(.ref == $ref) | .object.sha' <<<"$final_refs_json")"
+          final_prs_json="$(gh api --method GET "repos/${REPOSITORY}/pulls" \
+            -f state=all \
+            -f head="${REPOSITORY_OWNER}:${BACKPORT_BRANCH}" \
+            -f per_page=100)"
+          final_pr_count="$(jq 'length' <<<"$final_prs_json")"
+
+          if [[ "$final_branch_sha" != "$MERGE_SHA" || "$final_pr_count" != "1" ]]; then
+            fail "Backport state changed during creation; deterministic state was preserved for reconciliation."
+          fi
+
+          final_pr_number="$(jq -r '.[0].number' <<<"$final_prs_json")"
+          final_pr_state="$(jq -r '.[0].state' <<<"$final_prs_json")"
+          final_base="$(jq -r '.[0].base.ref' <<<"$final_prs_json")"
+          final_base_repository="$(jq -r '.[0].base.repo.full_name' <<<"$final_prs_json")"
+          final_head="$(jq -r '.[0].head.ref' <<<"$final_prs_json")"
+          final_head_repository="$(jq -r '.[0].head.repo.full_name' <<<"$final_prs_json")"
+          final_head_sha="$(jq -r '.[0].head.sha' <<<"$final_prs_json")"
+
+          if [[ "$final_pr_number" != "$created_pr_number" || "$final_pr_state" != "open" ||
+            "$final_base" != "develop" || "$final_base_repository" != "$REPOSITORY" ||
+            "$final_head" != "$BACKPORT_BRANCH" || "$final_head_repository" != "$REPOSITORY" ||
+            "$final_head_sha" != "$MERGE_SHA" ]]; then
+            fail "The reconciled backport pull request does not match the created deterministic state."
           fi
 
           {
