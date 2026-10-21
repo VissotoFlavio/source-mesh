@@ -29,5 +29,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   fail-closed isolation, hard resource caps, canonical snapshot decoding and
   atomic replacement, closed graph relationships, canonical identity hashing,
   stable diagnostics, and the six shared CLI/MCP query operations.
+- Closed the remaining ADR 0002 contract gaps with exact SHA-256 framing and
+  cursor vectors, lexical-scope collision rules, bounded query DTOs and sorting,
+  deterministic diagnostics, regular-file and deadline limits, snapshot
+  create-only/replace semantics, and named reordered-traversal and replacement
+  fixtures.
 
 [Unreleased]: https://github.com/VissotoFlavio/source-mesh/commits/develop
