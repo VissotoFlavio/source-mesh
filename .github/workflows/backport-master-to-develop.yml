@@ -62,12 +62,15 @@ jobs:
             fail "The merged pull request does not provide a full merge commit SHA."
           fi
 
-          if [[ ! "$SOURCE_BRANCH" =~ ^(release|hotfix)/([[:alnum:]][[:alnum:]_.-]*(/[[:alnum:]][[:alnum:]_.-]*)*)$ ]]; then
-            fail "The source branch must match release/* or hotfix/* with a valid version segment."
+          if [[ "$SOURCE_BRANCH" =~ ^release/([[:alnum:]][[:alnum:]_.-]*)$ ]]; then
+            source_type="release"
+            version_segment="${BASH_REMATCH[1]}"
+          elif [[ "$SOURCE_BRANCH" =~ ^hotfix/([0-9]+-[[:alnum:]][[:alnum:]_.-]*)$ ]]; then
+            source_type="hotfix"
+            version_segment="${BASH_REMATCH[1]}"
+          else
+            fail "The source branch must match release/<version> or hotfix/<issue-id>-<slug>."
           fi
-
-          source_type="${BASH_REMATCH[1]}"
-          version_segment="${BASH_REMATCH[2]}"
 
           if [[ "$version_segment" == *..* || "$version_segment" == .* || "$version_segment" == *. ]]; then
             fail "The source branch contains an invalid version segment."
@@ -80,7 +83,7 @@ jobs:
           branch_sha="$(jq -r --arg ref "$branch_ref" '.[] | select(.ref == $ref) | .object.sha' <<<"$refs_json")"
 
           prs_json="$(gh api --method GET "repos/${REPOSITORY}/pulls" \
-            -f state=open \
+            -f state=all \
             -f head="${REPOSITORY_OWNER}:${backport_branch}" \
             -f per_page=100)"
           pr_count="$(jq 'length' <<<"$prs_json")"
@@ -97,16 +100,26 @@ jobs:
           fi
 
           if (( pr_count == 1 )); then
+            pr_state="$(jq -r '.[0].state' <<<"$prs_json")"
             pr_base="$(jq -r '.[0].base.ref' <<<"$prs_json")"
+            pr_base_repository="$(jq -r '.[0].base.repo.full_name' <<<"$prs_json")"
+            pr_head="$(jq -r '.[0].head.ref' <<<"$prs_json")"
+            pr_head_repository="$(jq -r '.[0].head.repo.full_name' <<<"$prs_json")"
             pr_head_sha="$(jq -r '.[0].head.sha' <<<"$prs_json")"
             existing_pr_url="$(jq -r '.[0].html_url' <<<"$prs_json")"
 
-            if [[ -z "$branch_sha" ]]; then
+            if [[ "$pr_base" != "develop" || "$pr_base_repository" != "$REPOSITORY" ||
+              "$pr_head" != "$backport_branch" || "$pr_head_repository" != "$REPOSITORY" ||
+              "$pr_head_sha" != "$MERGE_SHA" ]]; then
+              fail "The existing backport pull request does not represent the expected merge commit to develop."
+            fi
+
+            if [[ "$pr_state" == "open" && -z "$branch_sha" ]]; then
               fail "An open backport pull request exists but its deterministic branch is missing."
             fi
 
-            if [[ "$pr_base" != "develop" || "$pr_head_sha" != "$MERGE_SHA" ]]; then
-              fail "The existing backport pull request does not represent the expected merge commit to develop."
+            if [[ "$pr_state" != "open" && "$pr_state" != "closed" ]]; then
+              fail "The existing backport pull request has an unexpected state."
             fi
 
             action="reuse"
@@ -159,7 +172,7 @@ jobs:
           branch_sha="$(jq -r --arg ref "$branch_ref" '.[] | select(.ref == $ref) | .object.sha' <<<"$refs_json")"
 
           prs_json="$(gh api --method GET "repos/${REPOSITORY}/pulls" \
-            -f state=open \
+            -f state=all \
             -f head="${REPOSITORY_OWNER}:${BACKPORT_BRANCH}" \
             -f per_page=100)"
           pr_count="$(jq 'length' <<<"$prs_json")"
@@ -173,22 +186,38 @@ jobs:
           fi
 
           if (( pr_count == 1 )); then
+            pr_state="$(jq -r '.[0].state' <<<"$prs_json")"
             pr_base="$(jq -r '.[0].base.ref' <<<"$prs_json")"
+            pr_base_repository="$(jq -r '.[0].base.repo.full_name' <<<"$prs_json")"
+            pr_head="$(jq -r '.[0].head.ref' <<<"$prs_json")"
+            pr_head_repository="$(jq -r '.[0].head.repo.full_name' <<<"$prs_json")"
             pr_head_sha="$(jq -r '.[0].head.sha' <<<"$prs_json")"
             pr_url="$(jq -r '.[0].html_url' <<<"$prs_json")"
 
-            if [[ "$branch_sha" == "$MERGE_SHA" && "$pr_base" == "develop" && "$pr_head_sha" == "$MERGE_SHA" ]]; then
+            if [[ "$pr_base" != "develop" || "$pr_base_repository" != "$REPOSITORY" ||
+              "$pr_head" != "$BACKPORT_BRANCH" || "$pr_head_repository" != "$REPOSITORY" ||
+              "$pr_head_sha" != "$MERGE_SHA" ]]; then
+              fail "An existing backport pull request does not represent the expected merge commit to develop."
+            fi
+
+            if [[ "$pr_state" == "open" && "$branch_sha" != "$MERGE_SHA" ]]; then
+              fail "An open backport pull request exists but its deterministic branch is missing."
+            fi
+
+            if [[ "$pr_state" == "open" || "$pr_state" == "closed" ]]; then
               echo "Backport pull request already exists: ${pr_url}"
               exit 0
             fi
 
-            fail "An existing backport pull request does not represent the expected merge commit to develop."
+            fail "The existing backport pull request has an unexpected state."
           fi
 
+          created_branch="false"
           if [[ -z "$branch_sha" ]]; then
             gh api --method POST "repos/${REPOSITORY}/git/refs" \
               -f ref="$branch_ref" \
               -f sha="$MERGE_SHA" >/dev/null
+            created_branch="true"
           fi
 
           title="chore: backport ${SOURCE_BRANCH} to develop"
@@ -205,15 +234,45 @@ jobs:
           EOF
           )"
 
-          pr_url="$(gh api --method POST "repos/${REPOSITORY}/pulls" \
+          if ! pr_json="$(gh api --method POST "repos/${REPOSITORY}/pulls" \
             -f title="$title" \
             -f head="$BACKPORT_BRANCH" \
             -f base=develop \
-            -f body="$body" \
-            --jq '.html_url')"
+            -f body="$body")"; then
+            if [[ "$created_branch" == "true" ]]; then
+              gh api --method DELETE "repos/${REPOSITORY}/git/refs/heads/${BACKPORT_BRANCH}" || true
+            fi
+            fail "GitHub did not create the backport pull request."
+          fi
 
-          if [[ -z "$pr_url" ]]; then
+          pr_url="$(jq -r '.html_url' <<<"$pr_json")"
+          created_pr_number="$(jq -r '.number' <<<"$pr_json")"
+          created_base="$(jq -r '.base.ref' <<<"$pr_json")"
+          created_base_repository="$(jq -r '.base.repo.full_name' <<<"$pr_json")"
+          created_head="$(jq -r '.head.ref' <<<"$pr_json")"
+          created_head_repository="$(jq -r '.head.repo.full_name' <<<"$pr_json")"
+          created_head_sha="$(jq -r '.head.sha' <<<"$pr_json")"
+
+          rollback_created_state() {
+            if [[ "$created_pr_number" =~ ^[0-9]+$ ]]; then
+              gh api --method PATCH "repos/${REPOSITORY}/pulls/${created_pr_number}" \
+                -f state=closed >/dev/null || true
+            fi
+            if [[ "$created_branch" == "true" ]]; then
+              gh api --method DELETE "repos/${REPOSITORY}/git/refs/heads/${BACKPORT_BRANCH}" || true
+            fi
+          }
+
+          if [[ -z "$pr_url" || "$pr_url" == "null" ]]; then
+            rollback_created_state
             fail "GitHub did not return the created backport pull request URL."
+          fi
+
+          if [[ "$created_base" != "develop" || "$created_base_repository" != "$REPOSITORY" ||
+            "$created_head" != "$BACKPORT_BRANCH" || "$created_head_repository" != "$REPOSITORY" ||
+            "$created_head_sha" != "$MERGE_SHA" ]]; then
+            rollback_created_state
+            fail "The created backport pull request does not match the expected repositories, refs, and commit."
           fi
 
           {
