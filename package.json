@@ -19,7 +19,7 @@
     "format:check": "prettier --check .",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test",
+    "test": "tsx --test \"test/**/*.test.ts\"",
     "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
     "build": "npm run clean && tsc -p tsconfig.build.json",
     "pack:check": "npm pack --dry-run",
