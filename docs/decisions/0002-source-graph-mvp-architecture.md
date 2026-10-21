@@ -52,10 +52,18 @@ duplicate query behavior.
   compiler program plus the normalized source-file set. It does not execute project
   code.
 - When no `tsconfig.json` is found, the loader creates a documented configuration-free
-  program from the eight discovered extensions using stable MVP defaults: ES2022
-  syntax, ES2022 module semantics, Node-style module resolution, JSX preservation,
-  and `allowJs` enabled. The exact compiler options remain an implementation detail
-  only where they do not change graph identity or supported file selection.
+  program from the eight discovered extensions with exactly these compiler options:
+  `target: ES2022`, `module: NodeNext`, `moduleResolution: NodeNext`,
+  `jsx: Preserve`, `allowJs: true`, `checkJs: false`, `noEmit: true`,
+  `resolveJsonModule: false`, and `skipLibCheck: true`. The loader does not infer
+  options from the host Node version. Under TypeScript's NodeNext rules, `.mts` and
+  `.mjs` are ESM, `.cts` and `.cjs` are CommonJS, and `.ts`, `.tsx`, `.js`, and
+  `.jsx` use the nearest repository-contained `package.json` `type` field:
+  `"module"` means ESM and any other value or absence means CommonJS. A malformed
+  `type` value is a configuration error. Mixed local ESM/CommonJS imports use the
+  compiler's NodeNext resolution and module-compatibility diagnostics; the graph
+  records only relationships the checker resolves and never applies a filename or
+  extension heuristic of its own.
 - A malformed or unsupported configuration is a deterministic diagnostic and does
   not silently fall back to a different project. A missing configuration is the only
   case that uses the configuration-free program.
@@ -64,7 +72,8 @@ duplicate query behavior.
   `files`/`include` result, source file, declaration file, and module-resolution
   candidate must have a successful realpath contained by that root. Containment uses
   path-segment boundaries, not string prefixes. A symlink or junction is accepted
-  only when its resolved target is verifiably inside the root; a broken link,
+  only when its resolved target is verifiably inside the root, and that realpath
+  containment is revalidated immediately before every file read. A broken link,
   unresolved realpath, or target outside the root is a fail-closed error diagnostic.
   An `extends` chain or project reference outside the root invalidates the loaded
   project. An `include`/`files` match or module/source resolution outside the root is
@@ -72,6 +81,17 @@ duplicate query behavior.
   to create nodes or edges. These containment cases require negative tests.
 - The extractor consumes compiler symbols and syntax and emits semantic candidates;
   it does not persist the full AST or source text.
+
+Discovery roots and compiler context are separate sets. Only discovered files with
+the eight supported extensions can become `file` nodes. `node_modules`, VCS
+metadata, generated files, configured output directories, and declaration files are
+never graph roots. A declaration file or any other compiler-context file may support
+type/module resolution, but it can never become a node, edge endpoint, or source
+diagnostic. A local source relationship that cannot be resolved because its
+context-only target is rejected becomes the normal unresolved-relationship diagnostic
+on the local source; diagnostics are never attributed to the context file. If a
+symlink or junction cannot be revalidated as contained at read time, it is rejected
+fail-closed rather than read.
 
 ### Repository-relative paths and source locations
 
@@ -157,13 +177,21 @@ semantics are confidently resolved are allowed.
 | ------------ | -------------------------------------------------------------- |
 | `imports`    | A module imports a local module or symbol                      |
 | `exports`    | A module exports a local declaration or module                 |
-| `defines`    | A file/module defines a declaration                            |
-| `contains`   | A declaration contains a named declaration or parameter        |
+| `contains`   | The single structural parent-child hierarchy                   |
 | `calls`      | A function or method calls a resolved local function or method |
 | `references` | A declaration or expression references a resolved local symbol |
 | `extends`    | A class or interface extends a resolved local class/interface  |
 | `implements` | A class implements a resolved local interface                  |
 | `types`      | A declaration uses a resolved local type                       |
+
+`contains` is the only structural hierarchy edge. Its allowed parent-child forms
+are repository -> file, file -> module, module -> nested declaration, and class or
+function -> nested declaration or parameter, as applicable to the compiler's
+semantic nesting. A declaration has at most one `contains` parent. `contains` is
+emitted for the direct parent only; transitive ancestry is obtained by traversal.
+There is no `defines` edge in schema v1. Declaration provenance and ownership are
+represented by `contains`, while `imports`, `exports`, `calls`, `references`, and
+the other semantic edges describe relationships that are not parent-child.
 
 Edges do not carry confidence scores. If confidence is insufficient, there is no
 edge; the event is represented by a diagnostic instead.
@@ -182,18 +210,22 @@ the lowercase hexadecimal digest is appended after `n:`. The file identity tuple
 `(schemaVersion, "file", repository-relative path)`. Edge identity is the SHA-256
 digest after `e:` of `(schemaVersion, edgeKind, from, to)`.
 
-The overload discriminator is `""` for a unique declaration. For overloads or
-otherwise same-named declarations, it is `sha256("overload\\0" + signature)` where
-`signature` is a compiler-derived normalized signature: generic parameter count and
-normalized constraints, parameter count and each parameter's optional/rest marker
-and normalized type, followed by the normalized return type. Normalization removes
-whitespace, source positions, declaration order, and aliases that resolve to the
-same compiler type; it preserves explicit type structure and distinguishes overloads
-with different semantics. The digest is independent of the overload's ordinal in
-the full overload set. A duplicate normalized signature is an ambiguity diagnostic,
-not an identity collision to resolve by position. If the compiler cannot provide a
-stable normalized signature, the declaration is diagnosed rather than assigned a
-line-based, random, or ordinal identity.
+Every declaration, including a declaration that is the only overload, has a
+non-empty discriminator: `sha256("decl\\0" + signature)`. `signature` is a
+declaration-specific compiler-derived normalized signature containing declaration
+kind, generic parameter count and normalized constraints, parameter count and each
+parameter's optional/rest marker and normalized type, normalized return type when
+applicable, and the normalized declared type for variables, properties, aliases,
+and enum-like declarations. Normalization removes whitespace, source positions,
+declaration order, and aliases that resolve to the same compiler type; it preserves
+explicit type structure and distinguishes declarations with different semantics.
+The digest is independent of the ordinal or membership of the full overload set, so
+adding an unrelated overload cannot change an existing declaration ID. A duplicate
+identical normalized signature at the same semantic path is an ambiguity diagnostic;
+both colliding declarations are omitted rather than merged or assigned a set-position
+ordinal. If the compiler cannot provide a stable normalized signature, the
+declaration is diagnosed rather than assigned a line-based, random, or ordinal
+identity.
 
 Nodes sort by `(kind, id)`; edges sort by `(kind, from, to, id)`; diagnostics sort by
 `(path, start line, start column, code, message, related IDs)`. Every serialized
@@ -261,23 +293,38 @@ QueryRequestV1 {
   severity?: "warning" | "error"
   allowPartial?: boolean // default false
   limit?: integer // 1..1000; default 100
+  cursor?: string
 }
 ```
 
 `allowPartial` defaults to `false` for every operation. `getNode` requires `nodeId`
-and returns zero or one `NodeV1`; `findNodes` may filter by kind, name, and path and
-returns all matching `NodeV1` candidates; `neighbors` requires `nodeId` and uses
-`direction` (default `both`) and returns ordered `{ edge, node }` items; and
+and returns one `NodeV1` or the typed `not_found` error; `findNodes` may filter by
+kind, name, and path and returns `NodeV1` candidates; `neighbors` requires `nodeId`
+and uses `direction` (default `both`) and returns ordered `{ edge, node }` items; and
 `diagnostics` may filter by path and severity and returns `DiagnosticV1` items. Each
-operation has its own bounded `items` DTO but shares `schemaVersion: 1`,
-`completeness`, and `truncated` response fields. Responses never include source text
-or an absolute path.
+operation has its own bounded `items` DTO and shares `schemaVersion: 1`,
+`completeness`, `total`, `truncated`, and optional `continuation` response fields.
+`total` is the exact number of matching items before the limit is applied. Responses
+never include source text or an absolute path.
+
+The default limit is 100 and the maximum is 1000. A limit outside `1..1000` is an
+`invalid_request`; a result set larger than the limit is sorted completely before a
+bounded prefix is returned with `truncated: true`, while a complete result has
+`truncated: false` and no continuation. A continuation is a deterministic token
+containing the operation, filter fingerprint, and last returned sort tuple; passing
+it as `cursor` resumes strictly after that tuple. Tokens use canonical UTF-8 JSON
+encoded as base64url and contain no paths outside the response contract or source
+text. `findNodes` sorts by `(kind, id)`, neighbors by `(edge.kind, edge.from, edge.to,
+edge.id, node.id)`, and diagnostics by `(path, start line, start column, code,
+message, related IDs)` before cutting the prefix.
 
 Selectors are never resolved by choosing the first or best name match. An ID is
 always unique. If a future selector requires one node but matches multiple nodes, the
-service returns `ambiguous` with all bounded, deterministically ordered candidate
-nodes; `findNodes` is the explicit operation for retrieving those candidates. No
-ambiguous selector creates an edge or silently narrows a result.
+service returns `ambiguous` with a bounded, deterministically ordered candidate list,
+`totalCandidates`, `truncated`, and `continuation`; `findNodes` is the explicit
+operation for retrieving those candidates. No ambiguous selector creates an edge or
+silently narrows a result. Candidate lists use the same default/max limits and
+sort-before-cut rule as `findNodes`.
 
 The typed error codes are `invalid_request`, `not_found`, `unsupported_schema`,
 `invalid_snapshot`, `limit_exceeded`, `ambiguous`, `partial_not_allowed`, and
@@ -356,8 +403,10 @@ bounded query service DTOs and typed errors.
 These synthetic examples are contract walkthroughs, not implementation fixtures:
 
 1. A TypeScript `class User` and `function loadUser` in `src/users.ts` produce
-   `class` and `function` nodes, `defines` edges from the file, and a `calls` edge
-   only when the compiler resolves the call to `loadUser`.
+   `class` and `function` nodes, `contains(repository, file)`,
+   `contains(file, module)`, and `contains(module, User)` edges, plus a `calls` edge
+   only when the compiler resolves the call to `loadUser`. No `defines` edge is
+   emitted in schema v1.
 2. A JavaScript `run(name)` calling `registry[name]()` produces a diagnostic for the
    dynamic relationship; it does not produce a `calls` edge to a node named `name`.
 3. `import { external } from "external-package"` produces an ordered external-module
@@ -372,3 +421,7 @@ These synthetic examples are contract walkthroughs, not implementation fixtures:
 6. A name selector matching two declarations returns both ordered candidates (or an
    `ambiguous` error with those candidates when a unique selector is required); it
    never chooses one declaration or emits a guessed edge.
+7. A file importing `./common.cjs` from an ESM `.mts` file is classified and
+   resolved under NodeNext/package `type` rules; a `.d.ts` reached only for that
+   resolution can affect checking but never becomes a graph root, node, edge, or
+   diagnostic source.

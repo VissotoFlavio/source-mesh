@@ -19,5 +19,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - Clarified ADR 0002 graph roots, module extensions, partial-result opt-in, query
   DTOs, byte determinism, overload identity, and fail-closed path containment.
+- Finalized structural edge semantics, NodeNext no-`tsconfig` behavior, compiler
+  context exclusions, declaration identity, and bounded query continuation rules.
 
 [Unreleased]: https://github.com/VissotoFlavio/source-mesh/commits/develop
