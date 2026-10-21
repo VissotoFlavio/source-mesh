@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- Checker-backed local import, export, inheritance, implementation, and direct-call relationships with deterministic edges and sanitized diagnostics (#21).
 - Deterministic repository, file, module, and declaration graph extraction with containment-only edges (#20).
 - Bounded local TypeScript/JavaScript project loader for deterministic analysis (#19).
 - Accepted the source graph MVP architecture and schema/query contract in ADR 0002.

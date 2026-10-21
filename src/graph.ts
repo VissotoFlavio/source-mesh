@@ -45,9 +45,12 @@ export interface SymbolNodeV1 {
 }
 export type NodeV1 = RepositoryNodeV1 | FileNodeV1 | SymbolNodeV1;
 
+export type EdgeKindV1 =
+  'contains' | 'imports' | 'exports' | 'extends' | 'implements' | 'calls';
+
 export interface EdgeV1 {
   readonly id: string;
-  readonly kind: 'contains';
+  readonly kind: EdgeKindV1;
   readonly from: string;
   readonly to: string;
   readonly resolutionStatus: 'resolved';
@@ -57,14 +60,29 @@ export type GraphDiagnosticCode =
   | 'unsupported_declaration'
   | 'duplicate_declaration'
   | 'declaration.unstable_identity'
-  | 'graph.node_id_collision';
+  | 'graph.node_id_collision'
+  | 'relationship_external'
+  | 'relationship_unresolved'
+  | 'relationship_ambiguous'
+  | 'relationship_dynamic'
+  | 'relationship_unsupported'
+  | 'relationship_missing_source';
 export interface DiagnosticV1 {
   readonly id: string;
   readonly code: GraphDiagnosticCode;
   readonly severity: 'warning' | 'error';
   readonly message: string;
+  readonly relationKind?: EdgeKindV1;
+  readonly reason?:
+    | 'external-target'
+    | 'unresolved-target'
+    | 'ambiguous-target'
+    | 'dynamic-target'
+    | 'unsupported-relation'
+    | 'missing-source-node';
   readonly path?: string;
   readonly location?: LocationV1;
+  readonly relatedNodeIds?: readonly string[];
 }
 export interface DeclarationGraph {
   readonly schemaVersion: 1;
@@ -122,7 +140,7 @@ export function nodeId(
     memberRole,
   ]);
 }
-export function edgeId(kind: 'contains', from: string, to: string): string {
+export function edgeId(kind: EdgeKindV1, from: string, to: string): string {
   return digest('e', ['sourcemesh-edge-v1', '1', kind, from, to]);
 }
 
@@ -163,6 +181,14 @@ export function compareDiagnostics(
     compareOptional(left.path, right.path) ||
     compareOptional(locationKey(left.location), locationKey(right.location)) ||
     ordinal(left.code, right.code) ||
+    ordinal(left.severity, right.severity) ||
+    ordinal(left.message, right.message) ||
+    ordinal(left.relationKind ?? '', right.relationKind ?? '') ||
+    ordinal(left.reason ?? '', right.reason ?? '') ||
+    ordinal(
+      JSON.stringify(left.relatedNodeIds ?? []),
+      JSON.stringify(right.relatedNodeIds ?? []),
+    ) ||
     ordinal(left.id, right.id)
   );
 }
