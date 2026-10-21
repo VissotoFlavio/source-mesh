@@ -459,14 +459,14 @@ compiler, or graph directly outside the shared application ports.
 The logical operation families for issues #23–#25 are explicit aliases over these
 shared query operations and DTOs; they are not separate graph semantics:
 
-| Family | Shared query mapping | Direction and edge filter | Response DTO | CLI/MCP mapping |
-| ------ | -------------------- | -------------------------- | ------------ | --------------- |
-| Search | `findNodes` | Filters from `QueryRequestV1` (`kind`, `name`, `path`) | `FindNodesResponseV1` with `NodeV1[]` items | `search` / `search` |
-| Details | `getNode` | `nodeId` required; no edge traversal | `GetNodeResponseV1` with one `NodeV1` | `details` / `details` |
-| Dependencies | `neighbors` | `direction: "out"`; all non-`contains` edge kinds by default | `NeighborsResponseV1` with `{ edge, node }` items | `dependencies` / `dependencies` |
-| Dependents | `neighbors` | `direction: "in"`; all non-`contains` edge kinds by default | `NeighborsResponseV1` with `{ edge, node }` items | `dependents` / `dependents` |
-| Callers | `neighbors` | `direction: "in"`; `edgeKinds: ["calls"]` | `NeighborsResponseV1` with `{ edge, node }` items | `callers` / `callers` |
-| Callees | `neighbors` | `direction: "out"`; `edgeKinds: ["calls"]` | `NeighborsResponseV1` with `{ edge, node }` items | `callees` / `callees` |
+| Family       | Shared query mapping | Direction and edge filter                                    | Response DTO                                      | CLI/MCP mapping                 |
+| ------------ | -------------------- | ------------------------------------------------------------ | ------------------------------------------------- | ------------------------------- |
+| Search       | `findNodes`          | Filters from `QueryRequestV1` (`kind`, `name`, `path`)       | `FindNodesResponseV1` with `NodeV1[]` items       | `search` / `search`             |
+| Details      | `getNode`            | `nodeId` required; no edge traversal                         | `GetNodeResponseV1` with one `NodeV1`             | `details` / `details`           |
+| Dependencies | `neighbors`          | `direction: "out"`; all non-`contains` edge kinds by default | `NeighborsResponseV1` with `{ edge, node }` items | `dependencies` / `dependencies` |
+| Dependents   | `neighbors`          | `direction: "in"`; all non-`contains` edge kinds by default  | `NeighborsResponseV1` with `{ edge, node }` items | `dependents` / `dependents`     |
+| Callers      | `neighbors`          | `direction: "in"`; `edgeKinds: ["calls"]`                    | `NeighborsResponseV1` with `{ edge, node }` items | `callers` / `callers`           |
+| Callees      | `neighbors`          | `direction: "out"`; `edgeKinds: ["calls"]`                   | `NeighborsResponseV1` with `{ edge, node }` items | `callees` / `callees`           |
 
 The CLI command names and MCP method names in the table map to the same
 `QueryRequestV1` fields and the same versioned response/error DTOs. Search and
