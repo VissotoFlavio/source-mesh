@@ -53,9 +53,12 @@ It only prints the project name; it does not inspect a repository.
 
 ## Project status
 
-SourceMesh is pre-release and its graph model and public interfaces are not defined. Package publication, releases, hosted processing, and compatibility changes require separate authorization and issue-backed work.
+SourceMesh is pre-release; its MVP graph and query contracts are documented, but the
+analysis implementation and public runtime interfaces are not yet available.
+Package publication, releases, hosted processing, and compatibility changes require
+separate authorization and issue-backed work.
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for the development workflow and [the technical baseline](docs/decisions/0001-technical-baseline.md) for the current stack decision.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the development workflow, [the technical baseline](docs/decisions/0001-technical-baseline.md) for the current stack decision, and [the source graph MVP architecture](docs/decisions/0002-source-graph-mvp-architecture.md) for the accepted graph and query contracts.
 
 ## License
 
