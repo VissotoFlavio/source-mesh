@@ -115,7 +115,9 @@ test('extracts the closed declaration set with direct containment only', () => {
       (node) => !JSON.stringify(node).includes('export interface'),
     ),
   );
-  assert.ok(graph.edges.every((edge) => edge.kind === 'contains'));
+  assert.ok(
+    graph.edges.every((edge) => ['contains', 'exports'].includes(edge.kind)),
+  );
   assert.equal(graph.nodes.filter((node) => node.kind === 'file').length, 2);
   assert.equal(graph.nodes.filter((node) => node.kind === 'module').length, 3);
   const repositoryNode = graph.nodes.find((node) => node.kind === 'repository');

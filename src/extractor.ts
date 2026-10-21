@@ -20,6 +20,7 @@ import {
   type NodeV1,
   type SymbolNodeV1,
 } from './graph.js';
+import { extractRelationships } from './relationships.js';
 
 export interface ExtractDeclarationGraphRequest {
   readonly repositoryRoot: string;
@@ -237,6 +238,7 @@ export function extractDeclarationGraph(
   const diagnostics: DiagnosticV1[] = [];
   const candidates: Candidate[] = [];
   const sourceByPath = new Map<string, ts.SourceFile>();
+  const moduleIds = new Map<string, string>();
   for (const relativePath of request.project.rootNames) {
     const canonicalPath = relativePath.replaceAll('\\', '/');
     const source = request.project.program.getSourceFile(
@@ -274,6 +276,7 @@ export function extractDeclarationGraph(
       memberRole: 'none',
     };
     nodes.push(module);
+    moduleIds.set(canonicalPath, module.id);
     edges.push(makeEdge(file.id, module.id));
     visitSource(
       request.repositoryRoot,
@@ -386,6 +389,22 @@ export function extractDeclarationGraph(
     });
     edges.push(makeEdge(candidate.parentId, id, locations));
   }
+  const nodesById = new Map(nodes.map((item) => [item.id, item]));
+  const relationshipResult = extractRelationships({
+    repositoryRoot: request.repositoryRoot,
+    program: request.project.program,
+    sources: sourceByPath,
+    moduleIds,
+    nodes: nodesById,
+    declarations: [...ids.entries()].map(([id, candidate]) => ({
+      id,
+      node: candidate.node,
+      kind: candidate.kind,
+      path: candidate.path,
+    })),
+  });
+  edges.push(...relationshipResult.edges);
+  diagnostics.push(...relationshipResult.diagnostics);
   const uniqueDiagnostics = new Map<string, DiagnosticV1>();
   for (const item of diagnostics.map(withDiagnosticId))
     uniqueDiagnostics.set(item.id, item);
@@ -796,11 +815,22 @@ function makeDiagnostic(
       'Declaration identity could not be stabilized.',
     'graph.node_id_collision':
       'Graph node identity collision prevented node emission.',
+    relationship_external:
+      'Relationship targets an external module or declaration.',
+    relationship_unresolved: 'Relationship could not be resolved.',
+    relationship_ambiguous: 'Relationship target is ambiguous.',
+    relationship_dynamic: 'Relationship is dynamic and was not emitted.',
+    relationship_unsupported: 'Relationship kind is unsupported in the MVP.',
+    relationship_missing_source:
+      'Relationship source is not an eligible local source.',
   } as const;
   return {
     id: '',
     code,
-    severity: code === 'unsupported_declaration' ? 'warning' : 'error',
+    severity:
+      code === 'unsupported_declaration' || code.startsWith('relationship_')
+        ? 'warning'
+        : 'error',
     message: messages[code],
     path: pathName,
     ...(item ? { location: item } : {}),
@@ -817,9 +847,11 @@ function withDiagnosticId(item: DiagnosticV1): DiagnosticV1 {
   const occurrence = JSON.stringify([
     pathField,
     locationField,
-    'absent',
-    'absent',
-    'absent',
+    item.relationKind === undefined ? 'absent' : `present:${item.relationKind}`,
+    item.reason === undefined ? 'absent' : `present:${item.reason}`,
+    item.relatedNodeIds === undefined
+      ? 'absent'
+      : JSON.stringify([...new Set(item.relatedNodeIds)].sort(ordinal)),
   ]);
   return {
     ...item,
@@ -829,11 +861,15 @@ function withDiagnosticId(item: DiagnosticV1): DiagnosticV1 {
       item.code,
       item.severity,
       item.message,
-      'absent',
-      'absent',
+      item.relationKind === undefined
+        ? 'absent'
+        : `present:${item.relationKind}`,
+      item.reason === undefined ? 'absent' : `present:${item.reason}`,
       pathField,
       locationField,
-      'absent',
+      item.relatedNodeIds === undefined
+        ? 'absent'
+        : JSON.stringify([...new Set(item.relatedNodeIds)].sort(ordinal)),
       occurrence,
     ]),
   };

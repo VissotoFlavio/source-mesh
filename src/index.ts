@@ -12,6 +12,7 @@ export {
 export type {
   DeclarationGraph,
   DiagnosticV1,
+  EdgeKindV1,
   GraphDiagnosticCode,
   EdgeV1,
   FileNodeV1,
