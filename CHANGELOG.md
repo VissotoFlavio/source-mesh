@@ -10,5 +10,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - Initial TypeScript project scaffold and local quality commands.
 - Repository purpose, privacy boundary, and contribution workflow documentation.
+- CI validation for supported Node.js versions and the offline runtime boundary.
 
 [Unreleased]: https://github.com/VissotoFlavio/source-mesh/commits/develop
