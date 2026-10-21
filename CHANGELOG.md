@@ -12,5 +12,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Repository purpose, privacy boundary, and contribution workflow documentation.
 - CI validation for supported Node.js versions and the offline runtime boundary.
 - Automated reconciliation of merged release and hotfix pull requests from `master` into `develop`.
+- Documentation of the first protected, governed delivery-path validation.
 
 [Unreleased]: https://github.com/VissotoFlavio/source-mesh/commits/develop
