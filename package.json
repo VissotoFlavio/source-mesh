@@ -1,0 +1,37 @@
+{
+  "name": "@vissotoflavio/source-mesh",
+  "version": "0.0.0",
+  "description": "Local-first structural graph tooling for source code",
+  "private": true,
+  "type": "module",
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=22.13.0 <23 || >=24.0.0 <25"
+  },
+  "bin": {
+    "sourcemesh": "./dist/cli.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test \"test/**/*.test.ts\"",
+    "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
+    "build": "npm run clean && tsc -p tsconfig.build.json",
+    "pack:check": "npm pack --dry-run",
+    "check": "npm run format:check && npm run lint && npm run typecheck && npm test && npm run build && npm run pack:check"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@types/node": "22.20.5",
+    "eslint": "10.13.0",
+    "prettier": "3.9.10",
+    "tsx": "4.23.15",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.72.0"
+  }
+}
