@@ -22,7 +22,7 @@
     "test": "tsx --test \"test/**/*.test.ts\"",
     "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
     "build": "npm run clean && tsc -p tsconfig.build.json",
-    "offline:check": "node --import ./scripts/deny-network.mjs dist/cli.js",
+    "offline:check": "node --import ./scripts/deny-network.mjs --import tsx --test test/project-loader.offline.test.ts",
     "pack:check": "npm pack --dry-run",
     "check": "npm run format:check && npm run lint && npm run typecheck && npm test && npm run build && npm run offline:check && npm run pack:check"
   },
@@ -32,7 +32,9 @@
     "eslint": "10.13.0",
     "prettier": "3.9.10",
     "tsx": "4.23.15",
-    "typescript": "6.0.3",
     "typescript-eslint": "8.72.0"
+  },
+  "dependencies": {
+    "typescript": "6.0.3"
   }
 }
