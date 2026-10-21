@@ -231,10 +231,7 @@ function loadConfigured(
     };
   }
   const options = { ...fallbackOptions };
-  const { host: compilerHost, state: hostState } = createBoundedCompilerHost(
-    root,
-    options,
-  );
+  const { state: hostState } = createBoundedCompilerHost(root, options);
   const parseHost = createParseConfigHost(root, approved, hostState);
   const parsed = ts.parseJsonConfigFileContent(
     config.config,
