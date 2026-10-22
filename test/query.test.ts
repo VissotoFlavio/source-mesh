@@ -9,6 +9,7 @@ import {
   type QueryErrorV1,
   type QueryResponseV1,
   type SnapshotV1,
+  type NodeV1,
 } from '../src/index.js';
 
 export function fixture(
@@ -149,6 +150,162 @@ function queryError(value: QueryResponseV1 | QueryErrorV1): QueryErrorV1 {
   return value as QueryErrorV1;
 }
 
+function node(
+  snapshot: SnapshotV1,
+  kind: NodeV1['kind'],
+  name: string,
+): NodeV1 & { readonly path: string; readonly qualifiedName: string } {
+  const value = snapshot.nodes.find(
+    (item) => item.kind === kind && 'name' in item && item.name === name,
+  );
+  if (value === undefined) throw new Error(`Missing ${kind} ${name}.`);
+  return value as NodeV1 & {
+    readonly path: string;
+    readonly qualifiedName: string;
+  };
+}
+
+function cursorJson(cursor: string): string {
+  return Buffer.from(cursor, 'base64url').toString('utf8');
+}
+
+function cursorFromJson(json: string): string {
+  return Buffer.from(json, 'utf8').toString('base64url');
+}
+
+function withUnicodeSymbol(snapshot: SnapshotV1): SnapshotV1 {
+  const repository = node(snapshot, 'repository', 'repository');
+  const file = node(snapshot, 'file', 'a.ts');
+  const module = node(snapshot, 'module', 'a');
+  const name = 'café';
+  const accent = {
+    id: nodeId(
+      'function',
+      file.path,
+      `${repository.id}/${file.id}/${module.id}#scope=module:${module.qualifiedName}`,
+      name,
+      'none',
+    ),
+    kind: 'function' as const,
+    name,
+    path: file.path,
+    qualifiedName: name,
+    memberRole: 'none' as const,
+  };
+  return {
+    ...snapshot,
+    nodes: [...snapshot.nodes, accent],
+    edges: [
+      ...snapshot.edges,
+      {
+        id: edgeId('contains', module.id, accent.id),
+        kind: 'contains' as const,
+        from: module.id,
+        to: accent.id,
+        resolutionStatus: 'resolved' as const,
+      },
+    ],
+  };
+}
+
+function withRepeatedRelationsAndSelfCall(snapshot: SnapshotV1): SnapshotV1 {
+  const moduleA = node(snapshot, 'module', 'a');
+  const moduleB = node(snapshot, 'module', 'b');
+  const caller = node(snapshot, 'function', 'caller');
+  return {
+    ...snapshot,
+    edges: [
+      ...snapshot.edges,
+      {
+        id: edgeId('exports', moduleA.id, moduleB.id),
+        kind: 'exports',
+        from: moduleA.id,
+        to: moduleB.id,
+        resolutionStatus: 'resolved',
+      },
+      {
+        id: edgeId('calls', caller.id, caller.id),
+        kind: 'calls',
+        from: caller.id,
+        to: caller.id,
+        resolutionStatus: 'resolved',
+      },
+    ],
+  };
+}
+
+function withLargeCallRelation(snapshot: SnapshotV1): SnapshotV1 {
+  const repository = node(snapshot, 'repository', 'repository');
+  const file = node(snapshot, 'file', 'b.ts');
+  const module = node(snapshot, 'module', 'b');
+  const caller = node(snapshot, 'function', 'caller');
+  const functions = Array.from({ length: 100 }, (_, index) => {
+    const name = `callee-${String(index).padStart(3, '0')}`;
+    return {
+      id: nodeId(
+        'function',
+        file.path,
+        `${repository.id}/${file.id}/${module.id}#scope=module:${module.qualifiedName}`,
+        name,
+        'none',
+      ),
+      kind: 'function' as const,
+      name,
+      path: file.path,
+      qualifiedName: name,
+      memberRole: 'none' as const,
+    };
+  });
+  return {
+    ...snapshot,
+    nodes: [...snapshot.nodes, ...functions],
+    edges: [
+      ...snapshot.edges,
+      ...functions.flatMap((callee) => [
+        {
+          id: edgeId('contains', module.id, callee.id),
+          kind: 'contains' as const,
+          from: module.id,
+          to: callee.id,
+          resolutionStatus: 'resolved' as const,
+        },
+        {
+          id: edgeId('calls', caller.id, callee.id),
+          kind: 'calls' as const,
+          from: caller.id,
+          to: callee.id,
+          resolutionStatus: 'resolved' as const,
+        },
+      ]),
+    ],
+  };
+}
+
+function withContainmentCycle(snapshot: SnapshotV1): SnapshotV1 {
+  const module = node(snapshot, 'module', 'a');
+  return {
+    ...snapshot,
+    edges: [
+      ...snapshot.edges,
+      {
+        id: edgeId('contains', module.id, module.id),
+        kind: 'contains' as const,
+        from: module.id,
+        to: module.id,
+        resolutionStatus: 'resolved' as const,
+      },
+    ],
+  };
+}
+
+function reordered(snapshot: SnapshotV1): SnapshotV1 {
+  return {
+    ...snapshot,
+    nodes: [...snapshot.nodes].reverse(),
+    edges: [...snapshot.edges].reverse(),
+  };
+}
+
 test('search and file/call relations are deterministic and directional', () => {
   const snapshot = fixture();
   const service = createGraphQueryService(snapshot);
@@ -221,6 +378,79 @@ test('ambiguity and cursor pagination remain bounded and typed', () => {
     ['src/a.ts'],
   );
   assert.equal(ambiguous.candidates?.truncated, true);
+  assert.ok(ambiguous.candidates?.continuation);
+  const ambiguousSecond = queryError(
+    service.getSymbol({
+      operation: 'getSymbol',
+      selector: { kind: 'function', qualifiedName: 'shared' },
+      limit: 1,
+      cursor: ambiguous.candidates?.continuation,
+    }),
+  );
+  assert.equal(ambiguousSecond.code, 'ambiguous');
+  assert.deepEqual(
+    ambiguousSecond.candidates?.items.map((item) => item.path),
+    ['src/b.ts'],
+  );
+  assert.equal(ambiguousSecond.candidates?.truncated, false);
+  assert.equal(ambiguousSecond.candidates?.continuation, undefined);
+  assert.deepEqual(
+    queryError(
+      service.getSymbol({
+        operation: 'getSymbol',
+        selector: { kind: 'function', qualifiedName: 'shared' },
+        limit: 1,
+        cursor: ambiguous.candidates?.continuation,
+      }),
+    ),
+    ambiguousSecond,
+  );
+
+  const functionAmbiguous = queryError(
+    service.listCallers({
+      operation: 'listCallers',
+      function: { name: 'shared' },
+      limit: 1,
+    }),
+  );
+  assert.equal(functionAmbiguous.code, 'ambiguous');
+  assert.equal(functionAmbiguous.totalCandidates, 2);
+  assert.ok(functionAmbiguous.candidates?.continuation);
+  const functionAmbiguousSecond = queryError(
+    service.listCallers({
+      operation: 'listCallers',
+      function: { name: 'shared' },
+      limit: 1,
+      cursor: functionAmbiguous.candidates?.continuation,
+    }),
+  );
+  assert.equal(functionAmbiguousSecond.code, 'ambiguous');
+  assert.deepEqual(
+    functionAmbiguousSecond.candidates?.items.map((item) => item.path),
+    ['src/b.ts'],
+  );
+  assert.equal(functionAmbiguousSecond.candidates?.truncated, false);
+
+  const childFirst = response(
+    service.getSymbol({
+      operation: 'getSymbol',
+      selector: { kind: 'module', name: 'a' },
+      limit: 1,
+    }),
+    'getSymbol',
+  );
+  assert.ok(childFirst.children.continuation);
+  const childSecond = response(
+    service.getSymbol({
+      operation: 'getSymbol',
+      selector: { kind: 'module', name: 'a' },
+      limit: 1,
+      cursor: childFirst.children.continuation,
+    }),
+    'getSymbol',
+  );
+  assert.equal(childSecond.children.truncated, false);
+  assert.equal(childSecond.children.continuation, undefined);
 
   const first = response(
     service.searchSymbols({ operation: 'searchSymbols', query: 'a', limit: 1 }),
@@ -240,6 +470,39 @@ test('ambiguity and cursor pagination remain bounded and typed', () => {
   );
   assert.equal(second.page.items.length, 1);
   assert.notEqual(second.page.items[0]?.id, first.page.items[0]?.id);
+  assert.equal(second.page.truncated, true);
+  const terminalSearch = response(
+    service.searchSymbols({
+      operation: 'searchSymbols',
+      query: 'shared',
+      limit: 1,
+    }),
+    'searchSymbols',
+  );
+  assert.ok(terminalSearch.page.continuation);
+  const terminalSearchSecond = response(
+    service.searchSymbols({
+      operation: 'searchSymbols',
+      query: 'shared',
+      limit: 1,
+      cursor: terminalSearch.page.continuation,
+    }),
+    'searchSymbols',
+  );
+  assert.equal(terminalSearchSecond.page.truncated, false);
+  assert.equal(terminalSearchSecond.page.continuation, undefined);
+  assert.deepEqual(
+    response(
+      service.searchSymbols({
+        operation: 'searchSymbols',
+        query: 'shared',
+        limit: 1,
+        cursor: terminalSearch.page.continuation,
+      }),
+      'searchSymbols',
+    ),
+    terminalSearchSecond,
+  );
 });
 
 test('partial snapshots require explicit opt-in and invalid requests do not leak data', () => {
@@ -281,4 +544,327 @@ test('query indexes and returned summaries are isolated from caller mutation', (
     'searchSymbols',
   );
   assert.equal(repeated.page.items[0]?.name, 'caller');
+});
+
+test('query acceptance covers empty, missing, wrong-type, NFC, and exact filters', () => {
+  const snapshot = withUnicodeSymbol(fixture());
+  const service = createGraphQueryService(snapshot);
+  const moduleA = node(snapshot, 'module', 'a');
+
+  const nfc = response(
+    service.searchSymbols({
+      operation: 'searchSymbols',
+      query: 'cafe\u0301',
+      kind: 'function',
+      path: 'src/a.ts',
+      containerId: moduleA.id,
+    }),
+    'searchSymbols',
+  );
+  assert.deepEqual(
+    nfc.page.items.map((item) => item.qualifiedName),
+    ['café'],
+  );
+  assert.deepEqual(
+    response(
+      service.searchSymbols({
+        operation: 'searchSymbols',
+        query: 'CAFÉ',
+        kind: 'function',
+        path: 'src/a.ts',
+        containerId: moduleA.id,
+      }),
+      'searchSymbols',
+    ).page.items,
+    [],
+  );
+  assert.deepEqual(
+    response(
+      service.listFileDependencies({
+        operation: 'listFileDependencies',
+        fileId: fileId('src/b.ts'),
+      }),
+      'listFileDependencies',
+    ).page,
+    {
+      schemaVersion: 1,
+      completeness: 'complete',
+      items: [],
+      total: 0,
+      truncated: false,
+    },
+  );
+
+  assert.equal(
+    queryError(
+      service.getSymbol({
+        operation: 'getSymbol',
+        selector: { name: 'missing' },
+      }),
+    ).code,
+    'not_found',
+  );
+  assert.equal(
+    queryError(
+      service.getSymbol({
+        operation: 'getSymbol',
+        nodeId: fileId('src/a.ts'),
+      }),
+    ).code,
+    'entity_type_mismatch',
+  );
+  assert.equal(
+    queryError(
+      service.listFileDependencies({
+        operation: 'listFileDependencies',
+        fileId: fileId('src/missing.ts'),
+      }),
+    ).code,
+    'not_found',
+  );
+  assert.equal(
+    queryError(
+      service.listCallers({
+        operation: 'listCallers',
+        function: { name: 'missing' },
+      }),
+    ).code,
+    'not_found',
+  );
+  assert.equal(
+    queryError(
+      service.searchSymbols({
+        operation: 'searchSymbols',
+        query: 'x',
+        limit: 0,
+      }),
+    ).code,
+    'limit_exceeded',
+  );
+  assert.equal(
+    queryError(
+      service.searchSymbols({
+        operation: 'searchSymbols',
+        query: 'x',
+        limit: 101,
+      }),
+    ).code,
+    'limit_exceeded',
+  );
+  assert.equal(
+    queryError(
+      service.searchSymbols({
+        operation: 'searchSymbols',
+        query: 'x',
+        limit: 1.5,
+      }),
+    ).code,
+    'invalid_request',
+  );
+});
+
+test('cursor JSON is canonical, bounded, filter-bound, and snapshot-bound', () => {
+  const snapshot = fixture();
+  const service = createGraphQueryService(snapshot);
+  const first = response(
+    service.searchSymbols({ operation: 'searchSymbols', query: 'a', limit: 1 }),
+    'searchSymbols',
+  );
+  const cursor = first.page.continuation!;
+  assert.equal(
+    cursor,
+    'eyJzY2hlbWFWZXJzaW9uIjoxLCJzbmFwc2hvdERpZ2VzdCI6IjBiMWZmNjhlMGI5ZTc3ZDA4Njk1OWM2NDgyOWE5ZjZkMjg5NGQ1N2NhYzJhMjNkZWQ4MjBiMzYxMWIxN2NmZjUiLCJvcGVyYXRpb24iOiJzZWFyY2hTeW1ib2xzIiwiZmlsdGVyRmluZ2VycHJpbnQiOiI4NGIzODlmOTIzYTMwMWIxYTdjOWNmNDhkMTU4NTE5ZDNkZDMxNTc3YzcyOThlNWM3Yjk1OGE2MzBiZjVkY2E5IiwibGFzdFNvcnRLZXkiOltbMCwic3JjL2EudHMiXSwiYSIsIm1vZHVsZSIsIm46ZjdkNDU0Y2ZjMDY3ZGE2ZDMzMGZjZTAyZjVkNTY0YjU2NzQ3NTg2ODdkYWQ1YzgyY2IwZjMzODIzMzNiYTYzNCJdfQ',
+  );
+  const decoded = cursorJson(cursor);
+  assert.equal(cursorFromJson(decoded), cursor);
+  assert.deepEqual(Object.keys(JSON.parse(decoded) as object), [
+    'schemaVersion',
+    'snapshotDigest',
+    'operation',
+    'filterFingerprint',
+    'lastSortKey',
+  ]);
+  assert.equal(
+    queryError(
+      service.searchSymbols({
+        operation: 'searchSymbols',
+        query: 'a',
+        cursor: cursorFromJson(` ${decoded}`),
+      }),
+    ).code,
+    'invalid_request',
+  );
+  assert.equal(
+    queryError(
+      service.searchSymbols({
+        operation: 'searchSymbols',
+        query: 'a',
+        cursor: cursorFromJson(
+          decoded.replace(
+            '"operation":"searchSymbols"',
+            '"operation":"search\\u0053ymbols"',
+          ),
+        ),
+      }),
+    ).code,
+    'invalid_request',
+  );
+  assert.equal(
+    queryError(
+      service.searchSymbols({
+        operation: 'searchSymbols',
+        query: 'a',
+        cursor: cursorFromJson(
+          decoded.replace(
+            '{"schemaVersion":1,',
+            '{"schemaVersion":1,"schemaVersion":1,',
+          ),
+        ),
+      }),
+    ).code,
+    'invalid_request',
+  );
+  assert.equal(
+    queryError(
+      service.searchSymbols({
+        operation: 'searchSymbols',
+        query: 'a',
+        cursor: cursorFromJson(decoded.replace('"src/a.ts"', '"\\ud800"')),
+      }),
+    ).code,
+    'invalid_request',
+  );
+  assert.equal(
+    queryError(
+      service.searchSymbols({
+        operation: 'searchSymbols',
+        query: 'a',
+        cursor: cursorFromJson(
+          decoded.replace(
+            '"schemaVersion":1,"snapshotDigest"',
+            '"snapshotDigest"',
+          ),
+        ),
+      }),
+    ).code,
+    'invalid_request',
+  );
+  assert.equal(
+    queryError(
+      service.searchSymbols({
+        operation: 'searchSymbols',
+        query: 'a',
+        cursor: `${'A'.repeat(4097)}`,
+      }),
+    ).code,
+    'invalid_request',
+  );
+  assert.equal(
+    queryError(
+      service.searchSymbols({
+        operation: 'searchSymbols',
+        query: 'different',
+        cursor,
+      }),
+    ).code,
+    'invalid_request',
+  );
+  const replacement = createGraphQueryService(withUnicodeSymbol(snapshot));
+  assert.equal(
+    queryError(
+      replacement.searchSymbols({
+        operation: 'searchSymbols',
+        query: 'a',
+        cursor,
+      }),
+    ).code,
+    'invalid_request',
+  );
+});
+
+test('query ordering is independent of input order and relation duplicates', () => {
+  const snapshot = withRepeatedRelationsAndSelfCall(fixture());
+  const reorderedService = createGraphQueryService(reordered(snapshot));
+  const service = createGraphQueryService(snapshot);
+  const request = {
+    operation: 'searchSymbols' as const,
+    query: 'a',
+    limit: 1,
+  };
+  const first = response(service.searchSymbols(request), 'searchSymbols');
+  const reorderedFirst = response(
+    reorderedService.searchSymbols(request),
+    'searchSymbols',
+  );
+  assert.deepEqual(reorderedFirst, first);
+  assert.deepEqual(
+    response(
+      service.listFileDependencies({
+        operation: 'listFileDependencies',
+        fileId: fileId('src/a.ts'),
+      }),
+      'listFileDependencies',
+    ).page.items.map((item) => item.path),
+    ['src/b.ts'],
+  );
+  assert.deepEqual(
+    response(
+      service.listCallees({
+        operation: 'listCallees',
+        function: { name: 'caller' },
+      }),
+      'listCallees',
+    ).page.items.map((item) => item.qualifiedName),
+    ['callee', 'caller'],
+  );
+  assert.equal(
+    queryError(
+      createGraphQueryService(withContainmentCycle(fixture())).searchSymbols({
+        operation: 'searchSymbols',
+        query: 'a',
+      }),
+    ).code,
+    'invalid_snapshot',
+  );
+});
+
+test('large counterpart relations page through the terminal result repeatedly', () => {
+  const service = createGraphQueryService(withLargeCallRelation(fixture()));
+  const first = response(
+    service.listCallees({
+      operation: 'listCallees',
+      function: { name: 'caller' },
+      limit: 100,
+    }),
+    'listCallees',
+  );
+  assert.equal(first.page.total, 101);
+  assert.equal(first.page.items.length, 100);
+  assert.equal(first.page.truncated, true);
+  assert.ok(first.page.continuation);
+  const terminal = response(
+    service.listCallees({
+      operation: 'listCallees',
+      function: { name: 'caller' },
+      limit: 100,
+      cursor: first.page.continuation,
+    }),
+    'listCallees',
+  );
+  assert.equal(terminal.page.total, 101);
+  assert.equal(terminal.page.items.length, 1);
+  assert.equal(terminal.page.truncated, false);
+  assert.equal(terminal.page.continuation, undefined);
+  assert.deepEqual(
+    response(
+      service.listCallees({
+        operation: 'listCallees',
+        function: { name: 'caller' },
+        limit: 100,
+        cursor: first.page.continuation,
+      }),
+      'listCallees',
+    ),
+    terminal,
+  );
 });

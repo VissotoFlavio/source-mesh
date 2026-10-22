@@ -531,30 +531,97 @@ function isSortKey(
   value: unknown,
   operation: QueryRequestV1['operation'],
 ): value is SortKey {
-  if (!Array.isArray(value)) return false;
-  if (operation === 'searchSymbols')
-    return (
-      value.length === 4 &&
-      isPathKey(value[0]) &&
-      value.slice(1).every((item) => typeof item === 'string')
-    );
+  if (operation === 'searchSymbols') return isSearchSortKey(value);
   if (operation === 'getSymbol')
-    return (
-      value.length === 3 && value.every((item) => typeof item === 'string')
-    );
+    return isSearchSortKey(value) || isChildSortKey(value);
   if (
     operation === 'listFileDependencies' ||
     operation === 'listFileDependents'
   )
-    return (
-      value.length === 2 && value.every((item) => typeof item === 'string')
-    );
+    return isFileSortKey(value);
+  return isSearchSortKey(value) || isCallSortKey(value);
+}
+
+function isSearchSortKey(value: unknown): value is SearchSortKey {
   return (
+    Array.isArray(value) &&
+    value.length === 4 &&
+    isPathKey(value[0]) &&
+    value.slice(1).every((item) => typeof item === 'string')
+  );
+}
+
+function isChildSortKey(value: unknown): value is ChildSortKey {
+  return (
+    Array.isArray(value) &&
+    value.length === 3 &&
+    value.every((item) => typeof item === 'string')
+  );
+}
+
+function isFileSortKey(value: unknown): value is FileSortKey {
+  return (
+    Array.isArray(value) &&
+    value.length === 2 &&
+    value.every((item) => typeof item === 'string')
+  );
+}
+
+function isCallSortKey(value: unknown): value is CallSortKey {
+  return (
+    Array.isArray(value) &&
     value.length === 4 &&
     typeof value[0] === 'string' &&
     isPathKey(value[1]) &&
     value.slice(2).every((item) => typeof item === 'string')
   );
+}
+
+function canonicalSortKey(
+  value: unknown,
+  operation: QueryRequestV1['operation'],
+): SortKey | undefined {
+  if (!isSortKey(value, operation)) return undefined;
+  const text = (item: string): string | undefined => nfc(item);
+  const path = (item: PathKey): PathKey | undefined => {
+    const normalized = text(item[1]);
+    if (normalized === undefined) return undefined;
+    return item[0] === 0 ? [0, normalized] : [1, ''];
+  };
+  if (isSearchSortKey(value)) {
+    const normalizedPath = path(value[0]);
+    const strings = [text(value[1]), text(value[2]), text(value[3])];
+    return normalizedPath !== undefined && strings.every(Boolean)
+      ? [normalizedPath, strings[0]!, strings[1]!, strings[2]!]
+      : undefined;
+  }
+  if (operation === 'getSymbol' && isChildSortKey(value)) {
+    const strings = value.map(text);
+    return strings.every(Boolean)
+      ? [strings[0]!, strings[1]!, strings[2]!]
+      : undefined;
+  }
+  if (
+    (operation === 'listFileDependencies' ||
+      operation === 'listFileDependents') &&
+    isFileSortKey(value)
+  ) {
+    const strings = value.map(text);
+    return strings.every(Boolean) ? [strings[0]!, strings[1]!] : undefined;
+  }
+  if (isCallSortKey(value)) {
+    const normalizedPath = path(value[1]);
+    const first = text(value[0]);
+    const third = text(value[2]);
+    const fourth = text(value[3]);
+    return normalizedPath !== undefined &&
+      first !== undefined &&
+      third !== undefined &&
+      fourth !== undefined
+      ? [first, normalizedPath, third, fourth]
+      : undefined;
+  }
+  return undefined;
 }
 
 function cursorText(
@@ -563,14 +630,97 @@ function cursorText(
   filterFingerprint: string,
   lastSortKey: SortKey,
 ): string {
+  const normalizedSortKey = canonicalSortKey(lastSortKey, operation);
+  if (normalizedSortKey === undefined) throw new Error('Invalid cursor key.');
   const envelope: CursorEnvelope = {
     schemaVersion: 1,
     snapshotDigest: snapshotDigestValue,
     operation,
     filterFingerprint,
-    lastSortKey,
+    lastSortKey: normalizedSortKey,
   };
   return base64Url(JSON.stringify(envelope));
+}
+
+function jsonStringEnd(value: string, start: number): number {
+  if (value[start] !== '"') throw new Error('Invalid JSON string.');
+  for (let index = start + 1; index < value.length; index += 1) {
+    const character = value[index];
+    if (character === undefined) throw new Error('Invalid JSON string.');
+    if (character === '"') return index + 1;
+    if (character === '\\') {
+      index += value[index + 1] === 'u' ? 5 : 1;
+      continue;
+    }
+    if (character.charCodeAt(0) < 0x20) throw new Error('Invalid JSON string.');
+  }
+  throw new Error('Unterminated JSON string.');
+}
+
+function skipJsonWhitespace(value: string, start: number): number {
+  let index = start;
+  while (/\s/u.test(value[index] ?? '')) index += 1;
+  return index;
+}
+
+function scanJsonValue(
+  value: string,
+  start: number,
+  keys: Set<string>,
+): number {
+  const index = skipJsonWhitespace(value, start);
+  const character = value[index];
+  if (character === '"') return jsonStringEnd(value, index);
+  if (character === '[') {
+    let next = skipJsonWhitespace(value, index + 1);
+    if (value[next] === ']') return next + 1;
+    while (true) {
+      next = scanJsonValue(value, next, new Set<string>());
+      next = skipJsonWhitespace(value, next);
+      if (value[next] === ']') return next + 1;
+      if (value[next] !== ',') throw new Error('Invalid JSON array.');
+      next += 1;
+    }
+  }
+  if (character === '{') {
+    let next = skipJsonWhitespace(value, index + 1);
+    if (value[next] === '}') return next + 1;
+    while (true) {
+      next = skipJsonWhitespace(value, next);
+      const keyEnd = jsonStringEnd(value, next);
+      const key = JSON.parse(value.slice(next, keyEnd)) as unknown;
+      if (typeof key !== 'string' || keys.has(key))
+        throw new Error('Duplicate JSON key.');
+      keys.add(key);
+      next = skipJsonWhitespace(value, keyEnd);
+      if (value[next] !== ':') throw new Error('Invalid JSON object.');
+      next = scanJsonValue(value, next + 1, new Set<string>());
+      next = skipJsonWhitespace(value, next);
+      if (value[next] === '}') return next + 1;
+      if (value[next] !== ',') throw new Error('Invalid JSON object.');
+      next += 1;
+    }
+  }
+  let next = index;
+  while (
+    next < value.length &&
+    !/\s/u.test(value[next] ?? '') &&
+    !',]}'.includes(value[next] ?? '')
+  )
+    next += 1;
+  if (next === index) throw new Error('Invalid JSON value.');
+  return next;
+}
+
+function hasDuplicateJsonKeys(value: string): boolean {
+  try {
+    return (
+      skipJsonWhitespace(value, scanJsonValue(value, 0, new Set<string>())) !==
+      value.length
+    );
+  } catch {
+    return true;
+  }
 }
 
 function parseCursor(
@@ -582,6 +732,8 @@ function parseCursor(
   if (typeof value !== 'string') return undefined;
   const decoded = decodeBase64Url(value);
   if (decoded === undefined) return undefined;
+  if (base64Url(decoded) !== value || hasDuplicateJsonKeys(decoded))
+    return undefined;
   try {
     const parsed: unknown = JSON.parse(decoded);
     if (!isRecord(parsed)) return undefined;
@@ -609,7 +761,16 @@ function parseCursor(
       !isSortKey(parsed.lastSortKey, operation)
     )
       return undefined;
-    return parsed as unknown as CursorEnvelope;
+    const lastSortKey = canonicalSortKey(parsed.lastSortKey, operation);
+    if (lastSortKey === undefined) return undefined;
+    const canonical = {
+      schemaVersion: 1 as const,
+      snapshotDigest: parsed.snapshotDigest,
+      operation,
+      filterFingerprint: parsed.filterFingerprint,
+      lastSortKey,
+    };
+    return JSON.stringify(canonical) === decoded ? canonical : undefined;
   } catch {
     return undefined;
   }
