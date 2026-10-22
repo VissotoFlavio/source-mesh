@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- Transport-neutral deterministic graph queries for symbol search/details, local
+  file dependencies/dependents, and resolved callers/callees with bounded cursor
+  pagination and typed errors (#23).
+
 - Versioned schema-v1 local graph snapshots with canonical UTF-8 encoding, validated loading, contained `.sourcemesh` paths, and explicit atomic create-only/replace writes (#22).
 
 - Checker-backed local import, export, inheritance, implementation, and direct-call relationships with deterministic edges and sanitized diagnostics (#21).

@@ -75,3 +75,29 @@ export type {
   ProjectLoaderDiagnostic,
   ProjectRootExtension,
 } from './project-loader.js';
+
+export { createGraphQueryService } from './query.js';
+export type {
+  CallRelationRequestV1,
+  CallRelationResponseV1,
+  ErrorFieldV1,
+  FileRelationRequestV1,
+  FileRelationResponseV1,
+  FileSummaryV1,
+  FunctionSelectorV1,
+  GetSymbolRequestV1,
+  GetSymbolResponseV1,
+  GraphQueryService,
+  NodeSummaryV1,
+  QueryErrorCodeV1,
+  QueryErrorV1,
+  QueryPageV1,
+  QueryRequestV1,
+  QueryResponseV1,
+  SearchRequestV1,
+  SearchResponseV1,
+  SearchSymbolKindV1,
+  SymbolKindV1,
+  SymbolSelectorV1,
+  SymbolSummaryV1,
+} from './query.js';
