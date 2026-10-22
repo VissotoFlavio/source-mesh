@@ -8,6 +8,7 @@ import {
   digest,
   edgeId,
   fileId,
+  nodeId,
   repositoryId,
   type DiagnosticV1,
   type EdgeKindV1,
@@ -497,6 +498,57 @@ function normalize(value: unknown): SnapshotV1 {
     (node) => node.kind === 'repository',
   );
   fail(repositoryNodes.length === 1, 'Invalid snapshot repository node count.');
+  const repositoryNode = repositoryNodes[0]!;
+  const parentByChild = new Map<string, NodeV1>();
+  for (const edge of normalizedEdges) {
+    if (edge.kind !== 'contains') continue;
+    fail(
+      !parentByChild.has(edge.to),
+      'Invalid snapshot duplicate containment.',
+    );
+    parentByChild.set(edge.to, nodeMap.get(edge.from)!);
+  }
+  const scopeCache = new Map<string, string>();
+  const resolving = new Set<string>();
+  const semanticParentPath = (node: NodeV1): string => {
+    const cached = scopeCache.get(node.id);
+    if (cached !== undefined) return cached;
+    fail(!resolving.has(node.id), 'Invalid snapshot containment cycle.');
+    resolving.add(node.id);
+    const parent = parentByChild.get(node.id);
+    let scope: string;
+    if (node.kind === 'module') {
+      fail(parent?.kind === 'file', 'Invalid snapshot module containment.');
+      scope = `${repositoryNode.id}/${parent.id}#scope=root`;
+    } else {
+      fail(
+        parent !== undefined &&
+          parent.kind !== 'repository' &&
+          parent.kind !== 'file',
+        'Invalid snapshot symbol containment.',
+      );
+      const parentScope = semanticParentPath(parent);
+      fail('qualifiedName' in parent, 'Invalid snapshot symbol parent.');
+      scope = `${parentScope.slice(0, parentScope.indexOf('#scope'))}/${parent.id}#scope=${parent.kind}:${parent.qualifiedName}`;
+    }
+    resolving.delete(node.id);
+    scopeCache.set(node.id, scope);
+    return scope;
+  };
+  for (const node of normalizedNodes) {
+    if (node.kind === 'repository' || node.kind === 'file') continue;
+    fail(
+      node.id ===
+        nodeId(
+          node.kind,
+          node.path,
+          semanticParentPath(node),
+          node.name,
+          node.memberRole,
+        ),
+      'Invalid snapshot node identity.',
+    );
+  }
   const result: SnapshotV1 = {
     schemaVersion: 1,
     completeness: root.completeness,
