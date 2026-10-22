@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { test } from 'node:test';
@@ -124,6 +125,66 @@ test('help and grammar failures are deterministic and do not invoke services', a
   assert.equal(errorIO.stdoutValue, '');
   assert.match(errorIO.stderrValue, /arguments are invalid/u);
 });
+
+test('unknown option diagnostics never echo untrusted option values', async () => {
+  const secret = 'TOP-SECRET-OPTION-VALUE';
+  for (const output of ['human', 'json'] as const) {
+    const io = capture();
+    assert.equal(
+      await main(
+        [
+          'symbol',
+          '--root',
+          '/repo',
+          '--query',
+          'value',
+          `--token=${secret}`,
+          '--output',
+          output,
+        ],
+        injectedServices(),
+        io,
+      ),
+      2,
+    );
+    assert.equal(io.stdoutValue, '');
+    assert.equal(io.stderrValue.includes(secret), false);
+    if (output === 'json') {
+      assert.deepEqual(JSON.parse(io.stderrValue).error, {
+        code: 'invalid_arguments',
+        message: 'The command arguments are invalid.',
+        field: 'option',
+      });
+    } else {
+      assert.equal(
+        io.stderrValue,
+        'The command arguments are invalid. (option)\n',
+      );
+    }
+  }
+});
+
+test(
+  'linked POSIX bin invocation executes the CLI entrypoint',
+  { skip: process.platform === 'win32' },
+  () => {
+    const root = fs.mkdtempSync(path.join(process.cwd(), '.sourcemesh-bin-'));
+    const binDirectory = path.join(root, 'node_modules', '.bin');
+    const binPath = path.join(binDirectory, 'sourcemesh');
+    fs.mkdirSync(binDirectory, { recursive: true });
+    fs.symlinkSync(path.join(process.cwd(), 'src', 'cli.ts'), binPath, 'file');
+    try {
+      const output = execFileSync(
+        process.execPath,
+        ['--import', 'tsx', binPath, '--help'],
+        { cwd: process.cwd(), encoding: 'utf8' },
+      );
+      assert.match(output, /SourceMesh local analysis CLI/u);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  },
+);
 
 test('analyze maps create-only and replace modes and emits a stable JSON result', async () => {
   const writes: string[] = [];

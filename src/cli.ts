@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 
 import path from 'node:path';
-import { pathToFileURL } from 'node:url';
+import fs from 'node:fs';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
   createGraphQueryService,
   discoverSourceFiles,
@@ -393,7 +394,7 @@ function parseArguments(argv: readonly string[]): ParsedCommand {
     if (option === '--help') throw invalid('help');
     const kind = kinds.get(option);
     if (kind === undefined)
-      throw invalid(option.startsWith('--') ? option : 'command');
+      throw invalid(option.startsWith('--') ? 'option' : 'command');
     if (values.has(option)) throw invalid(option);
     if (kind === 'flag') {
       values.set(option, true);
@@ -821,11 +822,38 @@ export async function main(
   }
 }
 
-const isDirectExecution =
-  process.argv[1] !== undefined &&
-  pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url;
+function realpathUrl(value: string): string | undefined {
+  try {
+    return pathToFileURL(fs.realpathSync.native(value)).href;
+  } catch {
+    return undefined;
+  }
+}
 
-if (isDirectExecution) {
+function isDirectExecution(
+  entryPath: string | undefined,
+  moduleUrl: string,
+): boolean {
+  if (entryPath === undefined || !moduleUrl.startsWith('file:')) return false;
+  const entryUrl = realpathUrl(entryPath);
+  let modulePath: string;
+  try {
+    modulePath = fileURLToPath(moduleUrl);
+  } catch {
+    return false;
+  }
+  const resolvedModuleUrl = realpathUrl(modulePath);
+  if (entryUrl !== undefined && resolvedModuleUrl !== undefined)
+    return entryUrl === resolvedModuleUrl;
+  return (
+    pathToFileURL(path.resolve(entryPath)).href ===
+    pathToFileURL(path.resolve(modulePath)).href
+  );
+}
+
+const isDirect = isDirectExecution(process.argv[1], import.meta.url);
+
+if (isDirect) {
   void main().then(
     (code) => {
       process.exitCode = code;
