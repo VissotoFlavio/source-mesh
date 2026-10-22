@@ -1,0 +1,380 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import { test } from 'node:test';
+import { fileId, openValidatedSnapshot } from '../src/index.js';
+import type { CliIO, CliServices } from '../src/cli.js';
+import { main } from '../src/cli.js';
+import type {
+  DeclarationGraph,
+  CallRelationResponseV1,
+  FileRelationResponseV1,
+  GetSymbolResponseV1,
+  GraphQueryService,
+  QueryResponseV1,
+  SearchResponseV1,
+} from '../src/index.js';
+
+function capture(): CliIO & {
+  readonly stdoutValue: string;
+  readonly stderrValue: string;
+} {
+  let stdoutValue = '';
+  let stderrValue = '';
+  return {
+    stdout: (value) => {
+      stdoutValue += value;
+    },
+    stderr: (value) => {
+      stderrValue += value;
+    },
+    get stdoutValue() {
+      return stdoutValue;
+    },
+    get stderrValue() {
+      return stderrValue;
+    },
+  };
+}
+
+function emptyGraph(): DeclarationGraph {
+  return {
+    schemaVersion: 1,
+    repository: { root: '.', name: 'repository' },
+    nodes: [],
+    edges: [],
+    diagnostics: [],
+  };
+}
+
+function queryResponse(): QueryResponseV1 {
+  return {
+    operation: 'searchSymbols',
+    page: {
+      schemaVersion: 1,
+      completeness: 'complete',
+      items: [],
+      total: 0,
+      truncated: false,
+    },
+  };
+}
+
+function injectedServices(overrides: Partial<CliServices> = {}): CliServices {
+  return {
+    discoverSourceFiles: async () => ({
+      repositoryRoot: '/selected/root',
+      sources: ['source.ts'],
+      diagnostics: [],
+    }),
+    loadProject: () => ({
+      project: {
+        program: {} as never,
+        options: {},
+        rootNames: ['source.ts'],
+      },
+      diagnostics: [],
+    }),
+    extractDeclarationGraph: () => emptyGraph(),
+    writeSnapshot: async () => ({
+      path: '/selected/root/.sourcemesh/graph.json',
+      digest: 'a'.repeat(64),
+      bytes: 12,
+    }),
+    openValidatedSnapshot: async () => ({
+      ...emptyGraph(),
+      completeness: 'complete',
+    }),
+    createGraphQueryService: () =>
+      ({
+        searchSymbols: () => queryResponse(),
+        getSymbol: () => queryResponse(),
+        listFileDependencies: () => queryResponse(),
+        listFileDependents: () => queryResponse(),
+        listCallers: () => queryResponse(),
+        listCallees: () => queryResponse(),
+      }) as unknown as GraphQueryService,
+    ...overrides,
+  };
+}
+
+test('help and grammar failures are deterministic and do not invoke services', async () => {
+  const helpIO = capture();
+  assert.equal(await main(['--help'], injectedServices(), helpIO), 0);
+  assert.match(helpIO.stdoutValue, /Commands: analyze/u);
+  assert.equal(helpIO.stderrValue, '');
+
+  let invoked = false;
+  const services = injectedServices({
+    openValidatedSnapshot: async () => {
+      invoked = true;
+      throw new Error('must not run');
+    },
+  });
+  const errorIO = capture();
+  assert.equal(
+    await main(
+      ['symbol', '--root', '/repo', '--query', 'value', '--query', 'other'],
+      services,
+      errorIO,
+    ),
+    2,
+  );
+  assert.equal(invoked, false);
+  assert.equal(errorIO.stdoutValue, '');
+  assert.match(errorIO.stderrValue, /arguments are invalid/u);
+});
+
+test('analyze maps create-only and replace modes and emits a stable JSON result', async () => {
+  const writes: string[] = [];
+  const services = injectedServices({
+    writeSnapshot: async (_root, _snapshot, options) => {
+      writes.push(options.mode);
+      return {
+        path: '/selected/root/.sourcemesh/result.json',
+        digest: 'b'.repeat(64),
+        bytes: 42,
+      };
+    },
+  });
+  const firstIO = capture();
+  assert.equal(
+    await main(
+      [
+        'analyze',
+        '--root',
+        '/repo',
+        '--snapshot',
+        '.sourcemesh/result.json',
+        '--output',
+        'json',
+      ],
+      services,
+      firstIO,
+    ),
+    0,
+  );
+  assert.deepEqual(writes, ['create-only']);
+  assert.equal(firstIO.stderrValue, '');
+  assert.deepEqual(JSON.parse(firstIO.stdoutValue), {
+    schemaVersion: 1,
+    command: 'analyze',
+    result: {
+      snapshotPath: '.sourcemesh/result.json',
+      completeness: 'complete',
+      digest: 'b'.repeat(64),
+      bytes: 42,
+    },
+  });
+
+  const overwriteIO = capture();
+  assert.equal(
+    await main(
+      [
+        'analyze',
+        '--root',
+        '/repo',
+        '--snapshot',
+        '.sourcemesh/result.json',
+        '--overwrite',
+        '--output',
+        'json',
+      ],
+      services,
+      overwriteIO,
+    ),
+    0,
+  );
+  assert.deepEqual(writes, ['create-only', 'replace']);
+});
+
+test('query errors use exit code 3 and sanitized JSON envelopes', async () => {
+  const services = injectedServices({
+    createGraphQueryService: () =>
+      ({
+        searchSymbols: () => ({
+          code: 'not_found',
+          message: 'untrusted raw message',
+          field: 'query',
+        }),
+      }) as unknown as GraphQueryService,
+  });
+  const io = capture();
+  assert.equal(
+    await main(
+      ['symbol', '--root', '/repo', '--query', 'missing', '--output', 'json'],
+      services,
+      io,
+    ),
+    3,
+  );
+  assert.equal(io.stdoutValue, '');
+  assert.deepEqual(JSON.parse(io.stderrValue), {
+    schemaVersion: 1,
+    command: 'symbol',
+    error: {
+      code: 'not_found',
+      message: 'The requested graph item was not found.',
+      field: 'query',
+    },
+  });
+});
+
+test('real local analysis is queryable through all six operations and is deterministic', async () => {
+  const root = fs.mkdtempSync(path.join(process.cwd(), '.sourcemesh-cli-'));
+  fs.writeFileSync(
+    path.join(root, 'package.json'),
+    '{"type":"module"}\n',
+    'utf8',
+  );
+  fs.writeFileSync(
+    path.join(root, 'a.ts'),
+    "import { target } from './b.js';\nexport function caller() { return target(); }\n",
+    'utf8',
+  );
+  fs.writeFileSync(
+    path.join(root, 'b.ts'),
+    'export function target() { return 1; }\n',
+    'utf8',
+  );
+  try {
+    const analyzeIO = capture();
+    assert.equal(
+      await main(
+        ['analyze', '--root', root, '--overwrite', '--output', 'json'],
+        undefined,
+        analyzeIO,
+      ),
+      0,
+    );
+    const analyze = JSON.parse(analyzeIO.stdoutValue) as {
+      result: { readonly snapshotPath: string };
+    };
+    assert.equal(analyze.result.snapshotPath, '.sourcemesh/graph.json');
+    assert.equal(analyzeIO.stdoutValue.includes(root), false);
+
+    const duplicateIO = capture();
+    assert.equal(
+      await main(
+        ['analyze', '--root', root, '--output', 'json'],
+        undefined,
+        duplicateIO,
+      ),
+      4,
+    );
+    assert.equal(duplicateIO.stdoutValue, '');
+    assert.equal(
+      JSON.parse(duplicateIO.stderrValue).error.code,
+      'snapshot_conflict',
+    );
+
+    const snapshot = await openValidatedSnapshot(root);
+    const caller = snapshot.nodes.find(
+      (node) => node.kind === 'function' && node.name === 'caller',
+    );
+    const target = snapshot.nodes.find(
+      (node) => node.kind === 'function' && node.name === 'target',
+    );
+    assert.ok(caller && target);
+
+    const runQuery = async (args: string[]) => {
+      const io = capture();
+      assert.equal(
+        await main(
+          [...args, '--allow-partial', '--output', 'json'],
+          undefined,
+          io,
+        ),
+        0,
+      );
+      assert.equal(io.stderrValue, '');
+      return JSON.parse(io.stdoutValue) as { readonly result: QueryResponseV1 };
+    };
+    const firstSearch = await runQuery([
+      'symbol',
+      '--root',
+      root,
+      '--query',
+      'caller',
+    ]);
+    const secondSearch = await runQuery([
+      'symbol',
+      '--root',
+      root,
+      '--query',
+      'caller',
+    ]);
+    assert.equal(JSON.stringify(firstSearch), JSON.stringify(secondSearch));
+    assert.equal(
+      (firstSearch.result as SearchResponseV1).page.items[0]?.id,
+      caller.id,
+    );
+
+    const details = await runQuery([
+      'details',
+      '--root',
+      root,
+      '--id',
+      caller.id,
+    ]);
+    assert.equal((details.result as GetSymbolResponseV1).symbol.id, caller.id);
+
+    const dependencies = await runQuery([
+      'dependencies',
+      '--root',
+      root,
+      '--file-id',
+      fileId('a.ts'),
+    ]);
+    assert.equal(
+      (dependencies.result as FileRelationResponseV1).page.items[0]?.path,
+      'b.ts',
+    );
+    const dependents = await runQuery([
+      'dependents',
+      '--root',
+      root,
+      '--file-id',
+      fileId('b.ts'),
+    ]);
+    assert.equal(
+      (dependents.result as FileRelationResponseV1).page.items[0]?.path,
+      'a.ts',
+    );
+
+    const callers = await runQuery([
+      'callers',
+      '--root',
+      root,
+      '--name',
+      'target',
+    ]);
+    assert.equal(
+      (callers.result as CallRelationResponseV1).page.items[0]?.name,
+      'caller',
+    );
+    const callees = await runQuery([
+      'callees',
+      '--root',
+      root,
+      '--name',
+      'caller',
+    ]);
+    assert.equal(
+      (callees.result as CallRelationResponseV1).page.items[0]?.name,
+      'target',
+    );
+
+    const overwriteIO = capture();
+    assert.equal(
+      await main(
+        ['analyze', '--root', root, '--overwrite', '--output', 'json'],
+        undefined,
+        overwriteIO,
+      ),
+      0,
+    );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});

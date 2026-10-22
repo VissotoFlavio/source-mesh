@@ -2,7 +2,7 @@
 
 SourceMesh is an experimental, local-first project for building a deterministic structural graph of source code. Its goal is to give developers and software agents a compact view of code structure and relationships without sending repository data to a hosted service.
 
-The repository currently contains only the TypeScript project scaffold and its quality tooling. It does **not** yet analyze repositories, build a graph, persist data, provide visualizations, expose an MCP server, or integrate with an AI provider.
+The local CLI can analyze an explicitly selected TypeScript/JavaScript repository into a contained schema-v1 snapshot and query symbols, files, and direct call relationships without a hosted service.
 
 ## Privacy boundary
 
@@ -43,20 +43,41 @@ npm run offline:check
 npm run pack:check
 ```
 
-After a build, the current placeholder CLI can be run locally:
+After a build, analyze and query a repository locally:
 
 ```sh
-node dist/cli.js
+node dist/cli.js analyze --root /path/to/repository
+node dist/cli.js symbol --root /path/to/repository --query Widget --output json
 ```
 
-It only prints the project name; it does not inspect a repository.
+The default snapshot is `.sourcemesh/graph.json`. Analysis is create-only; pass
+`--overwrite` to atomically replace the selected snapshot. The other commands are
+`details`, `dependencies`, `dependents`, `callers`, and `callees`. Query commands
+accept `--limit 1..100`, `--cursor`, and `--allow-partial`; selectors are explicit
+and do not guess when they are ambiguous. Use `<command> --help` for the exact
+grammar.
+
+JSON output is a deterministic versioned envelope on stdout:
+
+```json
+{ "schemaVersion": 1, "command": "symbol", "result": {} }
+```
+
+JSON failures use the same envelope on stderr. Successful commands return `0`,
+invalid arguments return `2`, typed query target/request failures return `3`, and
+an existing create-only snapshot returns `4`. Operational and analysis failures
+return `1`. Human output is concise and is not the automation contract.
+
+The CLI prints only approved graph summaries, repository-relative paths, snapshot
+metadata, and sanitized diagnostics. It never prints source text, absolute paths,
+compiler objects, stacks, secrets, or environment data. Runtime analysis uses
+filesystem and TypeScript compiler APIs only; it does not invoke Git, subprocesses,
+network APIs, telemetry, or hosted services.
 
 ## Project status
 
-SourceMesh is pre-release; its MVP graph and query contracts are documented, but the
-analysis implementation and public runtime interfaces are not yet available.
-Package publication, releases, hosted processing, and compatibility changes require
-separate authorization and issue-backed work.
+SourceMesh is pre-release. Package publication, releases, hosted processing, and
+compatibility changes require separate authorization and issue-backed work.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the development workflow, [the technical baseline](docs/decisions/0001-technical-baseline.md) for the current stack decision, and [the source graph MVP architecture](docs/decisions/0002-source-graph-mvp-architecture.md) for the accepted graph and query contracts.
 

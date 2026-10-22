@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- Local offline analysis and query CLI with deterministic human/JSON output,
+  contained schema-v1 snapshots, explicit create-only/overwrite behavior, stable
+  exit codes, and sanitized diagnostics (#24).
+
 - Transport-neutral deterministic graph queries for symbol search/details, local
   file dependencies/dependents, and resolved callers/callees with bounded cursor
   pagination and typed errors (#23).
