@@ -2,7 +2,9 @@ import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
 import {
   createGraphQueryService,
+  decode,
   edgeId,
+  encode,
   fileId,
   nodeId,
   repositoryId,
@@ -173,6 +175,26 @@ function cursorFromJson(json: string): string {
   return Buffer.from(json, 'utf8').toString('base64url');
 }
 
+function emptyValidatedSnapshot(): SnapshotV1 {
+  return decode(
+    encode({
+      schemaVersion: 1,
+      completeness: 'complete',
+      repository: { root: '.', name: 'empty' },
+      nodes: [
+        {
+          id: repositoryId(),
+          kind: 'repository',
+          root: '.',
+          name: 'empty',
+        },
+      ],
+      edges: [],
+      diagnostics: [],
+    }),
+  );
+}
+
 function withUnicodeSymbol(snapshot: SnapshotV1): SnapshotV1 {
   const repository = node(snapshot, 'repository', 'repository');
   const file = node(snapshot, 'file', 'a.ts');
@@ -292,6 +314,24 @@ function withContainmentCycle(snapshot: SnapshotV1): SnapshotV1 {
         kind: 'contains' as const,
         from: module.id,
         to: module.id,
+        resolutionStatus: 'resolved' as const,
+      },
+    ],
+  };
+}
+
+function withDependencyCycle(snapshot: SnapshotV1): SnapshotV1 {
+  const moduleA = node(snapshot, 'module', 'a');
+  const moduleB = node(snapshot, 'module', 'b');
+  return {
+    ...snapshot,
+    edges: [
+      ...snapshot.edges,
+      {
+        id: edgeId('imports', moduleB.id, moduleA.id),
+        kind: 'imports' as const,
+        from: moduleB.id,
+        to: moduleA.id,
         resolutionStatus: 'resolved' as const,
       },
     ],
@@ -661,6 +701,92 @@ test('query acceptance covers empty, missing, wrong-type, NFC, and exact filters
     ).code,
     'invalid_request',
   );
+});
+
+test('validated empty snapshots return deterministic empty results', () => {
+  const service = createGraphQueryService(emptyValidatedSnapshot());
+  const search = response(
+    service.searchSymbols({ operation: 'searchSymbols', query: 'anything' }),
+    'searchSymbols',
+  );
+
+  assert.deepEqual(search.page, {
+    schemaVersion: 1,
+    completeness: 'complete',
+    items: [],
+    total: 0,
+    truncated: false,
+  });
+  assert.equal(
+    queryError(
+      service.listFileDependencies({
+        operation: 'listFileDependencies',
+        fileId: fileId('src/missing.ts'),
+      }),
+    ).code,
+    'not_found',
+  );
+});
+
+test('separate-file dependency cycles remain deterministic and one-hop', () => {
+  const snapshot = withDependencyCycle(fixture());
+  const service = createGraphQueryService(snapshot);
+  const reorderedService = createGraphQueryService(reordered(snapshot));
+
+  for (const [file, dependency] of [
+    ['src/a.ts', 'src/b.ts'],
+    ['src/b.ts', 'src/a.ts'],
+  ] as const) {
+    const request = {
+      operation: 'listFileDependencies' as const,
+      fileId: fileId(file),
+    };
+    const result = response(
+      service.listFileDependencies(request),
+      request.operation,
+    );
+    assert.deepEqual(
+      result.page.items.map((item) => item.path),
+      [dependency],
+    );
+    assert.equal(result.page.total, 1);
+    assert.equal(result.page.truncated, false);
+    assert.deepEqual(
+      response(
+        reorderedService.listFileDependencies(request),
+        request.operation,
+      ),
+      result,
+    );
+    assert.deepEqual(
+      response(service.listFileDependencies(request), request.operation),
+      result,
+    );
+  }
+
+  for (const [file, dependent] of [
+    ['src/a.ts', 'src/b.ts'],
+    ['src/b.ts', 'src/a.ts'],
+  ] as const) {
+    const request = {
+      operation: 'listFileDependents' as const,
+      fileId: fileId(file),
+    };
+    const result = response(
+      service.listFileDependents(request),
+      request.operation,
+    );
+    assert.deepEqual(
+      result.page.items.map((item) => item.path),
+      [dependent],
+    );
+    assert.equal(result.page.total, 1);
+    assert.equal(result.page.truncated, false);
+    assert.deepEqual(
+      response(reorderedService.listFileDependents(request), request.operation),
+      result,
+    );
+  }
 });
 
 test('cursor JSON is canonical, bounded, filter-bound, and snapshot-bound', () => {
