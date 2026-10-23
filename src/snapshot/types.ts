@@ -1,4 +1,4 @@
-import type { DeclarationGraph } from '../graph.js';
+import type { DeclarationGraph, DeclarationGraphV2 } from '../graph.js';
 
 export type SnapshotCompleteness = 'complete' | 'partial';
 export type SnapshotWriteMode = 'create-only' | 'replace';
@@ -7,10 +7,15 @@ export interface SnapshotV1 extends DeclarationGraph {
   readonly schemaVersion: 1;
   readonly completeness: SnapshotCompleteness;
 }
+export interface SnapshotV2 extends DeclarationGraphV2 {
+  readonly schemaVersion: 2;
+  readonly completeness: SnapshotCompleteness;
+}
+export type Snapshot = SnapshotV1 | SnapshotV2;
 
 export interface SnapshotWriteRequest {
   readonly root: string;
-  readonly snapshot?: SnapshotV1;
+  readonly snapshot?: Snapshot;
   readonly path?: string;
   readonly mode: SnapshotWriteMode;
 }

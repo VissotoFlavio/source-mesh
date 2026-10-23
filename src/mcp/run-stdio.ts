@@ -5,7 +5,7 @@ import {
 import { DEFAULT_SNAPSHOT_PATH } from '../snapshot/path.js';
 import { openValidatedSnapshot } from '../snapshot/bootstrap.js';
 import { createGraphQueryService } from '../query.js';
-import { MCP_MAX_MESSAGE_BYTES } from './contracts.js';
+import { MCP_MAX_REQUEST_BYTES } from './contracts.js';
 import { createMcpServer, type McpDiagnosticSink } from './server.js';
 
 export interface McpStdioHandle {
@@ -24,7 +24,7 @@ export async function runMcpStdio(
   const snapshot = await openValidatedSnapshot(root, snapshotPath);
   const queryService = Object.freeze(createGraphQueryService(snapshot));
   const transport = new StdioServerTransport(process.stdin, process.stdout, {
-    maxBufferSize: MCP_MAX_MESSAGE_BYTES,
+    maxBufferSize: MCP_MAX_REQUEST_BYTES,
   });
   const serverHandle = serveStdio(
     () => createMcpServer(queryService, diagnostics),

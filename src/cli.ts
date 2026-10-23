@@ -13,17 +13,24 @@ import {
 } from './index.js';
 import type {
   FileRelationResponseV1,
-  FileSummaryV1,
+  FileRelationResponseV2,
   FunctionSelectorV1,
   GetSymbolResponseV1,
+  GetSymbolResponseV2,
   GraphQueryService,
+  GraphQueryServiceV2,
   NodeSummaryV1,
+  NodeSummaryV2,
   QueryErrorV1,
+  QueryErrorV2,
   QueryResponseV1,
+  QueryResponseV2,
   SearchResponseV1,
+  SearchResponseV2,
+  SearchSymbolKindV2,
+  Snapshot,
   SnapshotV1,
   SnapshotWriteResult,
-  SymbolSummaryV1,
 } from './index.js';
 import { SnapshotError } from './snapshot/types.js';
 import { runMcpStdio } from './mcp/run-stdio.js';
@@ -68,8 +75,7 @@ interface McpCommand {
 interface SymbolCommand extends CommonOptions {
   readonly command: 'symbol';
   readonly query: string;
-  readonly kind?:
-    'class' | 'interface' | 'function' | 'variable' | 'type' | 'parameter';
+  readonly kind?: SearchSymbolKindV2;
   readonly path?: string;
   readonly containerId?: string;
 }
@@ -112,7 +118,9 @@ export interface CliServices {
   readonly extractDeclarationGraph: typeof extractDeclarationGraph;
   readonly writeSnapshot: typeof writeSnapshot;
   readonly openValidatedSnapshot: typeof openValidatedSnapshot;
-  readonly createGraphQueryService: typeof createGraphQueryService;
+  readonly createGraphQueryService: (
+    snapshot: Snapshot,
+  ) => GraphQueryService | GraphQueryServiceV2;
 }
 
 const productionServices: CliServices = {
@@ -141,7 +149,11 @@ const COMMANDS = new Set<CommandName>([
   'callers',
   'callees',
 ]);
-const SEARCH_KINDS = new Set([
+const SEARCH_KINDS = new Set<SearchSymbolKindV2>([
+  'solution',
+  'project',
+  'module',
+  'namespace',
   'class',
   'interface',
   'function',
@@ -151,7 +163,12 @@ const SEARCH_KINDS = new Set([
 ]);
 const MEMBER_ROLES = new Set(['none', 'static', 'instance']);
 
-const QUERY_MESSAGES: Record<QueryErrorV1['code'], string> = {
+type QueryService = GraphQueryService | GraphQueryServiceV2;
+type QueryResponse = QueryResponseV1 | QueryResponseV2;
+type QueryError = QueryErrorV1 | QueryErrorV2;
+type NodeSummary = NodeSummaryV1 | NodeSummaryV2;
+
+const QUERY_MESSAGES: Record<QueryError['code'], string> = {
   invalid_request: 'The query request is invalid.',
   limit_exceeded: 'The query limit is outside the allowed range.',
   not_found: 'The requested graph item was not found.',
@@ -177,8 +194,9 @@ class CliFailure extends Error {
   readonly code: string;
   readonly exitCode: 1 | 2 | 3 | 4;
   readonly field: string | undefined;
-  readonly candidates: QueryErrorV1['candidates'];
+  readonly candidates: QueryError['candidates'];
   readonly totalCandidates: number | undefined;
+  readonly schemaVersion: 1 | 2 | undefined;
 
   constructor(
     code: string,
@@ -186,8 +204,9 @@ class CliFailure extends Error {
     exitCode: 1 | 2 | 3 | 4,
     field?: string,
     options?: {
-      readonly candidates?: QueryErrorV1['candidates'];
+      readonly candidates?: QueryError['candidates'];
       readonly totalCandidates?: number;
+      readonly schemaVersion?: 1 | 2;
     },
   ) {
     super(message);
@@ -197,6 +216,7 @@ class CliFailure extends Error {
     this.field = field;
     this.candidates = options?.candidates;
     this.totalCandidates = options?.totalCandidates;
+    this.schemaVersion = options?.schemaVersion;
   }
 }
 
@@ -464,8 +484,14 @@ function parseArguments(argv: readonly string[]): ParsedCommand {
       .normalize('NFC')
       .trim();
     if (query.length === 0 || query.length > 256) throw invalid('query');
-    const kind = valueOf(values, '--kind');
-    if (kind !== undefined && !SEARCH_KINDS.has(kind)) throw invalid('kind');
+    const kindValue = valueOf(values, '--kind');
+    if (
+      kindValue !== undefined &&
+      !SEARCH_KINDS.has(kindValue as SearchSymbolKindV2)
+    )
+      throw invalid('kind');
+    const kind =
+      kindValue === undefined ? undefined : (kindValue as SearchSymbolKindV2);
     const pathValue = optionalText(values, '--path', 'path');
     const relativePath =
       pathValue === undefined
@@ -541,7 +567,7 @@ function queryOptions(command: CommonOptions): {
   };
 }
 
-function queryFailure(error: QueryErrorV1): CliFailure {
+function queryFailure(error: QueryError, schemaVersion?: 1 | 2): CliFailure {
   const exitCode: 1 | 3 =
     error.code === 'invalid_request' ||
     error.code === 'limit_exceeded' ||
@@ -563,6 +589,7 @@ function queryFailure(error: QueryErrorV1): CliFailure {
       ...(error.totalCandidates === undefined
         ? {}
         : { totalCandidates: error.totalCandidates }),
+      ...(schemaVersion === undefined ? {} : { schemaVersion }),
     },
   );
 }
@@ -575,9 +602,7 @@ function snapshotFailure(error: SnapshotError): CliFailure {
   );
 }
 
-function isQueryError(
-  value: QueryResponseV1 | QueryErrorV1,
-): value is QueryErrorV1 {
+function isQueryError(value: QueryResponse | QueryError): value is QueryError {
   return 'code' in value;
 }
 
@@ -660,8 +685,8 @@ async function executeAnalyze(
 async function executeQuery(
   command: Exclude<ParsedCommand, AnalyzeCommand | McpCommand>,
   services: CliServices,
-): Promise<QueryResponseV1> {
-  let snapshot: SnapshotV1;
+): Promise<QueryResponse> {
+  let snapshot: Snapshot;
   try {
     snapshot = await services.openValidatedSnapshot(
       command.root,
@@ -671,11 +696,13 @@ async function executeQuery(
     if (error instanceof SnapshotError) throw snapshotFailure(error);
     throw new CliFailure('internal', QUERY_MESSAGES.internal, 1);
   }
-  const service: GraphQueryService = services.createGraphQueryService(snapshot);
-  let result: QueryResponseV1 | QueryErrorV1;
+  const service: QueryService = services.createGraphQueryService(snapshot);
+  let result: QueryResponse | QueryError;
   const options = queryOptions(command);
   if (command.command === 'symbol') {
-    result = service.searchSymbols({
+    const searchSymbols =
+      service.searchSymbols as GraphQueryServiceV2['searchSymbols'];
+    result = searchSymbols({
       operation: 'searchSymbols',
       query: command.query,
       ...(command.kind === undefined ? {} : { kind: command.kind }),
@@ -723,7 +750,7 @@ async function executeQuery(
   } else {
     throw new CliFailure('internal', QUERY_MESSAGES.internal, 1);
   }
-  if (isQueryError(result)) throw queryFailure(result);
+  if (isQueryError(result)) throw queryFailure(result, snapshot.schemaVersion);
   return result;
 }
 
@@ -731,20 +758,18 @@ async function executeMcp(command: McpCommand): Promise<void> {
   await runMcpStdio(command.root, command.snapshot);
 }
 
-function summaryLine(item: NodeSummaryV1): string {
+function summaryLine(item: NodeSummary): string {
   if (item.kind === 'file') return `${item.kind} ${item.path} [${item.id}]`;
   return `${item.kind} ${item.qualifiedName} (${item.path}) [${item.id}]`;
 }
 
-function pageLines(
-  items: readonly (FileSummaryV1 | SymbolSummaryV1)[],
-): string[] {
+function pageLines(items: readonly NodeSummary[]): string[] {
   return items.map(summaryLine);
 }
 
-function humanQuery(command: QueryCommand, response: QueryResponseV1): string {
+function humanQuery(command: QueryCommand, response: QueryResponse): string {
   if (response.operation === 'getSymbol') {
-    const details = response as GetSymbolResponseV1;
+    const details = response as GetSymbolResponseV1 | GetSymbolResponseV2;
     return [
       summaryLine(details.symbol),
       `children: ${details.children.items.length}/${details.children.total}`,
@@ -752,11 +777,20 @@ function humanQuery(command: QueryCommand, response: QueryResponseV1): string {
     ].join('\n');
   }
   const page = response.page as
-    SearchResponseV1['page'] | FileRelationResponseV1['page'];
+    | SearchResponseV1['page']
+    | SearchResponseV2['page']
+    | FileRelationResponseV1['page']
+    | FileRelationResponseV2['page'];
   return [
     `${command}: ${page.items.length}/${page.total}`,
     ...pageLines(page.items),
   ].join('\n');
+}
+
+function querySchemaVersion(response: QueryResponse): 1 | 2 {
+  return response.operation === 'getSymbol'
+    ? response.schemaVersion
+    : response.page.schemaVersion;
 }
 
 function emitSuccess(
@@ -765,8 +799,12 @@ function emitSuccess(
   io: CliIO,
 ): void {
   if (command.output === 'json') {
+    const schemaVersion =
+      command.command === 'analyze'
+        ? 1
+        : querySchemaVersion(result as QueryResponse);
     io.stdout(
-      `${JSON.stringify({ schemaVersion: 1, command: command.command, result })}\n`,
+      `${JSON.stringify({ schemaVersion, command: command.command, result })}\n`,
     );
     return;
   }
@@ -776,7 +814,7 @@ function emitSuccess(
       `Snapshot written to ${analysis.snapshotPath} (${analysis.completeness}; ${analysis.bytes} bytes; ${analysis.digest})\n`,
     );
   } else {
-    io.stdout(`${humanQuery(command.command, result as QueryResponseV1)}\n`);
+    io.stdout(`${humanQuery(command.command, result as QueryResponse)}\n`);
   }
 }
 
@@ -785,7 +823,8 @@ function errorEnvelope(
   failure: CliFailure,
 ): Record<string, unknown> {
   return {
-    schemaVersion: 1,
+    schemaVersion:
+      failure.schemaVersion ?? failure.candidates?.schemaVersion ?? 1,
     command,
     error: {
       code: failure.code,

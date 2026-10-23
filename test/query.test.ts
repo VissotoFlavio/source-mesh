@@ -4,13 +4,18 @@ import {
   createGraphQueryService,
   decode,
   edgeId,
+  edgeIdV2,
   encode,
   fileId,
+  fileIdV2,
   nodeId,
+  nodeIdV2,
   repositoryId,
+  repositoryIdV2,
   type QueryErrorV1,
   type QueryResponseV1,
   type SnapshotV1,
+  type SnapshotV2,
   type NodeV1,
 } from '../src/index.js';
 
@@ -192,7 +197,7 @@ function emptyValidatedSnapshot(): SnapshotV1 {
       edges: [],
       diagnostics: [],
     }),
-  );
+  ) as SnapshotV1;
 }
 
 function withUnicodeSymbol(snapshot: SnapshotV1): SnapshotV1 {
@@ -992,5 +997,109 @@ test('large counterpart relations page through the terminal result repeatedly', 
       'listCallees',
     ),
     terminal,
+  );
+});
+
+test('schema-v2 queries expose versioned pages and container nodes', () => {
+  const repository = {
+    id: repositoryIdV2(),
+    kind: 'repository' as const,
+    root: '.' as const,
+    name: 'repository',
+  };
+  const project = {
+    id: nodeIdV2(
+      'project',
+      'App.csproj',
+      `${repository.id}#scope=root`,
+      'App',
+      'App',
+      'none',
+    ),
+    kind: 'project' as const,
+    name: 'App',
+    path: 'App.csproj',
+    qualifiedName: 'App',
+    memberRole: 'none' as const,
+  };
+  const file = {
+    id: fileIdV2('Program.cs'),
+    kind: 'file' as const,
+    name: 'Program.cs',
+    path: 'Program.cs',
+  };
+  const module = {
+    id: nodeIdV2(
+      'module',
+      file.path,
+      `${file.id}#scope=root`,
+      file.path,
+      file.path,
+      'none',
+    ),
+    kind: 'module' as const,
+    name: file.path,
+    path: file.path,
+    qualifiedName: file.path,
+    memberRole: 'none' as const,
+  };
+  const namespace = {
+    id: nodeIdV2(
+      'namespace',
+      file.path,
+      `${module.id}#scope=module:${module.qualifiedName}`,
+      'App',
+      'App',
+      'none',
+    ),
+    kind: 'namespace' as const,
+    name: 'App',
+    path: file.path,
+    qualifiedName: 'App',
+    memberRole: 'none' as const,
+  };
+  const contains = (from: { id: string }, to: { id: string }) => ({
+    id: edgeIdV2('contains', from.id, to.id),
+    kind: 'contains' as const,
+    from: from.id,
+    to: to.id,
+    resolutionStatus: 'resolved' as const,
+  });
+  const snapshot: SnapshotV2 = {
+    schemaVersion: 2,
+    completeness: 'complete',
+    repository: { root: '.', name: 'repository' },
+    nodes: [repository, project, file, module, namespace],
+    edges: [
+      contains(repository, project),
+      contains(project, file),
+      contains(file, module),
+      contains(module, namespace),
+    ],
+    diagnostics: [],
+  };
+  const service = createGraphQueryService(snapshot);
+  const search = service.searchSymbols({
+    operation: 'searchSymbols',
+    query: 'App',
+    kind: 'project',
+  });
+  assert.ok(!('code' in search) && search.operation === 'searchSymbols');
+  if ('code' in search || search.operation !== 'searchSymbols')
+    throw new Error('Expected a search response.');
+  assert.equal(search.page.schemaVersion, 2);
+  assert.equal(search.page.items[0]?.kind, 'project');
+  const details = service.getSymbol({
+    operation: 'getSymbol',
+    nodeId: project.id,
+  });
+  assert.ok(!('code' in details) && details.operation === 'getSymbol');
+  if ('code' in details || details.operation !== 'getSymbol')
+    throw new Error('Expected a symbol response.');
+  assert.equal(details.schemaVersion, 2);
+  assert.equal(details.children.schemaVersion, 2);
+  assert.deepEqual(
+    details.children.items.map((item) => item.kind),
+    ['file'],
   );
 });

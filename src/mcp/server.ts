@@ -1,13 +1,18 @@
 import { McpServer, type CallToolResult } from '@modelcontextprotocol/server';
 import type {
   GraphQueryService,
+  GraphQueryServiceV2,
   QueryErrorV1,
+  QueryErrorV2,
   QueryResponseV1,
+  QueryResponseV2,
 } from '../query.js';
 import {
   callRelationRequest,
   fileRelationRequest,
   getSymbolRequest,
+  MCP_FRAME_OVERHEAD_BYTES,
+  MCP_MAX_MESSAGE_BYTES,
   MCP_SERVER_NAME,
   MCP_SERVER_VERSION,
   QUERY_ERROR_MESSAGES,
@@ -30,19 +35,36 @@ function asStructured(value: unknown): Record<string, unknown> {
 }
 
 function wireResult(value: unknown, isError = false): CallToolResult {
-  return {
+  const serialized = JSON.stringify(value);
+  const response: CallToolResult = {
     content: [
       {
         type: 'text',
-        text: JSON.stringify(value),
+        text: serialized,
       },
     ],
     structuredContent: asStructured(value),
     ...(isError ? { isError: true } : {}),
   };
+  if (
+    Buffer.byteLength(JSON.stringify(response), 'utf8') >
+    MCP_MAX_MESSAGE_BYTES - MCP_FRAME_OVERHEAD_BYTES
+  ) {
+    const bounded = {
+      code: 'internal',
+      message: QUERY_ERROR_MESSAGES.internal,
+    };
+    const boundedText = JSON.stringify(bounded);
+    return {
+      content: [{ type: 'text', text: boundedText }],
+      structuredContent: bounded,
+      isError: true,
+    };
+  }
+  return response;
 }
 
-function queryErrorResult(error: QueryErrorV1): CallToolResult {
+function queryErrorResult(error: QueryErrorV1 | QueryErrorV2): CallToolResult {
   const safe: Record<string, unknown> = {
     code: error.code,
     message: QUERY_ERROR_MESSAGES[error.code],
@@ -66,14 +88,18 @@ function internalError(diagnostics: McpDiagnosticSink): CallToolResult {
   );
 }
 
-function queryResult(result: QueryResponseV1 | QueryErrorV1): CallToolResult {
+function queryResult(
+  result: QueryResponseV1 | QueryErrorV1 | QueryResponseV2 | QueryErrorV2,
+): CallToolResult {
   return 'code' in result ? queryErrorResult(result) : wireResult(result);
 }
 
 async function runTool<T>(
   toolName: McpToolName,
   input: unknown,
-  execute: (validated: T) => QueryResponseV1 | QueryErrorV1,
+  execute: (
+    validated: T,
+  ) => QueryResponseV1 | QueryErrorV1 | QueryResponseV2 | QueryErrorV2,
   diagnostics: McpDiagnosticSink,
 ): Promise<CallToolResult> {
   try {
@@ -89,9 +115,21 @@ async function runTool<T>(
 }
 
 export function createMcpServer(
-  queryService: GraphQueryService,
+  queryService: GraphQueryService | GraphQueryServiceV2,
   diagnostics: McpDiagnosticSink = () => undefined,
 ): McpServer {
+  const query = queryService as unknown as {
+    searchSymbols: (
+      request: Parameters<GraphQueryServiceV2['searchSymbols']>[0],
+    ) => QueryResponseV1 | QueryErrorV1 | QueryResponseV2 | QueryErrorV2;
+    getSymbol: (
+      request: Parameters<GraphQueryServiceV2['getSymbol']>[0],
+    ) => QueryResponseV1 | QueryErrorV1 | QueryResponseV2 | QueryErrorV2;
+    listFileDependencies: GraphQueryService['listFileDependencies'];
+    listFileDependents: GraphQueryService['listFileDependents'];
+    listCallers: GraphQueryService['listCallers'];
+    listCallees: GraphQueryService['listCallees'];
+  };
   const server = new McpServer(
     { name: MCP_SERVER_NAME, version: MCP_SERVER_VERSION },
     {
@@ -114,7 +152,7 @@ export function createMcpServer(
       runTool<SearchToolInput>(
         'searchSymbols',
         input,
-        (validated) => queryService.searchSymbols(searchRequest(validated)),
+        (validated) => query.searchSymbols(searchRequest(validated)),
         diagnostics,
       ),
   );
@@ -133,7 +171,7 @@ export function createMcpServer(
       runTool<GetSymbolToolInput>(
         'getSymbol',
         input,
-        (validated) => queryService.getSymbol(getSymbolRequest(validated)),
+        (validated) => query.getSymbol(getSymbolRequest(validated)),
         diagnostics,
       ),
   );
@@ -153,7 +191,7 @@ export function createMcpServer(
         'listFileDependencies',
         input,
         (validated) =>
-          queryService.listFileDependencies(
+          query.listFileDependencies(
             fileRelationRequest('listFileDependencies', validated),
           ),
         diagnostics,
@@ -175,7 +213,7 @@ export function createMcpServer(
         'listFileDependents',
         input,
         (validated) =>
-          queryService.listFileDependents(
+          query.listFileDependents(
             fileRelationRequest('listFileDependents', validated),
           ),
         diagnostics,
@@ -197,9 +235,7 @@ export function createMcpServer(
         'listCallers',
         input,
         (validated) =>
-          queryService.listCallers(
-            callRelationRequest('listCallers', validated),
-          ),
+          query.listCallers(callRelationRequest('listCallers', validated)),
         diagnostics,
       ),
   );
@@ -219,9 +255,7 @@ export function createMcpServer(
         'listCallees',
         input,
         (validated) =>
-          queryService.listCallees(
-            callRelationRequest('listCallees', validated),
-          ),
+          query.listCallees(callRelationRequest('listCallees', validated)),
         diagnostics,
       ),
   );
