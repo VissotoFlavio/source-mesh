@@ -101,3 +101,12 @@ export type {
   SymbolSelectorV1,
   SymbolSummaryV1,
 } from './query.js';
+
+export { createMcpServer } from './mcp/server.js';
+export {
+  MCP_MAX_MESSAGE_BYTES,
+  MCP_SERVER_NAME,
+  MCP_SERVER_VERSION,
+  MCP_TOOL_NAMES,
+  READ_ONLY_ANNOTATIONS,
+} from './mcp/contracts.js';

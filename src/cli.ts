@@ -26,9 +26,11 @@ import type {
   SymbolSummaryV1,
 } from './index.js';
 import { SnapshotError } from './snapshot/types.js';
+import { runMcpStdio } from './mcp/run-stdio.js';
 
 type CommandName =
   | 'analyze'
+  | 'mcp'
   | 'symbol'
   | 'details'
   | 'dependencies'
@@ -36,7 +38,7 @@ type CommandName =
   | 'callers'
   | 'callees';
 type OutputFormat = 'human' | 'json';
-type QueryCommand = Exclude<CommandName, 'analyze'>;
+type QueryCommand = Exclude<CommandName, 'analyze' | 'mcp'>;
 
 interface CommonOptions {
   readonly command: QueryCommand;
@@ -55,6 +57,12 @@ interface AnalyzeCommand {
   readonly tsconfig?: string;
   readonly output: OutputFormat;
   readonly overwrite: boolean;
+}
+
+interface McpCommand {
+  readonly command: 'mcp';
+  readonly root: string;
+  readonly snapshot: string;
 }
 
 interface SymbolCommand extends CommonOptions {
@@ -87,6 +95,7 @@ interface CallRelationCommand extends CommonOptions {
 
 type ParsedCommand =
   | AnalyzeCommand
+  | McpCommand
   | SymbolCommand
   | DetailsCommand
   | FileRelationCommand
@@ -124,6 +133,7 @@ const DEFAULT_SNAPSHOT = '.sourcemesh/graph.json';
 const NODE_ID = /^n:[0-9a-f]{64}$/u;
 const COMMANDS = new Set<CommandName>([
   'analyze',
+  'mcp',
   'symbol',
   'details',
   'dependencies',
@@ -248,7 +258,7 @@ function helpText(command?: CommandName): string {
     return [
       'SourceMesh local analysis CLI',
       '',
-      'Commands: analyze, symbol, details, dependencies, dependents, callers, callees',
+      'Commands: analyze, mcp, symbol, details, dependencies, dependents, callers, callees',
       'Use "sourcemesh <command> --help" for command syntax.',
       '',
       'Exit codes: 0 success/help, 1 operational failure, 2 invalid arguments,',
@@ -257,6 +267,7 @@ function helpText(command?: CommandName): string {
   const usage: Record<CommandName, string> = {
     analyze:
       'sourcemesh analyze --root <path> [--snapshot <relative>] [--tsconfig <relative>] [--output human|json] [--overwrite]',
+    mcp: 'sourcemesh mcp --root <path> [--snapshot <relative>]',
     symbol:
       'sourcemesh symbol --root <path> [--snapshot <relative>] --query <text> [--kind <kind>] [--path <relative>] [--container-id <node-id>] [--limit <1..100>] [--cursor <token>] [--allow-partial] [--output human|json]',
     details:
@@ -281,6 +292,11 @@ function optionKinds(command: CommandName): ReadonlyMap<string, OptionKind> {
     ['--snapshot', 'value'],
     ['--output', 'value'],
   ];
+  if (command === 'mcp')
+    return new Map([
+      ['--root', 'value'],
+      ['--snapshot', 'value'],
+    ]);
   if (command === 'analyze')
     return new Map([
       ...common,
@@ -427,6 +443,18 @@ function parseArguments(argv: readonly string[]): ParsedCommand {
       ...(tsconfig === undefined ? {} : { tsconfig }),
       output: outputValue,
       overwrite: values.has('--overwrite'),
+    };
+  }
+
+  if (command === 'mcp') {
+    const root = requiredValue(values, '--root', 'root');
+    const snapshotValue = valueOf(values, '--snapshot');
+    return {
+      command,
+      root,
+      snapshot: normalizeSnapshotPath(
+        snapshotValue === undefined ? DEFAULT_SNAPSHOT : snapshotValue,
+      ),
     };
   }
 
@@ -630,7 +658,7 @@ async function executeAnalyze(
 }
 
 async function executeQuery(
-  command: Exclude<ParsedCommand, AnalyzeCommand>,
+  command: Exclude<ParsedCommand, AnalyzeCommand | McpCommand>,
   services: CliServices,
 ): Promise<QueryResponseV1> {
   let snapshot: SnapshotV1;
@@ -699,6 +727,10 @@ async function executeQuery(
   return result;
 }
 
+async function executeMcp(command: McpCommand): Promise<void> {
+  await runMcpStdio(command.root, command.snapshot);
+}
+
 function summaryLine(item: NodeSummaryV1): string {
   if (item.kind === 'file') return `${item.kind} ${item.path} [${item.id}]`;
   return `${item.kind} ${item.qualifiedName} (${item.path}) [${item.id}]`;
@@ -727,7 +759,11 @@ function humanQuery(command: QueryCommand, response: QueryResponseV1): string {
   ].join('\n');
 }
 
-function emitSuccess(command: ParsedCommand, result: unknown, io: CliIO): void {
+function emitSuccess(
+  command: Exclude<ParsedCommand, McpCommand>,
+  result: unknown,
+  io: CliIO,
+): void {
   if (command.output === 'json') {
     io.stdout(
       `${JSON.stringify({ schemaVersion: 1, command: command.command, result })}\n`,
@@ -805,6 +841,10 @@ export async function main(
   }
   try {
     const parsed = parseArguments(argv);
+    if (parsed.command === 'mcp') {
+      await executeMcp(parsed);
+      return 0;
+    }
     const result =
       parsed.command === 'analyze'
         ? await executeAnalyze(parsed, services)

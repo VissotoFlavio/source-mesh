@@ -68,6 +68,32 @@ invalid arguments return `2`, typed query target/request failures return `3`, an
 an existing create-only snapshot returns `4`. Operational and analysis failures
 return `1`. Human output is concise and is not the automation contract.
 
+## Local MCP server
+
+SourceMesh can expose the pinned snapshot through a read-only MCP server over the
+local process pipes:
+
+```sh
+node dist/cli.js mcp --root /path/to/repository
+node dist/cli.js mcp --root /path/to/repository --snapshot .sourcemesh/graph.json
+```
+
+The server loads one validated snapshot before opening `stdio`, constructs one
+immutable query service, and registers exactly these bounded tools:
+`searchSymbols`, `getSymbol`, `listFileDependencies`, `listFileDependents`,
+`listCallers`, and `listCallees`. Query text is limited to 256 UTF-16 code
+units, limits are `1..100`, cursors are limited to 4096 bytes, and all tool
+objects reject unknown properties. The server has no network listener,
+resources, prompts, or write tools. MCP protocol messages exclusively use
+stdout; startup, lifecycle, and sanitized error diagnostics use stderr.
+
+Configure an MCP host to start `node` directly with `dist/cli.js mcp` and an
+explicit repository root. SourceMesh sends only requested bounded graph
+responses through the local pipe. The connected editor, agent, or model host
+may process or transmit tool schemas, arguments, and results under its own
+privacy and data-processing policy; local `stdio` is not a guarantee that the
+host or its provider remains local.
+
 The CLI prints only approved graph summaries, repository-relative paths, snapshot
 metadata, and sanitized diagnostics. It never prints source text, absolute paths,
 compiler objects, stacks, secrets, or environment data. Runtime analysis uses
