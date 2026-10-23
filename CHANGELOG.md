@@ -39,6 +39,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Changed
 
+- Mantidas raízes canônicas consistentes entre descoberta, carregamento e
+  extração no Windows, incluindo regressão para aliases de diretório (#38).
+
 - Clarified ADR 0002 graph roots, module extensions, partial-result opt-in, query
   DTOs, byte determinism, overload identity, and fail-closed path containment.
 - Finalized structural edge semantics, NodeNext no-`tsconfig` behavior, compiler

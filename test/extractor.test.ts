@@ -181,6 +181,42 @@ test('emits snapshot-valid identities for interface methods and properties', () 
   );
 });
 
+test('canonicalizes an aliased repository root before matching program sources', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sourcemesh-root-'));
+  fs.writeFileSync(
+    path.join(root, 'index.ts'),
+    'export function run() { return true; }\n',
+    'utf8',
+  );
+  const parent = fs.mkdtempSync(path.join(os.tmpdir(), 'sourcemesh-alias-'));
+  const alias = path.join(parent, 'repository');
+  try {
+    fs.symlinkSync(
+      root,
+      alias,
+      process.platform === 'win32' ? 'junction' : 'dir',
+    );
+  } catch {
+    t.skip('filesystem does not support directory aliases');
+    return;
+  }
+
+  const loaded = loadProject({
+    repositoryRoot: alias,
+    approvedFiles: ['index.ts'],
+  });
+  assert.ok(loaded.project, JSON.stringify(loaded.diagnostics));
+  const graph = extractDeclarationGraph({
+    repositoryRoot: alias,
+    project: loaded.project,
+  });
+
+  assert.deepEqual(graph.diagnostics, []);
+  assert.ok(
+    graph.nodes.some((node) => node.kind === 'function' && node.name === 'run'),
+  );
+});
+
 test('identity and ordering are independent of approved root order and comments', () => {
   const first = project({
     'src/a.ts': 'export function run(value: string) { return value; }\n',
