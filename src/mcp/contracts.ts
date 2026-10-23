@@ -9,9 +9,13 @@ import type {
   FileRelationRequestV1,
   FunctionSelectorV1,
   GetSymbolRequestV1,
+  GetSymbolRequestV2,
   QueryErrorV1,
+  QueryErrorV2,
   QueryResponseV1,
+  QueryResponseV2,
   SearchRequestV1,
+  SearchRequestV2,
   SearchSymbolKindV1,
   SymbolKindV1,
 } from '../query.js';
@@ -19,6 +23,8 @@ import type {
 export const MCP_SERVER_NAME = 'SourceMesh';
 export const MCP_SERVER_VERSION = '0.0.0';
 export const MCP_MAX_MESSAGE_BYTES = 1024 * 1024;
+export const MCP_MAX_REQUEST_BYTES = 64 * 1024;
+export const MCP_FRAME_OVERHEAD_BYTES = MCP_MAX_REQUEST_BYTES + 1024;
 
 export const MCP_TOOL_NAMES = [
   'searchSymbols',
@@ -31,13 +37,17 @@ export const MCP_TOOL_NAMES = [
 
 export type McpToolName = (typeof MCP_TOOL_NAMES)[number];
 
-export type SearchToolInput = Omit<SearchRequestV1, 'operation'>;
-export type GetSymbolToolInput = Omit<GetSymbolRequestV1, 'operation'>;
+export type SearchToolInput =
+  Omit<SearchRequestV1, 'operation'> | Omit<SearchRequestV2, 'operation'>;
+export type GetSymbolToolInput =
+  Omit<GetSymbolRequestV1, 'operation'> | Omit<GetSymbolRequestV2, 'operation'>;
 export type FileRelationToolInput = Omit<FileRelationRequestV1, 'operation'>;
 export type CallRelationToolInput = Omit<CallRelationRequestV1, 'operation'>;
-export type McpToolError = Omit<QueryErrorV1, 'message'> & {
-  readonly message: string;
-};
+export type McpToolError =
+  | (Omit<QueryErrorV1, 'message'> & {
+      readonly message: string;
+    })
+  | (Omit<QueryErrorV2, 'message'> & { readonly message: string });
 
 const NODE_ID_PATTERN = '^n:[0-9a-f]{64}$';
 const RELATIVE_PATH_PATTERN =
@@ -46,6 +56,7 @@ const CURSOR_SCHEMA = { type: 'string', maxLength: 4096 };
 const LIMIT_SCHEMA = { type: 'integer', minimum: 1, maximum: 100 };
 const ALLOW_PARTIAL_SCHEMA = { type: 'boolean' };
 const NODE_ID_SCHEMA = { type: 'string', pattern: NODE_ID_PATTERN };
+const SCHEMA_VERSION_SCHEMA = { oneOf: [{ const: 1 }, { const: 2 }] };
 const PATH_SCHEMA = { type: 'string', pattern: RELATIVE_PATH_PATTERN };
 const TEXT_SCHEMA = { type: 'string' };
 
@@ -53,7 +64,10 @@ const selectorProperties = {
   kind: {
     type: 'string',
     enum: [
+      'solution',
+      'project',
       'module',
+      'namespace',
       'class',
       'interface',
       'function',
@@ -90,11 +104,6 @@ const queryOptionsProperties = {
   limit: LIMIT_SCHEMA,
   cursor: CURSOR_SCHEMA,
   allowPartial: ALLOW_PARTIAL_SCHEMA,
-} as const;
-
-const queryResponseProperties = {
-  schemaVersion: { const: 1 },
-  completeness: { type: 'string', enum: ['complete', 'partial'] },
 } as const;
 
 const locationSchema = {
@@ -146,7 +155,10 @@ const symbolSummarySchema = {
     kind: {
       type: 'string',
       enum: [
+        'solution',
+        'project',
         'module',
+        'namespace',
         'class',
         'interface',
         'function',
@@ -163,23 +175,60 @@ const symbolSummarySchema = {
   },
 } as const;
 
-const nodeSummarySchema = {
+const symbolSummaryV1Schema = {
+  ...symbolSummarySchema,
+  properties: {
+    ...symbolSummarySchema.properties,
+    kind: {
+      type: 'string',
+      enum: [
+        'module',
+        'class',
+        'interface',
+        'function',
+        'variable',
+        'type',
+        'parameter',
+      ],
+    },
+  },
+} as const;
+
+const nodeSummaryV1Schema = {
+  oneOf: [fileSummarySchema, symbolSummaryV1Schema],
+} as const;
+const nodeSummaryV2Schema = {
   oneOf: [fileSummarySchema, symbolSummarySchema],
 } as const;
 
-function pageSchema(itemSchema: JsonSchemaType): JsonSchemaType {
+function pageSchema(
+  itemSchema: JsonSchemaType,
+  schemaVersion: JsonSchemaType = SCHEMA_VERSION_SCHEMA,
+): JsonSchemaType {
   return {
     type: 'object',
     additionalProperties: false,
     required: ['schemaVersion', 'completeness', 'items', 'total', 'truncated'],
     properties: {
-      schemaVersion: { const: 1 },
+      schemaVersion,
       completeness: { type: 'string', enum: ['complete', 'partial'] },
       items: { type: 'array', items: itemSchema },
       total: { type: 'integer', minimum: 0 },
       truncated: { type: 'boolean' },
       continuation: CURSOR_SCHEMA,
     },
+  };
+}
+
+function versionedPageSchema(
+  v1ItemSchema: JsonSchemaType,
+  v2ItemSchema: JsonSchemaType,
+): JsonSchemaType {
+  return {
+    oneOf: [
+      pageSchema(v1ItemSchema, { const: 1 }),
+      pageSchema(v2ItemSchema, { const: 2 }),
+    ],
   };
 }
 
@@ -220,7 +269,7 @@ const errorSchema = {
         'allowPartial',
       ],
     },
-    candidates: pageSchema(nodeSummarySchema),
+    candidates: versionedPageSchema(nodeSummaryV1Schema, nodeSummaryV2Schema),
     totalCandidates: { type: 'integer', minimum: 0 },
   },
 } as const;
@@ -280,7 +329,18 @@ const searchInputSchema = {
     query: { type: 'string', minLength: 1, maxLength: 256 },
     kind: {
       type: 'string',
-      enum: ['class', 'interface', 'function', 'variable', 'type', 'parameter'],
+      enum: [
+        'solution',
+        'project',
+        'module',
+        'namespace',
+        'class',
+        'interface',
+        'function',
+        'variable',
+        'type',
+        'parameter',
+      ],
     },
     path: PATH_SCHEMA,
     containerId: NODE_ID_SCHEMA,
@@ -349,11 +409,11 @@ const searchResponseSchema = {
   required: ['operation', 'page'],
   properties: {
     operation: { const: 'searchSymbols' },
-    page: pageSchema(symbolSummarySchema),
+    page: versionedPageSchema(symbolSummaryV1Schema, symbolSummarySchema),
   },
 } as const;
 
-const getSymbolResponseSchema = {
+const getSymbolResponseV1Schema = {
   type: 'object',
   additionalProperties: false,
   required: [
@@ -365,71 +425,115 @@ const getSymbolResponseSchema = {
   ],
   properties: {
     operation: { const: 'getSymbol' },
-    ...queryResponseProperties,
-    symbol: symbolSummarySchema,
-    container: nodeSummarySchema,
-    children: pageSchema(symbolSummarySchema),
+    schemaVersion: { const: 1 },
+    completeness: { type: 'string', enum: ['complete', 'partial'] },
+    symbol: symbolSummaryV1Schema,
+    container: nodeSummaryV1Schema,
+    children: pageSchema(symbolSummaryV1Schema, { const: 1 }),
   },
+} as const;
+const getSymbolResponseV2Schema = {
+  ...getSymbolResponseV1Schema,
+  properties: {
+    ...getSymbolResponseV1Schema.properties,
+    schemaVersion: { const: 2 },
+    symbol: symbolSummarySchema,
+    container: nodeSummaryV2Schema,
+    children: pageSchema(nodeSummaryV2Schema, { const: 2 }),
+  },
+} as const;
+const getSymbolResponseSchema = {
+  oneOf: [getSymbolResponseV1Schema, getSymbolResponseV2Schema],
 } as const;
 
 function relationResponseSchema(
   operation:
     FileRelationRequestV1['operation'] | CallRelationRequestV1['operation'],
-  itemSchema: JsonSchemaType,
+  v1ItemSchema: JsonSchemaType,
+  v2ItemSchema: JsonSchemaType,
 ): JsonSchemaType {
   return {
-    type: 'object',
-    additionalProperties: false,
-    required: ['operation', 'page'],
-    properties: {
-      operation: { const: operation },
-      page: pageSchema(itemSchema),
-    },
+    oneOf: [
+      {
+        type: 'object',
+        additionalProperties: false,
+        required: ['operation', 'page'],
+        properties: {
+          operation: { const: operation },
+          page: pageSchema(v1ItemSchema, { const: 1 }),
+        },
+      },
+      {
+        type: 'object',
+        additionalProperties: false,
+        required: ['operation', 'page'],
+        properties: {
+          operation: { const: operation },
+          page: pageSchema(v2ItemSchema, { const: 2 }),
+        },
+      },
+    ],
   };
 }
 
 export const TOOL_SCHEMAS = {
   searchSymbols: {
     input: inputContracts.searchSymbols.advertised,
-    output: sanitizedSchema<QueryResponseV1 | McpToolError>(
+    output: sanitizedSchema<QueryResponseV1 | QueryResponseV2 | McpToolError>(
       responseSchema(searchResponseSchema),
     ),
   },
   getSymbol: {
     input: inputContracts.getSymbol.advertised,
-    output: sanitizedSchema<QueryResponseV1 | McpToolError>(
+    output: sanitizedSchema<QueryResponseV1 | QueryResponseV2 | McpToolError>(
       responseSchema(getSymbolResponseSchema),
     ),
   },
   listFileDependencies: {
     input: inputContracts.listFileDependencies.advertised,
-    output: sanitizedSchema<QueryResponseV1 | McpToolError>(
+    output: sanitizedSchema<QueryResponseV1 | QueryResponseV2 | McpToolError>(
       responseSchema(
-        relationResponseSchema('listFileDependencies', fileSummarySchema),
+        relationResponseSchema(
+          'listFileDependencies',
+          fileSummarySchema,
+          fileSummarySchema,
+        ),
       ),
     ),
   },
   listFileDependents: {
     input: inputContracts.listFileDependents.advertised,
-    output: sanitizedSchema<QueryResponseV1 | McpToolError>(
+    output: sanitizedSchema<QueryResponseV1 | QueryResponseV2 | McpToolError>(
       responseSchema(
-        relationResponseSchema('listFileDependents', fileSummarySchema),
+        relationResponseSchema(
+          'listFileDependents',
+          fileSummarySchema,
+          fileSummarySchema,
+        ),
       ),
     ),
   },
   listCallers: {
     input: inputContracts.listCallers.advertised,
-    output: sanitizedSchema<QueryResponseV1 | McpToolError>(
+    output: sanitizedSchema<QueryResponseV1 | QueryResponseV2 | McpToolError>(
       responseSchema(
-        relationResponseSchema('listCallers', symbolSummarySchema),
+        relationResponseSchema(
+          'listCallers',
+          symbolSummaryV1Schema,
+          symbolSummarySchema,
+        ),
       ),
     ),
   },
   listCallees: {
     input: inputContracts.listCallees.advertised,
-    output: sanitizedSchema<QueryResponseV1 | McpToolError>(
+    output: sanitizedSchema<QueryResponseV1 | QueryResponseV2 | McpToolError>(
       responseSchema(
-        relationResponseSchema('listCallees', symbolSummarySchema),
+        relationResponseSchema(
+          'listCallees',
+          symbolSummaryV1Schema,
+          symbolSummarySchema,
+        ),
       ),
     ),
   },
@@ -515,13 +619,15 @@ export const QUERY_ERROR_MESSAGES: Record<QueryErrorV1['code'], string> = {
   internal: 'The operation could not be completed.',
 };
 
-export function searchRequest(input: SearchToolInput): SearchRequestV1 {
+export function searchRequest(
+  input: SearchToolInput,
+): SearchRequestV1 | SearchRequestV2 {
   return { operation: 'searchSymbols', ...input };
 }
 
 export function getSymbolRequest(
   input: GetSymbolToolInput,
-): GetSymbolRequestV1 {
+): GetSymbolRequestV1 | GetSymbolRequestV2 {
   return { operation: 'getSymbol', ...input };
 }
 

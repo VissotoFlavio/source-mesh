@@ -18,8 +18,18 @@ import {
   snapshotDigest,
   writeSnapshot,
   type SnapshotV1,
+  type SnapshotV2,
 } from '../src/index.js';
-import { edgeId, fileId, nodeId, repositoryId } from '../src/graph.js';
+import {
+  edgeId,
+  edgeIdV2,
+  fileId,
+  fileIdV2,
+  nodeId,
+  nodeIdV2,
+  repositoryId,
+  repositoryIdV2,
+} from '../src/graph.js';
 
 const roots: string[] = [];
 afterEach(async () => {
@@ -262,5 +272,230 @@ describe('schema-v1 snapshots', () => {
       )
         throw error;
     }
+  });
+});
+
+function snapshotV2(): SnapshotV2 {
+  const repository = {
+    id: repositoryIdV2(),
+    kind: 'repository' as const,
+    root: '.' as const,
+    name: 'repository',
+  };
+  const solution = {
+    id: nodeIdV2(
+      'solution',
+      'src/App.sln',
+      `${repository.id}#scope=root`,
+      'App',
+      'App',
+      'none',
+    ),
+    kind: 'solution' as const,
+    name: 'App',
+    path: 'src/App.sln',
+    qualifiedName: 'App',
+    memberRole: 'none' as const,
+  };
+  const project = {
+    id: nodeIdV2(
+      'project',
+      'src/App/App.csproj',
+      `${solution.id}#scope=solution:${solution.qualifiedName}`,
+      'App',
+      'App',
+      'none',
+    ),
+    kind: 'project' as const,
+    name: 'App',
+    path: 'src/App/App.csproj',
+    qualifiedName: 'App',
+    memberRole: 'none' as const,
+  };
+  const library = {
+    id: nodeIdV2(
+      'project',
+      'src/Library/Library.csproj',
+      `${solution.id}#scope=solution:${solution.qualifiedName}`,
+      'Library',
+      'Library',
+      'none',
+    ),
+    kind: 'project' as const,
+    name: 'Library',
+    path: 'src/Library/Library.csproj',
+    qualifiedName: 'Library',
+    memberRole: 'none' as const,
+  };
+  const file = {
+    id: fileIdV2('src/App/Program.cs'),
+    kind: 'file' as const,
+    name: 'Program.cs',
+    path: 'src/App/Program.cs',
+  };
+  const module = {
+    id: nodeIdV2(
+      'module',
+      file.path,
+      `${file.id}#scope=root`,
+      file.path,
+      file.path,
+      'none',
+    ),
+    kind: 'module' as const,
+    name: file.path,
+    path: file.path,
+    qualifiedName: file.path,
+    memberRole: 'none' as const,
+  };
+  const namespace = {
+    id: nodeIdV2(
+      'namespace',
+      file.path,
+      `${module.id}#scope=module:${module.qualifiedName}`,
+      'App',
+      'App',
+      'none',
+    ),
+    kind: 'namespace' as const,
+    name: 'App',
+    path: file.path,
+    qualifiedName: 'App',
+    memberRole: 'none' as const,
+  };
+  const contains = (
+    from: { readonly id: string },
+    to: { readonly id: string },
+  ) => ({
+    id: edgeIdV2('contains', from.id, to.id),
+    kind: 'contains' as const,
+    from: from.id,
+    to: to.id,
+    resolutionStatus: 'resolved' as const,
+  });
+  return {
+    schemaVersion: 2,
+    completeness: 'complete',
+    repository: { root: '.', name: 'repository' },
+    nodes: [repository, solution, project, library, file, module, namespace],
+    edges: [
+      contains(repository, solution),
+      contains(solution, project),
+      contains(solution, library),
+      contains(project, file),
+      contains(file, module),
+      contains(module, namespace),
+      {
+        id: edgeIdV2('references', project.id, library.id),
+        kind: 'references',
+        from: project.id,
+        to: library.id,
+        resolutionStatus: 'resolved',
+      },
+      {
+        id: edgeIdV2('uses', module.id, namespace.id),
+        kind: 'uses',
+        from: module.id,
+        to: namespace.id,
+        resolutionStatus: 'resolved',
+      },
+    ],
+    diagnostics: [],
+  };
+}
+
+describe('schema-v2 snapshots', () => {
+  it('round-trips canonical solution/project/namespace graphs and new edges', () => {
+    const graph = snapshotV2();
+    const bytes = encodeSnapshot(graph);
+    const decoded = decodeSnapshot(bytes, 2) as SnapshotV2;
+    assert.equal(decoded.schemaVersion, 2);
+    assert.deepEqual(encodeSnapshot(decoded), bytes);
+    const edgeShape = (edge: SnapshotV2['edges'][number]) =>
+      `${edge.kind}\0${edge.from}\0${edge.to}`;
+    assert.deepEqual(
+      decoded.edges.map(edgeShape).sort(),
+      graph.edges.map(edgeShape).sort(),
+    );
+    assert.notEqual(repositoryId(), graph.nodes[0]!.id);
+    assert.equal(
+      graph.nodes.some((node) => node.kind === 'namespace'),
+      true,
+    );
+  });
+
+  it('rejects an invalid v2 endpoint and reports unknown versions distinctly', () => {
+    const graph = snapshotV2();
+    const broken = {
+      ...graph,
+      edges: [
+        ...graph.edges,
+        {
+          id: edgeIdV2('references', graph.nodes[0]!.id, graph.nodes[1]!.id),
+          kind: 'references' as const,
+          from: graph.nodes[0]!.id,
+          to: graph.nodes[1]!.id,
+          resolutionStatus: 'resolved' as const,
+        },
+      ],
+    };
+    assert.throws(() => encodeSnapshot(broken), /endpoint/i);
+    assert.throws(
+      () => decodeSnapshot(Buffer.from('{"schemaVersion":3}')),
+      (error: unknown) =>
+        (error as { code?: string; supportedVersions?: readonly number[] })
+          .code === 'unsupported_schema' &&
+        (
+          error as { supportedVersions?: readonly number[] }
+        ).supportedVersions?.join(',') === '1,2',
+    );
+    assert.throws(() => fileIdV2('../outside.cs'), /relative/i);
+    assert.throws(() => fileIdV2(String.fromCharCode(0xd800)), /Unicode/i);
+    assert.throws(
+      () =>
+        nodeIdV2(
+          'project',
+          'App.csproj',
+          'root',
+          String.fromCharCode(0xd800),
+          'App',
+          'none',
+        ),
+      /Unicode/i,
+    );
+    assert.equal(
+      nodeIdV2('project', 'App.csproj', 'root', 'Cafe\u0301', 'Café', 'none'),
+      nodeIdV2('project', 'App.csproj', 'root', 'Café', 'Café', 'none'),
+    );
+    assert.notEqual(
+      nodeIdV2('project', 'App.csproj', 'root', 'App', 'App', 'none'),
+      nodeIdV2('project', 'App.csproj', 'root', 'App', 'App.Main', 'none'),
+    );
+    assert.throws(
+      () =>
+        nodeIdV2(
+          'project',
+          'App.csproj',
+          'root/../outside',
+          'App',
+          'App',
+          'none',
+        ),
+      /canonical/i,
+    );
+    assert.throws(() => edgeIdV2('bogus' as never, 'n:1', 'n:2'), /edge kind/i);
+    assert.throws(
+      () =>
+        nodeIdV2('project', 'C:/outside.csproj', 'root', 'App', 'App', 'none'),
+      /relative/i,
+    );
+  });
+
+  it('loads v2 through the validated bootstrap boundary', async () => {
+    const root = await mkdtemp(path.join(process.cwd(), '.snapshot-v2-'));
+    roots.push(root);
+    await writeSnapshot(root, snapshotV2(), { mode: 'replace' });
+    const loaded = await openValidatedSnapshot(root);
+    assert.equal(loaded.schemaVersion, 2);
   });
 });

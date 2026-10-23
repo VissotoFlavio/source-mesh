@@ -1,17 +1,17 @@
 import { constants } from 'node:fs';
 import { open } from 'node:fs/promises';
-import { decode } from './codec.js';
+import { decode, MAX_BYTES } from './codec.js';
 import {
   revalidateSnapshotPath,
   resolveSnapshotPath,
   sameIdentity,
 } from './path.js';
-import { SnapshotError, type SnapshotV1 } from './types.js';
+import { SnapshotError, type Snapshot } from './types.js';
 
 export async function openValidatedSnapshot(
   root: string,
   snapshotPath?: string,
-): Promise<SnapshotV1> {
+): Promise<Snapshot> {
   const target = await resolveSnapshotPath(root, snapshotPath);
   if (target.destinationIdentity === undefined)
     throw new SnapshotError(
@@ -40,7 +40,23 @@ export async function openValidatedSnapshot(
       })
     )
       throw new SnapshotError('path_invalid', 'The snapshot path is invalid.');
-    const bytes = await handle.readFile();
+    if (opened.size > MAX_BYTES)
+      throw new SnapshotError('invalid_snapshot', 'Invalid snapshot limits.');
+    const buffer = Buffer.allocUnsafe(
+      Math.min(MAX_BYTES + 1, Math.max(1, opened.size + 1)),
+    );
+    let offset = 0;
+    while (offset < buffer.length) {
+      const result = await handle.read(
+        buffer,
+        offset,
+        buffer.length - offset,
+        offset,
+      );
+      if (result.bytesRead === 0) break;
+      offset += result.bytesRead;
+    }
+    const bytes = buffer.subarray(0, offset);
     const afterRead = await handle.stat();
     if (
       !sameIdentity(target.destinationIdentity, {

@@ -17,7 +17,7 @@ import {
 } from './path.js';
 import {
   SnapshotError,
-  type SnapshotV1,
+  type Snapshot,
   type SnapshotWriteMode,
   type SnapshotWriteResult,
 } from './types.js';
@@ -67,7 +67,7 @@ async function ensurePrivate(file: string, directory: boolean): Promise<void> {
 
 export async function writeSnapshot(
   root: string,
-  snapshot: SnapshotV1,
+  snapshot: Snapshot,
   options: { readonly path?: string; readonly mode: SnapshotWriteMode },
 ): Promise<SnapshotWriteResult> {
   const bytes = encode(snapshot);

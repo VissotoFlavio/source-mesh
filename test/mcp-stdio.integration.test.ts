@@ -12,10 +12,15 @@ import {
   fileId,
   openValidatedSnapshot,
   type GraphQueryService,
+  type GraphQueryServiceV2,
   type QueryResponseV1,
 } from '../src/index.js';
 import { main } from '../src/cli.js';
-import { MCP_MAX_MESSAGE_BYTES, MCP_TOOL_NAMES } from '../src/mcp/contracts.js';
+import {
+  MCP_MAX_MESSAGE_BYTES,
+  MCP_TOOL_NAMES,
+  validateToolInput,
+} from '../src/mcp/contracts.js';
 import { createMcpServer } from '../src/mcp/server.js';
 
 const roots: string[] = [];
@@ -62,7 +67,7 @@ function capture(): {
 
 async function createSyntheticRepository(): Promise<{
   readonly root: string;
-  readonly service: GraphQueryService;
+  readonly service: GraphQueryService | GraphQueryServiceV2;
   readonly callerId: string;
   readonly targetId: string;
 }> {
@@ -681,7 +686,7 @@ processTest(
 
     await writeFile(
       path.join(root, '.sourcemesh', 'graph.json'),
-      '{"schemaVersion":2}\n',
+      '{"schemaVersion":3}\n',
       'utf8',
     );
     const unsupported = spawnRawServer(root);
@@ -771,3 +776,11 @@ processTest(
     assert.equal(stderr.includes(root), false);
   },
 );
+
+test('MCP input contracts admit v2 container kind filters', async () => {
+  const result = await validateToolInput('searchSymbols', {
+    query: 'App',
+    kind: 'project',
+  });
+  assert.equal('issues' in result, false);
+});

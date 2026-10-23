@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- Additive schema-v2 snapshot support for local C#/.NET graph contracts,
+  including solution/project/namespace nodes, `references`/`uses` edges,
+  version-bound identities, v1-compatible queries, and fail-closed MCP startup.
+
 - Repository-owned synthetic fixture and built-runtime end-to-end validation for
   discovery, loading, extraction, relationships, deterministic snapshots,
   bounded CLI queries, local MCP equivalence, malformed input, ignore rules,

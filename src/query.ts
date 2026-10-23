@@ -1,21 +1,26 @@
 import { createHash } from 'node:crypto';
 import {
   type EdgeV1,
+  type EdgeV2,
   type FileNodeV1,
   type LocationV1,
   type MemberRole,
   type NodeKind,
+  type NodeKindV2,
   type NodeV1,
-  type SymbolNodeV1,
+  type NodeV2,
+  type SymbolNodeV2,
 } from './graph.js';
 import { snapshotDigest } from './snapshot/codec.js';
-import type { SnapshotV1 } from './snapshot/types.js';
+import type { Snapshot, SnapshotV1, SnapshotV2 } from './snapshot/types.js';
 
 export type SearchSymbolKindV1 = Exclude<
   NodeKind,
   'repository' | 'file' | 'module'
 >;
 export type SymbolKindV1 = Exclude<NodeKind, 'repository' | 'file'>;
+export type SymbolKindV2 = Exclude<NodeKindV2, 'repository' | 'file'>;
+export type SearchSymbolKindV2 = SymbolKindV2;
 
 export interface FileSummaryV1 {
   readonly id: string;
@@ -34,6 +39,10 @@ export interface SymbolSummaryV1 {
   readonly memberRole: MemberRole;
   readonly locations?: readonly LocationV1[];
 }
+export interface SymbolSummaryV2 extends Omit<SymbolSummaryV1, 'kind'> {
+  readonly kind: SymbolKindV2;
+}
+export type NodeSummaryV2 = FileSummaryV1 | SymbolSummaryV2;
 
 export type NodeSummaryV1 = FileSummaryV1 | SymbolSummaryV1;
 
@@ -60,6 +69,9 @@ export interface SearchRequestV1 {
   readonly cursor?: string;
   readonly allowPartial?: boolean;
 }
+export interface SearchRequestV2 extends Omit<SearchRequestV1, 'kind'> {
+  readonly kind?: SearchSymbolKindV2;
+}
 
 export interface GetSymbolRequestV1 {
   readonly operation: 'getSymbol';
@@ -68,6 +80,15 @@ export interface GetSymbolRequestV1 {
   readonly limit?: number;
   readonly cursor?: string;
   readonly allowPartial?: boolean;
+}
+export interface SymbolSelectorV2 extends Omit<SymbolSelectorV1, 'kind'> {
+  readonly kind?: SymbolKindV2;
+}
+export interface GetSymbolRequestV2 extends Omit<
+  GetSymbolRequestV1,
+  'selector'
+> {
+  readonly selector?: SymbolSelectorV2;
 }
 
 export interface FileRelationRequestV1 {
@@ -100,6 +121,14 @@ export interface QueryPageV1<T> {
   readonly truncated: boolean;
   readonly continuation?: string;
 }
+export interface QueryPageV2<T> {
+  readonly schemaVersion: 2;
+  readonly completeness: 'complete' | 'partial';
+  readonly items: readonly T[];
+  readonly total: number;
+  readonly truncated: boolean;
+  readonly continuation?: string;
+}
 
 export interface SearchResponseV1 {
   readonly operation: 'searchSymbols';
@@ -124,12 +153,38 @@ export interface CallRelationResponseV1 {
   readonly operation: 'listCallers' | 'listCallees';
   readonly page: QueryPageV1<SymbolSummaryV1>;
 }
+export interface SearchResponseV2 {
+  readonly operation: 'searchSymbols';
+  readonly page: QueryPageV2<SymbolSummaryV2>;
+}
+export interface GetSymbolResponseV2 {
+  readonly operation: 'getSymbol';
+  readonly schemaVersion: 2;
+  readonly completeness: 'complete' | 'partial';
+  readonly symbol: SymbolSummaryV2;
+  readonly container?: NodeSummaryV2;
+  readonly children: QueryPageV2<NodeSummaryV2>;
+}
+export interface FileRelationResponseV2 {
+  readonly operation: 'listFileDependencies' | 'listFileDependents';
+  readonly page: QueryPageV2<FileSummaryV1>;
+}
+export interface CallRelationResponseV2 {
+  readonly operation: 'listCallers' | 'listCallees';
+  readonly page: QueryPageV2<SymbolSummaryV2>;
+}
 
 export type QueryResponseV1 =
   | SearchResponseV1
   | GetSymbolResponseV1
   | FileRelationResponseV1
   | CallRelationResponseV1;
+export type QueryResponseV2 =
+  | SearchResponseV2
+  | GetSymbolResponseV2
+  | FileRelationResponseV2
+  | CallRelationResponseV2;
+export type QueryPage = QueryPageV1<unknown> | QueryPageV2<unknown>;
 
 export type QueryErrorCodeV1 =
   | 'invalid_request'
@@ -166,6 +221,9 @@ export interface QueryErrorV1 {
   readonly candidates?: QueryPageV1<NodeSummaryV1>;
   readonly totalCandidates?: number;
 }
+export interface QueryErrorV2 extends Omit<QueryErrorV1, 'candidates'> {
+  readonly candidates?: QueryPageV2<NodeSummaryV2>;
+}
 
 export interface GraphQueryService {
   searchSymbols(request: SearchRequestV1): QueryResponseV1 | QueryErrorV1;
@@ -178,6 +236,22 @@ export interface GraphQueryService {
   ): QueryResponseV1 | QueryErrorV1;
   listCallers(request: CallRelationRequestV1): QueryResponseV1 | QueryErrorV1;
   listCallees(request: CallRelationRequestV1): QueryResponseV1 | QueryErrorV1;
+}
+export interface GraphQueryServiceV2 {
+  searchSymbols(
+    request: SearchRequestV1 | SearchRequestV2,
+  ): QueryResponseV2 | QueryErrorV2;
+  getSymbol(
+    request: GetSymbolRequestV1 | GetSymbolRequestV2,
+  ): QueryResponseV2 | QueryErrorV2;
+  listFileDependencies(
+    request: FileRelationRequestV1,
+  ): QueryResponseV2 | QueryErrorV2;
+  listFileDependents(
+    request: FileRelationRequestV1,
+  ): QueryResponseV2 | QueryErrorV2;
+  listCallers(request: CallRelationRequestV1): QueryResponseV2 | QueryErrorV2;
+  listCallees(request: CallRelationRequestV1): QueryResponseV2 | QueryErrorV2;
 }
 
 const DEFAULT_LIMIT = 25;
@@ -194,6 +268,18 @@ const symbolKinds = new Set<SymbolKindV1>([
   'type',
   'parameter',
 ]);
+const symbolKindsV2 = new Set<SymbolKindV2>([
+  'solution',
+  'project',
+  'module',
+  'namespace',
+  'class',
+  'interface',
+  'function',
+  'variable',
+  'type',
+  'parameter',
+]);
 const searchKinds = new Set<SearchSymbolKindV1>([
   'class',
   'interface',
@@ -202,6 +288,7 @@ const searchKinds = new Set<SearchSymbolKindV1>([
   'type',
   'parameter',
 ]);
+const searchKindsV2 = new Set<SearchSymbolKindV2>(symbolKindsV2);
 const roles = new Set<MemberRole>(['none', 'static', 'instance']);
 
 const messages: Record<QueryErrorCodeV1, string> = {
@@ -217,7 +304,10 @@ const messages: Record<QueryErrorCodeV1, string> = {
   internal: 'The operation could not be completed.',
 };
 
-type QueryResult = QueryResponseV1 | QueryErrorV1;
+type QueryResult =
+  QueryResponseV1 | QueryResponseV2 | QueryErrorV1 | QueryErrorV2;
+type AnyNode = NodeV1 | NodeV2;
+type AnyEdge = EdgeV1 | EdgeV2;
 type PathKey = readonly [0, string] | readonly [1, ''];
 type SearchSortKey = readonly [PathKey, string, string, string];
 type ChildSortKey = readonly [string, string, string];
@@ -226,7 +316,7 @@ type CallSortKey = readonly [string, PathKey, string, string];
 type SortKey = SearchSortKey | ChildSortKey | FileSortKey | CallSortKey;
 
 interface CursorEnvelope {
-  readonly schemaVersion: 1;
+  readonly schemaVersion: 1 | 2;
   readonly snapshotDigest: string;
   readonly operation: QueryRequestV1['operation'];
   readonly filterFingerprint: string;
@@ -243,13 +333,13 @@ interface NormalizedBase {
 interface NormalizedSearch extends NormalizedBase {
   readonly operation: 'searchSymbols';
   readonly query: string;
-  readonly kind?: SearchSymbolKindV1;
+  readonly kind?: SearchSymbolKindV2;
   readonly path?: string;
   readonly containerId?: string;
 }
 
 interface NormalizedSelector {
-  readonly kind?: SymbolKindV1;
+  readonly kind?: SymbolKindV2;
   readonly name?: string;
   readonly qualifiedName?: string;
   readonly path?: string;
@@ -275,12 +365,13 @@ interface NormalizedCallRelation extends NormalizedBase {
 
 interface IndexState {
   readonly snapshotDigest: string;
+  readonly schemaVersion: 1 | 2;
   readonly completeness: 'complete' | 'partial';
-  readonly nodes: ReadonlyMap<string, NodeV1>;
+  readonly nodes: ReadonlyMap<string, AnyNode>;
   readonly files: readonly FileNodeV1[];
-  readonly symbols: readonly SymbolNodeV1[];
-  readonly parentByChild: ReadonlyMap<string, NodeV1>;
-  readonly childrenByParent: ReadonlyMap<string, readonly NodeV1[]>;
+  readonly symbols: readonly SymbolNodeV2[];
+  readonly parentByChild: ReadonlyMap<string, AnyNode>;
+  readonly childrenByParent: ReadonlyMap<string, readonly AnyNode[]>;
   readonly fileDependencies: ReadonlyMap<string, readonly string[]>;
   readonly fileDependents: ReadonlyMap<string, readonly string[]>;
   readonly callees: ReadonlyMap<string, readonly string[]>;
@@ -384,6 +475,23 @@ function error(
       : { totalCandidates: extra.totalCandidates }),
   };
 }
+function errorV2(
+  code: QueryErrorCodeV1,
+  field?: ErrorFieldV1,
+  extra?: Pick<QueryErrorV2, 'candidates' | 'totalCandidates'>,
+): QueryErrorV2 {
+  return {
+    code,
+    message: messages[code],
+    ...(field === undefined ? {} : { field }),
+    ...(extra?.candidates === undefined
+      ? {}
+      : { candidates: extra.candidates }),
+    ...(extra?.totalCandidates === undefined
+      ? {}
+      : { totalCandidates: extra.totalCandidates }),
+  };
+}
 
 function cloneLocation(location: LocationV1): LocationV1 {
   return {
@@ -399,15 +507,17 @@ function cloneLocations(
   return locations?.map(cloneLocation);
 }
 
-function isFile(node: NodeV1 | undefined): node is FileNodeV1 {
+function isFile(node: AnyNode | undefined): node is FileNodeV1 {
   return node?.kind === 'file';
 }
 
-function isSymbol(node: NodeV1 | undefined): node is SymbolNodeV1 {
-  return node !== undefined && symbolKinds.has(node.kind as SymbolKindV1);
+function isSymbol(node: AnyNode | undefined): node is SymbolNodeV2 {
+  return (
+    node !== undefined && node.kind !== 'repository' && node.kind !== 'file'
+  );
 }
 
-function toSummary(node: NodeV1): NodeSummaryV1 {
+function toSummary(node: AnyNode): NodeSummaryV1 | NodeSummaryV2 {
   if (node.kind === 'file') {
     const summary: FileSummaryV1 = {
       id: node.id,
@@ -420,7 +530,7 @@ function toSummary(node: NodeV1): NodeSummaryV1 {
   }
   if (node.kind === 'repository')
     throw new Error('Repository nodes are not query summaries.');
-  const summary: SymbolSummaryV1 = {
+  const summary: SymbolSummaryV2 = {
     id: node.id,
     kind: node.kind,
     name: node.name,
@@ -432,44 +542,72 @@ function toSummary(node: NodeV1): NodeSummaryV1 {
   return locations === undefined ? summary : { ...summary, locations };
 }
 
-function searchKey(node: NodeV1): SearchSortKey {
+function searchKey(node: AnyNode): SearchSortKey {
   if (node.kind === 'repository' || node.kind === 'file')
     throw new Error('Invalid search node.');
   return [pathKey(node.path), node.qualifiedName, node.kind, node.id];
 }
 
-function childKey(node: NodeV1): ChildSortKey {
+function childKey(node: AnyNode): ChildSortKey {
   if (node.kind === 'repository' || node.kind === 'file')
     throw new Error('Invalid child node.');
   return [node.kind, node.qualifiedName, node.id];
 }
 
-function fileKey(node: NodeV1): FileSortKey {
+function fileKey(node: AnyNode): FileSortKey {
   if (node.kind !== 'file') throw new Error('Invalid file node.');
   return [node.path, node.id];
 }
 
-function callKey(node: NodeV1): CallSortKey {
+function callKey(node: AnyNode): CallSortKey {
   if (node.kind === 'repository' || node.kind === 'file')
     throw new Error('Invalid call node.');
   return [node.qualifiedName, pathKey(node.path), node.kind, node.id];
 }
 
-function sortNodes<T extends NodeV1>(
+function sortNodes<T extends AnyNode>(
   nodes: readonly T[],
   key: (node: T) => SortKey,
 ): readonly T[] {
   return [...nodes].sort((left, right) => compareTuple(key(left), key(right)));
 }
 
-function paginate<T extends NodeV1>(
+function paginate<T extends AnyNode>(
   nodes: readonly T[],
   limit: number,
   completeness: 'complete' | 'partial',
   key: (node: T) => SortKey,
   cursor: CursorEnvelope | undefined,
   encode: (lastSortKey: SortKey) => string,
-): QueryPageV1<NodeSummaryV1> {
+  schemaVersion: 1,
+): QueryPageV1<NodeSummaryV1>;
+function paginate<T extends AnyNode>(
+  nodes: readonly T[],
+  limit: number,
+  completeness: 'complete' | 'partial',
+  key: (node: T) => SortKey,
+  cursor: CursorEnvelope | undefined,
+  encode: (lastSortKey: SortKey) => string,
+  schemaVersion: 2,
+): QueryPageV2<NodeSummaryV2>;
+function paginate<T extends AnyNode>(
+  nodes: readonly T[],
+  limit: number,
+  completeness: 'complete' | 'partial',
+  key: (node: T) => SortKey,
+  cursor: CursorEnvelope | undefined,
+  encode: (lastSortKey: SortKey) => string,
+  schemaVersion: 1 | 2,
+): QueryPageV1<NodeSummaryV1> | QueryPageV2<NodeSummaryV2>;
+function paginate<T extends AnyNode>(
+  nodes: readonly T[],
+  limit: number,
+  completeness: 'complete' | 'partial',
+  key: (node: T) => SortKey,
+  cursor: CursorEnvelope | undefined,
+  encode: (lastSortKey: SortKey) => string,
+  schemaVersion: 1 | 2 = 1,
+): QueryPageV1<NodeSummaryV1> | QueryPageV2<NodeSummaryV2> {
   let start = 0;
   if (cursor !== undefined) {
     const position = nodes.findIndex(
@@ -480,8 +618,8 @@ function paginate<T extends NodeV1>(
   }
   const items = nodes.slice(start, start + limit).map(toSummary);
   const truncated = start + items.length < nodes.length;
-  return {
-    schemaVersion: 1,
+  const page = {
+    schemaVersion,
     completeness,
     items,
     total: nodes.length,
@@ -490,6 +628,9 @@ function paginate<T extends NodeV1>(
       ? { continuation: encode(key(nodes[start + items.length - 1]!)) }
       : {}),
   };
+  return schemaVersion === 1
+    ? (page as QueryPageV1<NodeSummaryV1>)
+    : (page as QueryPageV2<NodeSummaryV2>);
 }
 
 class InvalidCursorError extends Error {}
@@ -629,11 +770,12 @@ function cursorText(
   operation: QueryRequestV1['operation'],
   filterFingerprint: string,
   lastSortKey: SortKey,
+  schemaVersion: 1 | 2 = 1,
 ): string {
   const normalizedSortKey = canonicalSortKey(lastSortKey, operation);
   if (normalizedSortKey === undefined) throw new Error('Invalid cursor key.');
   const envelope: CursorEnvelope = {
-    schemaVersion: 1,
+    schemaVersion,
     snapshotDigest: snapshotDigestValue,
     operation,
     filterFingerprint,
@@ -728,6 +870,7 @@ function parseCursor(
   snapshotDigestValue: string,
   operation: QueryRequestV1['operation'],
   filterFingerprint: string,
+  schemaVersion: 1 | 2 = 1,
 ): CursorEnvelope | undefined {
   if (typeof value !== 'string') return undefined;
   const decoded = decodeBase64Url(value);
@@ -750,7 +893,7 @@ function parseCursor(
     )
       return undefined;
     if (
-      parsed.schemaVersion !== 1 ||
+      parsed.schemaVersion !== schemaVersion ||
       typeof parsed.snapshotDigest !== 'string' ||
       !SHA256.test(parsed.snapshotDigest) ||
       parsed.snapshotDigest !== snapshotDigestValue ||
@@ -764,7 +907,7 @@ function parseCursor(
     const lastSortKey = canonicalSortKey(parsed.lastSortKey, operation);
     if (lastSortKey === undefined) return undefined;
     const canonical = {
-      schemaVersion: 1 as const,
+      schemaVersion,
       snapshotDigest: parsed.snapshotDigest,
       operation,
       filterFingerprint: parsed.filterFingerprint,
@@ -779,6 +922,7 @@ function parseCursor(
 function selectorObject(
   value: unknown,
   functionSelector: boolean,
+  schemaVersion: 1 | 2 = 1,
 ): NormalizedSelector | undefined {
   if (!isRecord(value)) return undefined;
   const allowed = [
@@ -796,7 +940,10 @@ function selectorObject(
   const kind = value.kind;
   if (
     kind !== undefined &&
-    (typeof kind !== 'string' || !symbolKinds.has(kind as SymbolKindV1))
+    (typeof kind !== 'string' ||
+      !(schemaVersion === 2 ? symbolKindsV2 : symbolKinds).has(
+        kind as SymbolKindV2,
+      ))
   )
     return undefined;
   if (functionSelector && kind !== undefined && kind !== 'function')
@@ -889,6 +1036,7 @@ function baseFields(
 
 function normalizeSearch(
   value: unknown,
+  schemaVersion: 1 | 2 = 1,
 ):
   | { readonly normalized: NormalizedSearch; readonly error?: undefined }
   | { readonly normalized?: undefined; readonly error: QueryErrorV1 } {
@@ -919,7 +1067,10 @@ function normalizeSearch(
   const kind = value.kind;
   if (
     kind !== undefined &&
-    (typeof kind !== 'string' || !searchKinds.has(kind as SearchSymbolKindV1))
+    (typeof kind !== 'string' ||
+      !(schemaVersion === 2 ? searchKindsV2 : searchKinds).has(
+        kind as SearchSymbolKindV2,
+      ))
   )
     return { error: error('invalid_request', 'kind') };
   const path =
@@ -935,7 +1086,7 @@ function normalizeSearch(
       ...base.base,
       operation: 'searchSymbols',
       query,
-      ...(kind === undefined ? {} : { kind: kind as SearchSymbolKindV1 }),
+      ...(kind === undefined ? {} : { kind: kind as SearchSymbolKindV2 }),
       ...(path === undefined ? {} : { path }),
       ...(containerId === undefined ? {} : { containerId }),
     },
@@ -944,6 +1095,7 @@ function normalizeSearch(
 
 function normalizeGetSymbol(
   value: unknown,
+  schemaVersion: 1 | 2 = 1,
 ):
   | { readonly normalized: NormalizedGetSymbol; readonly error?: undefined }
   | { readonly normalized?: undefined; readonly error: QueryErrorV1 } {
@@ -977,7 +1129,7 @@ function normalizeGetSymbol(
         nodeId: value.nodeId as string,
       },
     };
-  const selector = selectorObject(value.selector, false);
+  const selector = selectorObject(value.selector, false, schemaVersion);
   if (selector === undefined)
     return { error: error('invalid_request', 'selector') };
   return { normalized: { ...base.base, operation: 'getSymbol', selector } };
@@ -1012,6 +1164,7 @@ function normalizeFileRelation(
 function normalizeCallRelation(
   value: unknown,
   operation: CallRelationRequestV1['operation'],
+  schemaVersion: 1 | 2 = 1,
 ):
   | { readonly normalized: NormalizedCallRelation; readonly error?: undefined }
   | { readonly normalized?: undefined; readonly error: QueryErrorV1 } {
@@ -1030,7 +1183,7 @@ function normalizeCallRelation(
     return { error: error('invalid_request', 'operation') };
   const base = baseFields(value, operation);
   if (base.error || !base.base) return { error: base.error! };
-  const selector = selectorObject(value.function, true);
+  const selector = selectorObject(value.function, true, schemaVersion);
   if (selector === undefined)
     return { error: error('invalid_request', 'function') };
   return {
@@ -1103,10 +1256,10 @@ function fingerprint(
 
 function repositoryOwner(
   nodeId: string,
-  parentByChild: ReadonlyMap<string, NodeV1>,
+  parentByChild: ReadonlyMap<string, AnyNode>,
 ): string | undefined {
   const visited = new Set<string>();
-  let current: NodeV1 | undefined = parentByChild.get(nodeId);
+  let current: AnyNode | undefined = parentByChild.get(nodeId);
   while (current !== undefined && !visited.has(current.id)) {
     if (current.kind === 'file') return current.id;
     visited.add(current.id);
@@ -1115,8 +1268,9 @@ function repositoryOwner(
   return undefined;
 }
 
-function buildState(snapshot: SnapshotV1): IndexState {
-  if (snapshot.schemaVersion !== 1) throw new UnsupportedSchemaError();
+function buildState(snapshot: Snapshot): IndexState {
+  if (snapshot.schemaVersion !== 1 && snapshot.schemaVersion !== 2)
+    throw new UnsupportedSchemaError();
   if (
     (snapshot.completeness !== 'complete' &&
       snapshot.completeness !== 'partial') ||
@@ -1126,16 +1280,16 @@ function buildState(snapshot: SnapshotV1): IndexState {
   )
     throw new InvalidSnapshotError();
   const snapshotDigestValue = snapshotDigest(snapshot);
-  const nodes = new Map<string, NodeV1>();
+  const nodes = new Map<string, AnyNode>();
   for (const node of snapshot.nodes) {
     if (!isRecord(node) || typeof node.id !== 'string' || nodes.has(node.id))
       throw new InvalidSnapshotError();
-    nodes.set(node.id, structuredClone(node) as unknown as NodeV1);
+    nodes.set(node.id, structuredClone(node) as unknown as AnyNode);
   }
-  const parent = new Map<string, NodeV1>();
-  const children = new Map<string, NodeV1[]>();
+  const parent = new Map<string, AnyNode>();
+  const children = new Map<string, AnyNode[]>();
   for (const edge of snapshot.edges) {
-    const typedEdge = edge as EdgeV1;
+    const typedEdge = edge as AnyEdge;
     if (!nodes.has(typedEdge.from) || !nodes.has(typedEdge.to))
       throw new InvalidSnapshotError();
     if (typedEdge.kind === 'contains') {
@@ -1162,7 +1316,7 @@ function buildState(snapshot: SnapshotV1): IndexState {
     list.add(to);
     map.set(from, list);
   };
-  for (const edge of snapshot.edges as readonly EdgeV1[]) {
+  for (const edge of snapshot.edges as readonly AnyEdge[]) {
     if (edge.kind === 'imports' || edge.kind === 'exports') {
       const from = nodes.get(edge.from);
       const to = nodes.get(edge.to);
@@ -1185,13 +1339,13 @@ function buildState(snapshot: SnapshotV1): IndexState {
   }
   const sortRelationMap = (
     map: Map<string, Set<string>>,
-    key: (node: NodeV1) => SortKey,
+    key: (node: AnyNode) => SortKey,
   ): ReadonlyMap<string, readonly string[]> => {
     const result = new Map<string, readonly string[]>();
     for (const [source, ids] of map) {
       const values = [...ids]
         .map((id) => nodes.get(id))
-        .filter((node): node is NodeV1 => node !== undefined);
+        .filter((node): node is AnyNode => node !== undefined);
       values.sort((a, b) => compareTuple(key(a), key(b)));
       result.set(
         source,
@@ -1205,10 +1359,11 @@ function buildState(snapshot: SnapshotV1): IndexState {
     .filter(isFile)
     .sort((a, b) => compareTuple(fileKey(a), fileKey(b)));
   const symbols = sortedNodes
-    .filter(isSymbol)
+    .filter((node): node is SymbolNodeV2 => isSymbol(node))
     .sort((a, b) => compareTuple(searchKey(a), searchKey(b)));
   return {
     snapshotDigest: snapshotDigestValue,
+    schemaVersion: snapshot.schemaVersion,
     completeness: snapshot.completeness,
     nodes,
     files,
@@ -1233,7 +1388,16 @@ function normalizeError(errorValue: unknown): QueryErrorV1 {
 
 export function createGraphQueryService(
   snapshot: SnapshotV1,
-): GraphQueryService {
+): GraphQueryService;
+export function createGraphQueryService(
+  snapshot: SnapshotV2,
+): GraphQueryServiceV2;
+export function createGraphQueryService(
+  snapshot: Snapshot,
+): GraphQueryService | GraphQueryServiceV2;
+export function createGraphQueryService(
+  snapshot: Snapshot,
+): GraphQueryService | GraphQueryServiceV2 {
   let state: IndexState | undefined;
   let stateError: QueryErrorV1 | undefined;
   try {
@@ -1264,13 +1428,16 @@ export function createGraphQueryService(
       state?.snapshotDigest ?? '',
       normalized.operation,
       fingerprint(normalized),
+      state?.schemaVersion ?? 1,
     );
     return parsed ?? error('invalid_request', 'cursor');
   };
 
-  const searchSymbols = (request: SearchRequestV1): QueryResult => {
+  const searchSymbols = (
+    request: SearchRequestV1 | SearchRequestV2,
+  ): QueryResult => {
     try {
-      const result = normalizeSearch(request);
+      const result = normalizeSearch(request, state?.schemaVersion ?? 1);
       if (result.error) return result.error;
       const normalized = result.normalized;
       const stateProblem = checkState(normalized);
@@ -1307,7 +1474,9 @@ export function createGraphQueryService(
             normalized.operation,
             fingerprint(normalized),
             lastSortKey,
+            state!.schemaVersion,
           ),
+        state!.schemaVersion,
       );
       return {
         operation: 'searchSymbols',
@@ -1320,16 +1489,18 @@ export function createGraphQueryService(
     }
   };
 
-  const getSymbol = (request: GetSymbolRequestV1): QueryResult => {
+  const getSymbol = (
+    request: GetSymbolRequestV1 | GetSymbolRequestV2,
+  ): QueryResult => {
     try {
-      const result = normalizeGetSymbol(request);
+      const result = normalizeGetSymbol(request, state?.schemaVersion ?? 1);
       if (result.error) return result.error;
       const normalized = result.normalized;
       const stateProblem = checkState(normalized);
       if (stateProblem) return stateProblem;
       const cursor = parseAndCheckCursor(normalized);
       if (cursor && 'code' in cursor) return cursor;
-      let matches: readonly NodeV1[];
+      let matches: readonly AnyNode[];
       if (normalized.nodeId !== undefined) {
         const node = state!.nodes.get(normalized.nodeId);
         if (node === undefined) return error('not_found', 'nodeId');
@@ -1376,17 +1547,28 @@ export function createGraphQueryService(
               normalized.operation,
               fingerprint(normalized),
               lastSortKey,
+              state!.schemaVersion,
             ),
+          state!.schemaVersion,
         );
-        return error('ambiguous', 'selector', {
-          candidates,
-          totalCandidates: sortedMatches.length,
-        });
+        return state!.schemaVersion === 2
+          ? errorV2('ambiguous', 'selector', {
+              candidates: candidates as QueryPageV2<NodeSummaryV2>,
+              totalCandidates: sortedMatches.length,
+            })
+          : error('ambiguous', 'selector', {
+              candidates: candidates as QueryPageV1<NodeSummaryV1>,
+              totalCandidates: sortedMatches.length,
+            });
       }
       const symbol = sortedMatches[0]!;
       const parent = state!.parentByChild.get(symbol.id);
       const children = sortNodes(
-        (state!.childrenByParent.get(symbol.id) ?? []).filter(isSymbol),
+        (state!.childrenByParent.get(symbol.id) ?? []).filter((node) =>
+          state!.schemaVersion === 2
+            ? node.kind !== 'repository'
+            : isSymbol(node),
+        ),
         childKey,
       );
       const childrenPage = paginate(
@@ -1401,18 +1583,21 @@ export function createGraphQueryService(
             normalized.operation,
             fingerprint(normalized),
             lastSortKey,
+            state!.schemaVersion,
           ),
+        state!.schemaVersion,
       );
       return {
         operation: 'getSymbol',
-        schemaVersion: 1,
+        schemaVersion: state!.schemaVersion,
         completeness: state!.completeness,
         symbol: toSummary(symbol) as SymbolSummaryV1,
         ...(parent && (isFile(parent) || isSymbol(parent))
           ? { container: toSummary(parent) }
           : {}),
-        children: childrenPage as QueryPageV1<SymbolSummaryV1>,
-      };
+        children: childrenPage as
+          QueryPageV1<SymbolSummaryV1> | QueryPageV2<NodeSummaryV2>,
+      } as unknown as QueryResult;
     } catch (errorValue) {
       return errorValue instanceof InvalidCursorError
         ? error('invalid_request', 'cursor')
@@ -1441,7 +1626,7 @@ export function createGraphQueryService(
           : state!.fileDependents.get(source.id)) ?? [];
       const nodes = ids
         .map((id) => state!.nodes.get(id))
-        .filter((node): node is Extract<NodeV1, { kind: 'file' }> =>
+        .filter((node): node is Extract<AnyNode, { kind: 'file' }> =>
           isFile(node),
         );
       const page = paginate(
@@ -1456,7 +1641,9 @@ export function createGraphQueryService(
             normalized.operation,
             fingerprint(normalized),
             lastSortKey,
+            state!.schemaVersion,
           ),
+        state!.schemaVersion,
       );
       return { operation, page: page as QueryPageV1<FileSummaryV1> };
     } catch (errorValue) {
@@ -1471,7 +1658,11 @@ export function createGraphQueryService(
     operation: CallRelationRequestV1['operation'],
   ): QueryResult => {
     try {
-      const result = normalizeCallRelation(request, operation);
+      const result = normalizeCallRelation(
+        request,
+        operation,
+        state?.schemaVersion ?? 1,
+      );
       if (result.error) return result.error;
       const normalized = result.normalized;
       const stateProblem = checkState(normalized);
@@ -1517,12 +1708,19 @@ export function createGraphQueryService(
               normalized.operation,
               fingerprint(normalized),
               lastSortKey,
+              state!.schemaVersion,
             ),
+          state!.schemaVersion,
         );
-        return error('ambiguous', 'function', {
-          candidates,
-          totalCandidates: matches.length,
-        });
+        return state!.schemaVersion === 2
+          ? errorV2('ambiguous', 'function', {
+              candidates: candidates as QueryPageV2<NodeSummaryV2>,
+              totalCandidates: matches.length,
+            })
+          : error('ambiguous', 'function', {
+              candidates: candidates as QueryPageV1<NodeSummaryV1>,
+              totalCandidates: matches.length,
+            });
       }
       const source = matches[0]!;
       const ids =
@@ -1531,7 +1729,7 @@ export function createGraphQueryService(
           : state!.callees.get(source.id)) ?? [];
       const nodes = ids
         .map((id) => state!.nodes.get(id))
-        .filter((node): node is NodeV1 => isSymbol(node));
+        .filter((node): node is AnyNode => isSymbol(node));
       const sorted = sortNodes(nodes, callKey);
       const page = paginate(
         sorted,
@@ -1545,7 +1743,9 @@ export function createGraphQueryService(
             normalized.operation,
             fingerprint(normalized),
             lastSortKey,
+            state!.schemaVersion,
           ),
+        state!.schemaVersion,
       );
       return { operation, page: page as QueryPageV1<SymbolSummaryV1> };
     } catch (errorValue) {
@@ -1555,13 +1755,30 @@ export function createGraphQueryService(
     }
   };
 
+  if (snapshot.schemaVersion === 1) {
+    return {
+      searchSymbols: (request: SearchRequestV1) => searchSymbols(request),
+      getSymbol: (request: GetSymbolRequestV1) => getSymbol(request),
+      listFileDependencies: (request: FileRelationRequestV1) =>
+        relation(request, 'listFileDependencies'),
+      listFileDependents: (request: FileRelationRequestV1) =>
+        relation(request, 'listFileDependents'),
+      listCallers: (request: CallRelationRequestV1) =>
+        callRelation(request, 'listCallers'),
+      listCallees: (request: CallRelationRequestV1) =>
+        callRelation(request, 'listCallees'),
+    } as GraphQueryService;
+  }
   return {
     searchSymbols,
     getSymbol,
-    listFileDependencies: (request) =>
+    listFileDependencies: (request: FileRelationRequestV1) =>
       relation(request, 'listFileDependencies'),
-    listFileDependents: (request) => relation(request, 'listFileDependents'),
-    listCallers: (request) => callRelation(request, 'listCallers'),
-    listCallees: (request) => callRelation(request, 'listCallees'),
-  };
+    listFileDependents: (request: FileRelationRequestV1) =>
+      relation(request, 'listFileDependents'),
+    listCallers: (request: CallRelationRequestV1) =>
+      callRelation(request, 'listCallers'),
+    listCallees: (request: CallRelationRequestV1) =>
+      callRelation(request, 'listCallees'),
+  } as GraphQueryServiceV2;
 }

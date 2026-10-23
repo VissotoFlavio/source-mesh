@@ -12,8 +12,10 @@ import type {
   FileRelationResponseV1,
   GetSymbolResponseV1,
   GraphQueryService,
+  GraphQueryServiceV2,
   QueryResponseV1,
   SearchResponseV1,
+  Snapshot,
 } from '../src/index.js';
 
 function capture(): CliIO & {
@@ -279,6 +281,41 @@ test('query errors use exit code 3 and sanitized JSON envelopes', async () => {
       field: 'query',
     },
   });
+});
+
+test('schema-v2 CLI query envelopes preserve the loaded version', async () => {
+  const response = {
+    operation: 'searchSymbols' as const,
+    page: {
+      schemaVersion: 2 as const,
+      completeness: 'complete' as const,
+      items: [],
+      total: 0,
+      truncated: false,
+    },
+  };
+  const services = injectedServices({
+    openValidatedSnapshot: async () => ({ schemaVersion: 2 }) as Snapshot,
+    createGraphQueryService: () =>
+      ({
+        searchSymbols: () => response,
+        getSymbol: () => response,
+        listFileDependencies: () => ({ ...response }),
+        listFileDependents: () => ({ ...response }),
+        listCallers: () => ({ ...response }),
+        listCallees: () => ({ ...response }),
+      }) as unknown as GraphQueryServiceV2,
+  });
+  const successIO = capture();
+  assert.equal(
+    await main(
+      ['symbol', '--root', '/repo', '--query', 'App', '--output', 'json'],
+      services,
+      successIO,
+    ),
+    0,
+  );
+  assert.equal(JSON.parse(successIO.stdoutValue).schemaVersion, 2);
 });
 
 test('real local analysis is queryable through all six operations and is deterministic', async () => {
