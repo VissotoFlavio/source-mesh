@@ -37,6 +37,8 @@ export async function runMcpStdio(
   const close = async (): Promise<void> => {
     if (closed) return;
     closed = true;
+    process.off('SIGINT', onSignal);
+    process.off('SIGTERM', onSignal);
     await serverHandle.close();
   };
   const onSignal = (): void => {

@@ -41,7 +41,7 @@ export type McpToolError = Omit<QueryErrorV1, 'message'> & {
 
 const NODE_ID_PATTERN = '^n:[0-9a-f]{64}$';
 const RELATIVE_PATH_PATTERN =
-  '^(?!/)(?!\\\\)(?![A-Za-z]:)(?!.*\\u0000)(?!.*(?:^|/)(?:\\.{1,2})(?:/|$))(?!.*//).+$';
+  '^(?!/)(?!.*\\\\)(?![A-Za-z]:)(?!.*\\u0000)(?!.*(?:^|/)(?:\\.{1,2})(?:/|$))(?!.*//).+$';
 const CURSOR_SCHEMA = { type: 'string', maxLength: 4096 };
 const LIMIT_SCHEMA = { type: 'integer', minimum: 1, maximum: 100 };
 const ALLOW_PARTIAL_SCHEMA = { type: 'boolean' };
@@ -251,6 +251,27 @@ function sanitizedSchema<T>(schema: JsonSchemaType): StandardSchemaWithJSON<T> {
   };
 }
 
+interface InputContract<T> {
+  readonly advertised: StandardSchemaWithJSON<T>;
+  readonly validate: StandardSchemaWithJSON<T>['~standard']['validate'];
+}
+
+function inputContract<T>(schema: JsonSchemaType): InputContract<T> {
+  const standard = fromJsonSchema<T>(schema);
+  return {
+    // The SDK validates before invoking a tool handler. Keep its advertised
+    // schema strict, then run this same validator inside the boundary so a
+    // failure can be returned as SourceMesh's public tool-error DTO.
+    advertised: {
+      '~standard': {
+        ...standard['~standard'],
+        validate: (value) => ({ value: value as T }),
+      },
+    },
+    validate: standard['~standard'].validate,
+  };
+}
+
 const searchInputSchema = {
   type: 'object',
   additionalProperties: false,
@@ -301,6 +322,27 @@ const callRelationInputSchema = {
   },
 } as const;
 
+const inputContracts = {
+  searchSymbols: inputContract<SearchToolInput>(
+    searchInputSchema as JsonSchemaType,
+  ),
+  getSymbol: inputContract<GetSymbolToolInput>(
+    getSymbolInputSchema as JsonSchemaType,
+  ),
+  listFileDependencies: inputContract<FileRelationToolInput>(
+    fileRelationInputSchema as JsonSchemaType,
+  ),
+  listFileDependents: inputContract<FileRelationToolInput>(
+    fileRelationInputSchema as JsonSchemaType,
+  ),
+  listCallers: inputContract<CallRelationToolInput>(
+    callRelationInputSchema as JsonSchemaType,
+  ),
+  listCallees: inputContract<CallRelationToolInput>(
+    callRelationInputSchema as JsonSchemaType,
+  ),
+} as const;
+
 const searchResponseSchema = {
   type: 'object',
   additionalProperties: false,
@@ -348,25 +390,19 @@ function relationResponseSchema(
 
 export const TOOL_SCHEMAS = {
   searchSymbols: {
-    input: sanitizedSchema<SearchToolInput>(
-      searchInputSchema as JsonSchemaType,
-    ),
+    input: inputContracts.searchSymbols.advertised,
     output: sanitizedSchema<QueryResponseV1 | McpToolError>(
       responseSchema(searchResponseSchema),
     ),
   },
   getSymbol: {
-    input: sanitizedSchema<GetSymbolToolInput>(
-      getSymbolInputSchema as JsonSchemaType,
-    ),
+    input: inputContracts.getSymbol.advertised,
     output: sanitizedSchema<QueryResponseV1 | McpToolError>(
       responseSchema(getSymbolResponseSchema),
     ),
   },
   listFileDependencies: {
-    input: sanitizedSchema<FileRelationToolInput>(
-      fileRelationInputSchema as JsonSchemaType,
-    ),
+    input: inputContracts.listFileDependencies.advertised,
     output: sanitizedSchema<QueryResponseV1 | McpToolError>(
       responseSchema(
         relationResponseSchema('listFileDependencies', fileSummarySchema),
@@ -374,9 +410,7 @@ export const TOOL_SCHEMAS = {
     ),
   },
   listFileDependents: {
-    input: sanitizedSchema<FileRelationToolInput>(
-      fileRelationInputSchema as JsonSchemaType,
-    ),
+    input: inputContracts.listFileDependents.advertised,
     output: sanitizedSchema<QueryResponseV1 | McpToolError>(
       responseSchema(
         relationResponseSchema('listFileDependents', fileSummarySchema),
@@ -384,9 +418,7 @@ export const TOOL_SCHEMAS = {
     ),
   },
   listCallers: {
-    input: sanitizedSchema<CallRelationToolInput>(
-      callRelationInputSchema as JsonSchemaType,
-    ),
+    input: inputContracts.listCallers.advertised,
     output: sanitizedSchema<QueryResponseV1 | McpToolError>(
       responseSchema(
         relationResponseSchema('listCallers', symbolSummarySchema),
@@ -394,9 +426,7 @@ export const TOOL_SCHEMAS = {
     ),
   },
   listCallees: {
-    input: sanitizedSchema<CallRelationToolInput>(
-      callRelationInputSchema as JsonSchemaType,
-    ),
+    input: inputContracts.listCallees.advertised,
     output: sanitizedSchema<QueryResponseV1 | McpToolError>(
       responseSchema(
         relationResponseSchema('listCallees', symbolSummarySchema),
@@ -404,6 +434,66 @@ export const TOOL_SCHEMAS = {
     ),
   },
 } as const;
+
+const INPUT_FIELDS: Record<McpToolName, readonly string[]> = {
+  searchSymbols: [
+    'query',
+    'kind',
+    'path',
+    'containerId',
+    'limit',
+    'cursor',
+    'allowPartial',
+  ],
+  getSymbol: ['nodeId', 'selector', 'limit', 'cursor', 'allowPartial'],
+  listFileDependencies: ['fileId', 'limit', 'cursor', 'allowPartial'],
+  listFileDependents: ['fileId', 'limit', 'cursor', 'allowPartial'],
+  listCallers: ['function', 'limit', 'cursor', 'allowPartial'],
+  listCallees: ['function', 'limit', 'cursor', 'allowPartial'],
+};
+
+function issueField(
+  toolName: McpToolName,
+  input: unknown,
+  issues: readonly StandardSchemaV1.Issue[],
+): QueryErrorV1['field'] {
+  const fields = new Set(INPUT_FIELDS[toolName]);
+  for (const issue of issues) {
+    const pathMatch = /^data\/([^/ ]+)/u.exec(issue.message);
+    if (pathMatch !== null && fields.has(pathMatch[1]!))
+      return pathMatch[1] as QueryErrorV1['field'];
+    const requiredMatch = /required property '([^']+)'/u.exec(issue.message);
+    if (requiredMatch !== null && fields.has(requiredMatch[1]!))
+      return requiredMatch[1] as QueryErrorV1['field'];
+  }
+  if (input !== null && typeof input === 'object' && !Array.isArray(input)) {
+    const unknown = Object.keys(input).find((key) => !fields.has(key));
+    // Unknown property names are intentionally not echoed in the public DTO.
+    if (unknown !== undefined) return undefined;
+  }
+  return undefined;
+}
+
+export async function validateToolInput(
+  toolName: McpToolName,
+  input: unknown,
+): Promise<StandardSchemaV1.Result<unknown>> {
+  const result = inputContracts[toolName].validate(input);
+  return result instanceof Promise ? await result : result;
+}
+
+export function inputValidationError(
+  toolName: McpToolName,
+  input: unknown,
+  issues: readonly StandardSchemaV1.Issue[],
+): QueryErrorV1 {
+  const field = issueField(toolName, input, issues);
+  return {
+    code: 'invalid_request',
+    message: QUERY_ERROR_MESSAGES.invalid_request,
+    ...(field === undefined ? {} : { field }),
+  };
+}
 
 export const READ_ONLY_ANNOTATIONS = {
   readOnlyHint: true,

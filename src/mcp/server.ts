@@ -14,9 +14,12 @@ import {
   READ_ONLY_ANNOTATIONS,
   searchRequest,
   TOOL_SCHEMAS,
+  inputValidationError,
+  validateToolInput,
   type CallRelationToolInput,
   type FileRelationToolInput,
   type GetSymbolToolInput,
+  type McpToolName,
   type SearchToolInput,
 } from './contracts.js';
 
@@ -67,6 +70,24 @@ function queryResult(result: QueryResponseV1 | QueryErrorV1): CallToolResult {
   return 'code' in result ? queryErrorResult(result) : wireResult(result);
 }
 
+async function runTool<T>(
+  toolName: McpToolName,
+  input: unknown,
+  execute: (validated: T) => QueryResponseV1 | QueryErrorV1,
+  diagnostics: McpDiagnosticSink,
+): Promise<CallToolResult> {
+  try {
+    const validation = await validateToolInput(toolName, input);
+    if ('issues' in validation && validation.issues !== undefined)
+      return queryErrorResult(
+        inputValidationError(toolName, input, validation.issues),
+      );
+    return queryResult(execute(validation.value as T));
+  } catch {
+    return internalError(diagnostics);
+  }
+}
+
 export function createMcpServer(
   queryService: GraphQueryService,
   diagnostics: McpDiagnosticSink = () => undefined,
@@ -89,13 +110,13 @@ export function createMcpServer(
       outputSchema: TOOL_SCHEMAS.searchSymbols.output,
       annotations: READ_ONLY_ANNOTATIONS,
     },
-    async (input: SearchToolInput) => {
-      try {
-        return queryResult(queryService.searchSymbols(searchRequest(input)));
-      } catch {
-        return internalError(diagnostics);
-      }
-    },
+    async (input: SearchToolInput) =>
+      runTool<SearchToolInput>(
+        'searchSymbols',
+        input,
+        (validated) => queryService.searchSymbols(searchRequest(validated)),
+        diagnostics,
+      ),
   );
 
   server.registerTool(
@@ -108,13 +129,13 @@ export function createMcpServer(
       outputSchema: TOOL_SCHEMAS.getSymbol.output,
       annotations: READ_ONLY_ANNOTATIONS,
     },
-    async (input: GetSymbolToolInput) => {
-      try {
-        return queryResult(queryService.getSymbol(getSymbolRequest(input)));
-      } catch {
-        return internalError(diagnostics);
-      }
-    },
+    async (input: GetSymbolToolInput) =>
+      runTool<GetSymbolToolInput>(
+        'getSymbol',
+        input,
+        (validated) => queryService.getSymbol(getSymbolRequest(validated)),
+        diagnostics,
+      ),
   );
 
   server.registerTool(
@@ -127,17 +148,16 @@ export function createMcpServer(
       outputSchema: TOOL_SCHEMAS.listFileDependencies.output,
       annotations: READ_ONLY_ANNOTATIONS,
     },
-    async (input: FileRelationToolInput) => {
-      try {
-        return queryResult(
+    async (input: FileRelationToolInput) =>
+      runTool<FileRelationToolInput>(
+        'listFileDependencies',
+        input,
+        (validated) =>
           queryService.listFileDependencies(
-            fileRelationRequest('listFileDependencies', input),
+            fileRelationRequest('listFileDependencies', validated),
           ),
-        );
-      } catch {
-        return internalError(diagnostics);
-      }
-    },
+        diagnostics,
+      ),
   );
 
   server.registerTool(
@@ -150,17 +170,16 @@ export function createMcpServer(
       outputSchema: TOOL_SCHEMAS.listFileDependents.output,
       annotations: READ_ONLY_ANNOTATIONS,
     },
-    async (input: FileRelationToolInput) => {
-      try {
-        return queryResult(
+    async (input: FileRelationToolInput) =>
+      runTool<FileRelationToolInput>(
+        'listFileDependents',
+        input,
+        (validated) =>
           queryService.listFileDependents(
-            fileRelationRequest('listFileDependents', input),
+            fileRelationRequest('listFileDependents', validated),
           ),
-        );
-      } catch {
-        return internalError(diagnostics);
-      }
-    },
+        diagnostics,
+      ),
   );
 
   server.registerTool(
@@ -173,15 +192,16 @@ export function createMcpServer(
       outputSchema: TOOL_SCHEMAS.listCallers.output,
       annotations: READ_ONLY_ANNOTATIONS,
     },
-    async (input: CallRelationToolInput) => {
-      try {
-        return queryResult(
-          queryService.listCallers(callRelationRequest('listCallers', input)),
-        );
-      } catch {
-        return internalError(diagnostics);
-      }
-    },
+    async (input: CallRelationToolInput) =>
+      runTool<CallRelationToolInput>(
+        'listCallers',
+        input,
+        (validated) =>
+          queryService.listCallers(
+            callRelationRequest('listCallers', validated),
+          ),
+        diagnostics,
+      ),
   );
 
   server.registerTool(
@@ -194,15 +214,16 @@ export function createMcpServer(
       outputSchema: TOOL_SCHEMAS.listCallees.output,
       annotations: READ_ONLY_ANNOTATIONS,
     },
-    async (input: CallRelationToolInput) => {
-      try {
-        return queryResult(
-          queryService.listCallees(callRelationRequest('listCallees', input)),
-        );
-      } catch {
-        return internalError(diagnostics);
-      }
-    },
+    async (input: CallRelationToolInput) =>
+      runTool<CallRelationToolInput>(
+        'listCallees',
+        input,
+        (validated) =>
+          queryService.listCallees(
+            callRelationRequest('listCallees', validated),
+          ),
+        diagnostics,
+      ),
   );
 
   return server;
