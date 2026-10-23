@@ -704,7 +704,12 @@ function visitMember(
       path: owner.path,
       memberRole: role,
       parentId: ownerId,
-      scope: scopeForChild(owner.scope, ownerId, 'class', owner.qualifiedName),
+      scope: scopeForChild(
+        owner.scope,
+        ownerId,
+        owner.kind,
+        owner.qualifiedName,
+      ),
       locations: [location(root, source, member)],
       signature: signature(member, 'function', name),
       node: member,
@@ -737,7 +742,7 @@ function visitMember(
         scope: scopeForChild(
           owner.scope,
           ownerId,
-          'class',
+          owner.kind,
           owner.qualifiedName,
         ),
         locations: [location(root, source, member)],
