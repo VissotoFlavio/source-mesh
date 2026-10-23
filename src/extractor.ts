@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import path from 'node:path';
 import ts from 'typescript';
 import type { LoadedProject } from './project-loader/types.js';
@@ -219,6 +220,9 @@ function validPendingNodes(
 export function extractDeclarationGraph(
   request: ExtractDeclarationGraphRequest,
 ): DeclarationGraph {
+  const repositoryRoot = fs.realpathSync.native(
+    path.resolve(request.repositoryRoot),
+  );
   const requestedName = request.repositoryName?.normalize('NFC');
   const identityNodeId = request.identity?.nodeId ?? nodeId;
   const repositoryName =
@@ -243,7 +247,7 @@ export function extractDeclarationGraph(
   for (const relativePath of request.project.rootNames) {
     const canonicalPath = relativePath.replaceAll('\\', '/');
     const source = request.project.program.getSourceFile(
-      path.resolve(request.repositoryRoot, relativePath),
+      path.resolve(repositoryRoot, relativePath),
     );
     if (source === undefined) {
       diagnostics.push(
@@ -280,7 +284,7 @@ export function extractDeclarationGraph(
     moduleIds.set(canonicalPath, module.id);
     edges.push(makeEdge(file.id, module.id));
     visitSource(
-      request.repositoryRoot,
+      repositoryRoot,
       source,
       module.id,
       module.qualifiedName,
@@ -348,11 +352,7 @@ export function extractDeclarationGraph(
         parentId: id,
         scope: scopeForChild(first.scope, id, 'function', first.qualifiedName),
         locations: [
-          location(
-            request.repositoryRoot,
-            sourceByPath.get(first.path)!,
-            parameter,
-          ),
+          location(repositoryRoot, sourceByPath.get(first.path)!, parameter),
         ],
         signature: signature(parameter, 'parameter', parameterName),
         node: parameter,
@@ -397,7 +397,7 @@ export function extractDeclarationGraph(
       defaultIds.set(candidate.path, id);
   }
   const relationshipResult = extractRelationships({
-    repositoryRoot: request.repositoryRoot,
+    repositoryRoot,
     program: request.project.program,
     sources: sourceByPath,
     moduleIds,

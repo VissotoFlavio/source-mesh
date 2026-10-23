@@ -48,8 +48,9 @@ function fakeStats(
 
 async function fixture(): Promise<string> {
   const root = await mkdtemp(path.join(os.tmpdir(), 'sourcemesh-discovery-'));
-  fixtures.push(root);
-  return root;
+  const canonicalRoot = await realpath(root);
+  fixtures.push(canonicalRoot);
+  return canonicalRoot;
 }
 
 afterEach(async () => {
@@ -348,7 +349,7 @@ describe('discoverSourceFiles', () => {
   });
 
   it('discards all sources when a directory is replaced during inspection', async () => {
-    const root = path.join(os.tmpdir(), 'mock-discovery-root');
+    const root = await fixture();
     const nested = path.join(root, 'nested');
     const source = path.join(root, 'a.ts');
     const nestedSource = path.join(nested, 'b.ts');
