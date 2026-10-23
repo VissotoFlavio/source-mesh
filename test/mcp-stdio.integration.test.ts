@@ -610,6 +610,10 @@ processTest(
     ]);
 
     const oversized = spawnRawServer(repository.root);
+    let oversizedInputError: NodeJS.ErrnoException | undefined;
+    oversized.child.stdin?.once('error', (error) => {
+      oversizedInputError = error as NodeJS.ErrnoException;
+    });
     oversized.child.stdin?.end(
       Buffer.concat([
         Buffer.from(
@@ -625,6 +629,12 @@ processTest(
       ]),
     );
     const oversizedExit = await waitForExit(oversized.child);
+    assert.ok(
+      oversizedInputError === undefined ||
+        oversizedInputError.code === 'EPIPE' ||
+        oversizedInputError.code === 'EOF',
+      oversizedInputError,
+    );
     assert.equal(oversizedExit.code, 0);
     const oversizedOutput = oversized.read();
     assert.equal(oversizedOutput.stdout, '');
