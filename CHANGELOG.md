@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- Local read-only MCP `stdio` adapter with six bounded graph-query tools,
+  deterministic structured/text results, closed schemas, sanitized diagnostics,
+  offline enforcement, and official MCP v2 client integration coverage (#25).
+
 - Local offline analysis and query CLI with deterministic human/JSON output,
   contained schema-v1 snapshots, explicit create-only/overwrite behavior, stable
   exit codes, and sanitized diagnostics (#24).

@@ -22,12 +22,13 @@
     "test": "tsx --test \"test/**/*.test.ts\"",
     "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
     "build": "npm run clean && tsc -p tsconfig.build.json",
-    "offline:check": "npm run build && node --import ./scripts/deny-network.mjs --import tsx --test test/project-loader.offline.test.ts && node --import ./scripts/deny-network.mjs ./dist/cli.js --help",
+    "offline:check": "npm run build && node --import ./scripts/deny-network.mjs --import tsx --test test/project-loader.offline.test.ts && node --import ./scripts/deny-network.mjs ./dist/cli.js --help && node --import tsx --test test/mcp-stdio.integration.test.ts",
     "pack:check": "npm pack --dry-run",
     "check": "npm run format:check && npm run lint && npm run typecheck && npm test && npm run build && npm run offline:check && npm run pack:check"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
+    "@modelcontextprotocol/client": "2.3.1",
     "@types/node": "22.20.5",
     "eslint": "10.13.0",
     "prettier": "3.9.10",
@@ -35,6 +36,7 @@
     "typescript-eslint": "8.72.0"
   },
   "dependencies": {
+    "@modelcontextprotocol/server": "2.3.1",
     "typescript": "6.0.3"
   }
 }
