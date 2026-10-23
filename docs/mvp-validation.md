@@ -107,7 +107,7 @@ threshold and its output must not be converted into a scale or capacity claim.
 Recorded observation (five runs, values shown to four decimal places):
 
 - Node.js `v24.13.0`; Windows `10.0.26200`, `x64`.
-- Candidate revision `ea8ec6d1959f1623b3054c173006a7bb61b619ec`.
+- Candidate revision `8a97cc565c3550ceb0da41e40eae1fb6c78ffd4a`.
 - Fixture: 3 files, 27 nodes, 43 edges, 23,522 snapshot bytes.
 
 | Run | Analyze ms | CLI query ms | MCP call ms |

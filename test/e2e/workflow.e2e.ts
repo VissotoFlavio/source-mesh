@@ -16,6 +16,9 @@ const repository = process.cwd();
 const fixture = path.join(repository, 'test', 'fixtures', 'e2e-project');
 const cliEntry = path.join(repository, 'dist', 'cli.js');
 const denyNetwork = path.join(repository, 'scripts', 'deny-network.mjs');
+const sourceMarker = 'E2E_SOURCE_TEXT_MARKER';
+const secretMarker = 'E2E_SECRET_VALUE_MARKER';
+const malformedMarker = 'E2E_MALFORMED_SOURCE_MARKER';
 const temporaryRoots: string[] = [];
 
 interface ProcessResult {
@@ -117,11 +120,21 @@ function findFile(
 }
 
 function assertNoPrivateValues(value: unknown, root: string): void {
-  const serialized = JSON.stringify(value);
-  assert.equal(serialized.includes(root), false);
-  assert.equal(serialized.includes('E2E_IGNORED_SENTINEL'), false);
-  assert.equal(serialized.includes('missingLocalTarget'), false);
-  assert.equal(serialized.includes('secret'), false);
+  const serialized =
+    typeof value === 'string' ? value : (JSON.stringify(value) ?? '');
+  for (const privateValue of [
+    root,
+    repository,
+    'E2E_IGNORED_SENTINEL',
+    sourceMarker,
+    secretMarker,
+    malformedMarker,
+    'missingLocalTarget',
+    'export function malformed',
+    'Error:',
+    '\n    at ',
+  ])
+    assert.equal(serialized.includes(privateValue), false, privateValue);
 }
 
 function assertBoundedPages(value: unknown, limit: number): void {
@@ -242,11 +255,8 @@ test('built local workflow is deterministic, bounded, equivalent, and offline', 
     ),
     false,
   );
-  assert.equal(firstBytes.toString('utf8').includes(firstRoot), false);
-  assert.equal(
-    firstBytes.toString('utf8').includes('E2E_IGNORED_SENTINEL'),
-    false,
-  );
+  assertNoPrivateValues(snapshot, firstRoot);
+  assertNoPrivateValues(firstBytes.toString('utf8'), firstRoot);
 
   const service = findNode(snapshot, 'class', 'LocalService');
   const contract = findNode(snapshot, 'interface', 'ServiceContract');
@@ -358,6 +368,12 @@ test('built local workflow is deterministic, bounded, equivalent, and offline', 
       assert.equal(response.content[0]?.type, 'text');
       assertBoundedPages(response.structuredContent, 1);
       assertNoPrivateValues(response.structuredContent, firstRoot);
+      assertNoPrivateValues(
+        response.content[0]?.type === 'text'
+          ? response.content[0].text
+          : response.content[0],
+        firstRoot,
+      );
     }
 
     const cliMissing = await runSourceMesh(firstRoot, [
@@ -366,23 +382,27 @@ test('built local workflow is deterministic, bounded, equivalent, and offline', 
       firstRoot,
       '--id',
       `n:${'0'.repeat(64)}`,
+      '--allow-partial',
       '--output',
       'json',
     ]);
     assert.equal(cliMissing.code, 3);
     assert.equal(cliMissing.stdout, '');
     const cliError = parseJson<CliEnvelope>(cliMissing.stderr).error;
-    assert.deepEqual(
-      (
-        await mcp.client.callTool({
-          name: 'getSymbol',
-          arguments: { nodeId: `n:${'0'.repeat(64)}` },
-        })
-      ).structuredContent,
-      cliError,
-    );
+    assert.deepEqual(cliError, {
+      code: 'not_found',
+      message: 'The requested graph item was not found.',
+      field: 'nodeId',
+    });
+    const mcpMissing = await mcp.client.callTool({
+      name: 'getSymbol',
+      arguments: { nodeId: `n:${'0'.repeat(64)}`, allowPartial: true },
+    });
+    assert.equal(mcpMissing.isError, true);
+    assert.deepEqual(mcpMissing.structuredContent, cliError);
     assertNoPrivateValues(cliMissing.stderr, firstRoot);
     assertNoPrivateValues(cliError, firstRoot);
+    assertNoPrivateValues(mcpMissing, firstRoot);
   } finally {
     await mcp.client.close();
     assert.equal(mcp.transport.pid, null);
@@ -392,7 +412,7 @@ test('built local workflow is deterministic, bounded, equivalent, and offline', 
   const malformedRoot = await createFixtureCopy();
   await writeFile(
     path.join(malformedRoot, 'src', 'malformed.ts'),
-    'export function malformed(value: string { return value; }\n',
+    `export function malformed(value: string): string { return value; /* ${malformedMarker}`,
     'utf8',
   );
   const malformed = assertCliSuccess(
@@ -403,6 +423,33 @@ test('built local workflow is deterministic, bounded, equivalent, and offline', 
     'partial',
   );
   assertNoPrivateValues(malformed, malformedRoot);
+  const malformedSnapshot = await openValidatedSnapshot(malformedRoot);
+  const malformedBytes = await readFile(snapshotPath(malformedRoot));
+  assert.equal(malformedSnapshot.completeness, 'partial');
+  assert.deepEqual(
+    malformedSnapshot.diagnostics
+      .filter((diagnostic) => diagnostic.code === 'relationship_unresolved')
+      .map(({ code, severity, message, relationKind, reason, path }) => ({
+        code,
+        severity,
+        message,
+        relationKind,
+        reason,
+        path,
+      })),
+    [
+      {
+        code: 'relationship_unresolved',
+        severity: 'warning',
+        message: 'Relationship could not be resolved.',
+        relationKind: 'calls',
+        reason: 'unresolved-target',
+        path: 'src/entry.js',
+      },
+    ],
+  );
+  assertNoPrivateValues(malformedSnapshot, malformedRoot);
+  assertNoPrivateValues(malformedBytes.toString('utf8'), malformedRoot);
   const partialQuery = await runSourceMesh(malformedRoot, [
     'symbol',
     '--root',

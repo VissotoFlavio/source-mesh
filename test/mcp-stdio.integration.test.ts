@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { afterEach, test } from 'node:test';
@@ -23,6 +23,9 @@ const serverEntry = path.join(process.cwd(), 'dist', 'cli.js');
 const sourceEntry = path.join(process.cwd(), 'src', 'cli.ts');
 const processSpawnAvailable = spawn.name !== 'denyNetworkAccess';
 const processTest = processSpawnAvailable ? test : test.skip;
+const sourceMarker = 'E2E_SOURCE_TEXT_MARKER';
+const secretMarker = 'E2E_SECRET_VALUE_MARKER';
+const untrustedPayload = 'E2E_UNTRUSTED_RPC_PAYLOAD';
 
 function localServerArgs(): string[] {
   return existsSync(serverEntry)
@@ -72,7 +75,7 @@ async function createSyntheticRepository(): Promise<{
   );
   await writeFile(
     path.join(root, 'a.ts'),
-    "import { target } from './b.js';\nexport function caller() { return target(); }\nexport function shared() { return 1; }\n",
+    `import { target } from './b.js';\nexport function caller() { return target(); }\nexport function shared() { return '${sourceMarker}'; }\n`,
     'utf8',
   );
   await writeFile(
@@ -175,6 +178,17 @@ function spawnRawServer(
     stderr += chunk.toString('utf8');
   });
   return { child, read: () => ({ stdout, stderr }) };
+}
+
+function assertSafeProcessOutput(
+  output: TestIO,
+  sensitiveValues: readonly string[],
+): void {
+  const serialized = `${output.stdout}\n${output.stderr}`;
+  for (const value of sensitiveValues)
+    assert.equal(serialized.includes(value), false, value);
+  assert.equal(/\b(?:Error|TypeError|SyntaxError):/u.test(serialized), false);
+  assert.equal(/\n\s+at /u.test(serialized), false);
 }
 
 async function waitForExit(child: ReturnType<typeof spawn>): Promise<{
@@ -560,29 +574,63 @@ processTest(
   'raw malformed and oversized frames fail closed without protocol stdout',
   async () => {
     const repository = await createSyntheticRepository();
+    const snapshotBytes = await readFile(
+      path.join(repository.root, '.sourcemesh', 'graph.json'),
+    );
 
     const malformed = spawnRawServer(repository.root);
-    malformed.child.stdin?.end('not-json\n{"jsonrpc":"2.0","id":1}\n');
+    malformed.child.stdin?.end(
+      `not-json ${untrustedPayload}\n${JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        params: {
+          source: sourceMarker,
+          secret: secretMarker,
+          snapshot: snapshotBytes.toString('utf8'),
+          payload: untrustedPayload,
+        },
+      })}\n`,
+    );
     const malformedExit = await waitForExit(malformed.child);
     assert.equal(malformedExit.code, 0);
-    assert.deepEqual(malformed.read(), {
-      stdout: '',
-      stderr: 'mcp_transport_error\n',
-    });
+    const malformedOutput = malformed.read();
+    assert.equal(malformedOutput.stdout, '');
+    assert.match(malformedOutput.stderr, /^(?:mcp_transport_error\n)+$/u);
+    assertSafeProcessOutput(malformedOutput, [
+      repository.root,
+      sourceMarker,
+      secretMarker,
+      untrustedPayload,
+      snapshotBytes.toString('utf8'),
+    ]);
 
     const oversized = spawnRawServer(repository.root);
     oversized.child.stdin?.end(
       Buffer.concat([
+        Buffer.from(
+          `${JSON.stringify({
+            source: sourceMarker,
+            secret: secretMarker,
+            payload: untrustedPayload,
+          })}\n`,
+        ),
+        snapshotBytes,
         Buffer.alloc(MCP_MAX_MESSAGE_BYTES + 1, 0x41),
         Buffer.from('\n'),
       ]),
     );
     const oversizedExit = await waitForExit(oversized.child);
     assert.equal(oversizedExit.code, 0);
-    assert.deepEqual(oversized.read(), {
-      stdout: '',
-      stderr: 'mcp_transport_error\n',
-    });
+    const oversizedOutput = oversized.read();
+    assert.equal(oversizedOutput.stdout, '');
+    assert.match(oversizedOutput.stderr, /^(?:mcp_transport_error\n)+$/u);
+    assertSafeProcessOutput(oversizedOutput, [
+      repository.root,
+      sourceMarker,
+      secretMarker,
+      untrustedPayload,
+      snapshotBytes.toString('utf8'),
+    ]);
   },
 );
 
@@ -605,7 +653,16 @@ processTest(
       stderr: 'The command arguments are invalid. (snapshot)\n',
     });
 
-    await writeFile(path.join(root, '.sourcemesh', 'graph.json'), '{', 'utf8');
+    await writeFile(
+      path.join(root, '.sourcemesh', 'graph.json'),
+      JSON.stringify({
+        source: sourceMarker,
+        secret: secretMarker,
+        payload: untrustedPayload,
+        snapshot: 'malformed snapshot bytes',
+      }),
+      'utf8',
+    );
     const malformed = spawnRawServer(root);
     malformed.child.stdin?.end();
     const malformedExit = await waitForExit(malformed.child);
@@ -614,6 +671,13 @@ processTest(
       stdout: '',
       stderr: 'The snapshot is invalid.\n',
     });
+    assertSafeProcessOutput(malformed.read(), [
+      root,
+      sourceMarker,
+      secretMarker,
+      untrustedPayload,
+      'malformed snapshot bytes',
+    ]);
 
     await writeFile(
       path.join(root, '.sourcemesh', 'graph.json'),

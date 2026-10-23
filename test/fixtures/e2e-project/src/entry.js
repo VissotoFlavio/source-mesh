@@ -1,4 +1,4 @@
-/* global missingLocalTarget */
+/* global missingLocalTarget */ /* E2E_SOURCE_TEXT_MARKER must never cross the graph boundary. */
 
 import { invokeService } from './service.js';
 
