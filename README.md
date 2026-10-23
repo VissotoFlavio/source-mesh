@@ -100,6 +100,38 @@ compiler objects, stacks, secrets, or environment data. Runtime analysis uses
 filesystem and TypeScript compiler APIs only; it does not invoke Git, subprocesses,
 network APIs, telemetry, or hosted services.
 
+## End-to-end validation
+
+The repository contains one fully synthetic fixture at
+`test/fixtures/e2e-project/`. It is copied into test-owned temporary directories;
+no real or private repository is indexed or committed. The built-runtime proof is:
+
+```sh
+npm run build
+npm run e2e:check
+```
+
+The proof runs discovery, the project loader, TypeScript/JavaScript extraction,
+relationship resolution, snapshot writing and validated loading, all six bounded
+query families, CLI JSON, and a local MCP `stdio` client. It starts every
+SourceMesh child process with `scripts/deny-network.mjs`, compares repeated and
+different-root snapshot bytes, and compares the transport-neutral DTO returned by
+each CLI/MCP request pair. It also covers the reserved `generated/` exclusion,
+an unresolved call without a guessed edge, a sanitized recoverable syntax-error
+variant, and `--limit 1` response bounds.
+
+For the bounded manual observation (not a performance gate), run:
+
+```sh
+npm run measure:e2e -- --runs 5
+```
+
+The command reports raw analyze, CLI-query, and MCP-call samples together with
+Node.js, OS, commit, fixture counts, and snapshot bytes. These measurements are
+fixture- and host-specific; they are not production capacity, latency SLOs, or
+arbitrary-repository scale claims. The complete validation record and limitations
+are in [docs/mvp-validation.md](docs/mvp-validation.md).
+
 ## Project status
 
 SourceMesh is pre-release. Package publication, releases, hosted processing, and

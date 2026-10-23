@@ -8,6 +8,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- Repository-owned synthetic fixture and built-runtime end-to-end validation for
+  discovery, loading, extraction, relationships, deterministic snapshots,
+  bounded CLI queries, local MCP equivalence, malformed input, ignore rules,
+  and the guarded offline flow (#26).
+
 - Local read-only MCP `stdio` adapter with six bounded graph-query tools,
   deterministic structured/text results, closed schemas, sanitized diagnostics,
   offline enforcement, and official MCP v2 client integration coverage (#25).
