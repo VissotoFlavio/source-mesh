@@ -5,6 +5,7 @@ import path from 'node:path';
 import { test } from 'node:test';
 import {
   edgeId,
+  encodeSnapshot,
   extractDeclarationGraph,
   loadProject,
   nodeId,
@@ -73,6 +74,42 @@ test('extracts the closed declaration set with direct containment only', () => {
         node.memberRole === 'static',
     ),
   );
+  const interfaceNode = graph.nodes.find(
+    (node) => node.kind === 'interface' && node.name === 'User',
+  );
+  const interfaceMethod = graph.nodes.find(
+    (node) =>
+      node.kind === 'function' &&
+      node.name === 'save' &&
+      node.memberRole === 'instance',
+  );
+  const interfaceProperty = graph.nodes.find(
+    (node) =>
+      node.kind === 'variable' &&
+      node.name === 'id' &&
+      node.memberRole === 'instance',
+  );
+  assert.ok(interfaceNode && interfaceNode.kind === 'interface');
+  assert.ok(interfaceMethod && interfaceMethod.kind === 'function');
+  assert.ok(interfaceProperty && interfaceProperty.kind === 'variable');
+  assert.ok(
+    interfaceMethod &&
+      graph.edges.some(
+        (edge) =>
+          edge.kind === 'contains' &&
+          edge.from === interfaceNode?.id &&
+          edge.to === interfaceMethod.id,
+      ),
+  );
+  assert.ok(
+    interfaceProperty &&
+      graph.edges.some(
+        (edge) =>
+          edge.kind === 'contains' &&
+          edge.from === interfaceNode?.id &&
+          edge.to === interfaceProperty.id,
+      ),
+  );
   const serviceNode = graph.nodes.find(
     (node) => node.kind === 'class' && node.name === 'Service',
   );
@@ -123,6 +160,25 @@ test('extracts the closed declaration set with direct containment only', () => {
   const repositoryNode = graph.nodes.find((node) => node.kind === 'repository');
   assert.ok(repositoryNode);
   assert.equal(repositoryNode.id, repositoryId());
+});
+
+test('emits snapshot-valid identities for interface methods and properties', () => {
+  const { root, loaded } = project({
+    'src/contracts.ts': `
+      export interface Contract {
+        value: string;
+        run(input: string): void;
+      }
+    `,
+  });
+  const graph = extractDeclarationGraph({
+    repositoryRoot: root,
+    project: loaded,
+  });
+
+  assert.doesNotThrow(() =>
+    encodeSnapshot({ ...graph, completeness: 'complete' }),
+  );
 });
 
 test('identity and ordering are independent of approved root order and comments', () => {
