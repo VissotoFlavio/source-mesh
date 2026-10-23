@@ -103,3 +103,20 @@ The command hard-limits the sample count to ten and reports raw per-run elapsed
 milliseconds for analyze, one CLI query, and one MCP call, plus Node/OS/commit,
 fixture file/node/edge counts, and snapshot bytes. It has no pass/fail latency
 threshold and its output must not be converted into a scale or capacity claim.
+
+Recorded observation (five runs, values shown to four decimal places):
+
+- Node.js `v24.13.0`; Windows `10.0.26200`, `x64`.
+- Candidate revision `ea8ec6d1959f1623b3054c173006a7bb61b619ec`.
+- Fixture: 3 files, 27 nodes, 43 edges, 23,522 snapshot bytes.
+
+| Run | Analyze ms | CLI query ms | MCP call ms |
+| --: | ---------: | -----------: | ----------: |
+|   1 |  1131.1222 |     771.7595 |     10.0859 |
+|   2 |  1135.9104 |     728.1269 |      7.9223 |
+|   3 |  1129.4401 |     731.1744 |      8.4723 |
+|   4 |  1160.8683 |     743.8963 |      9.9145 |
+|   5 |  1164.3326 |     730.9881 |      8.1363 |
+
+This is one host-specific observation of the synthetic fixture, not a benchmark
+or a claim about other repositories.
