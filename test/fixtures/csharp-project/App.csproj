@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="Library.csproj" />
+    <Compile Remove="src\Library\Contracts.cs" />
+    <Compile Remove="src\Library\Types.cs" />
+  </ItemGroup>
+</Project>

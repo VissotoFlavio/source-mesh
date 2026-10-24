@@ -56,6 +56,14 @@ const prohibitedAttempts = [
     'subprocess',
     "const { spawn } = await import('node:child_process'); spawn(process.execPath, ['--version'])",
   ],
+  [
+    'restore subprocess path',
+    "const { spawn } = await import('node:child_process'); spawn(process.execPath, ['restore'])",
+  ],
+  [
+    'build subprocess path',
+    "const { spawn } = await import('node:child_process'); spawn(process.execPath, ['build'])",
+  ],
 ] as const;
 
 test('offline guard rejects representative network and escape paths', async (t) => {

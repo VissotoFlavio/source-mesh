@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- Repository-owned synthetic C# solution fixture with offline end-to-end
+  coverage for deterministic v2 snapshots, CLI/MCP DTO parity, and fail-closed
+  helper and persistence paths (#46).
+
 - Deterministic C# graph extraction from the approved Roslyn DTO, including
   schema-v2 containment, local references/uses/heritage/call edges, and
   fail-closed relationship diagnostics (#45).
