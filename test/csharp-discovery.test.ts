@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, test } from 'node:test';
 import { discoverCSharpManifest } from '../src/index.js';
-import { main, type CliIO } from '../src/cli.js';
+import { main, type CliIO, type CliServices } from '../src/cli.js';
 import {
   CSHARP_MAX_XML_ATTRIBUTES_PER_NODE,
   CSHARP_MAX_XML_DEPTH,
@@ -578,7 +578,7 @@ test('csharp discovery deduplicates includes before bounded reads and caps repet
   assert.equal(readFileCalls, 3);
 });
 
-test('csharp CLI returns an explicit manifest-only result without writing a snapshot', async () => {
+test('csharp CLI keeps the discovery-only service seam explicit', async () => {
   const root = fixture();
   write(
     root,
@@ -586,6 +586,9 @@ test('csharp CLI returns an explicit manifest-only result without writing a snap
     '<Project><PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup></Project>',
   );
   write(root, 'App.cs', 'class App {}');
+  const discoveryOnlyServices = {
+    discoverCSharpManifest,
+  } as unknown as CliServices;
   const jsonIO = capture();
   assert.equal(
     await main(
@@ -600,7 +603,7 @@ test('csharp CLI returns an explicit manifest-only result without writing a snap
         '--output',
         'json',
       ],
-      undefined,
+      discoveryOnlyServices,
       jsonIO,
     ),
     0,
@@ -628,7 +631,7 @@ test('csharp CLI returns an explicit manifest-only result without writing a snap
         '--project',
         'App.csproj',
       ],
-      undefined,
+      discoveryOnlyServices,
       humanIO,
     ),
     0,

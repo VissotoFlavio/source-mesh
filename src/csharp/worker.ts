@@ -13,8 +13,17 @@ import {
   CSHARP_MAX_SOLUTION_PROJECTS,
   type CSharpManifest,
   type CSharpProjectManifest,
+  type CSharpWorkerDeclaration,
+  type CSharpWorkerLocation,
+  type CSharpWorkerProjectResult,
+  type CSharpWorkerRelationship,
+  type CSharpWorkerRelationshipKind,
+  type CSharpWorkerRelationshipStatus,
+  type CSharpWorkerSymbol,
 } from './contracts.js';
 import { normalizeRelativePath, readFileBounded } from '../discovery.js';
+
+export type { CSharpWorkerProjectResult } from './contracts.js';
 
 export const CSHARP_WORKER_TIMEOUT_MS = 15_000;
 export const CSHARP_WORKER_MAX_REQUEST_BYTES = 2 * 1024 * 1024;
@@ -29,13 +38,6 @@ export interface CSharpWorkerDiagnostic {
   readonly path?: string;
   readonly line?: number;
   readonly column?: number;
-}
-
-export interface CSharpWorkerProjectResult {
-  readonly path: string;
-  readonly sourceCount: number;
-  readonly syntaxTreeCount: number;
-  readonly diagnosticCount: number;
 }
 
 export interface CSharpWorkerResult {
@@ -165,6 +167,279 @@ function ordinal(left: string, right: string): number {
   return left.length - right.length;
 }
 
+const workerNodeKinds = new Set<CSharpWorkerSymbol['kind']>([
+  'module',
+  'namespace',
+  'class',
+  'interface',
+  'function',
+  'variable',
+  'type',
+  'parameter',
+]);
+const workerMemberRoles = new Set<CSharpWorkerSymbol['memberRole']>([
+  'none',
+  'static',
+  'instance',
+]);
+const workerRelationshipKinds = new Set<CSharpWorkerRelationshipKind>([
+  'uses',
+  'extends',
+  'implements',
+  'calls',
+]);
+const workerRelationshipStatuses = new Set<CSharpWorkerRelationshipStatus>([
+  'resolved',
+  'external',
+  'unresolved',
+  'ambiguous',
+  'dynamic',
+  'unsupported',
+  'missing-source',
+]);
+
+function safeText(value: unknown): value is string {
+  if (typeof value !== 'string' || value.length === 0 || value.length > 16_384)
+    return false;
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const next = value.charCodeAt(index + 1);
+      if (!(next >= 0xdc00 && next <= 0xdfff)) return false;
+      index += 1;
+    } else if (code >= 0xdc00 && code <= 0xdfff) return false;
+    else if (code < 0x20) return false;
+  }
+  return true;
+}
+
+function comparePosition(
+  left: CSharpWorkerPositionLike,
+  right: CSharpWorkerPositionLike,
+): number {
+  return left.line - right.line || left.column - right.column;
+}
+
+interface CSharpWorkerPositionLike {
+  readonly line: number;
+  readonly column: number;
+}
+
+function compareLocation(
+  left: CSharpWorkerLocation,
+  right: CSharpWorkerLocation,
+): number {
+  return (
+    ordinal(left.path, right.path) ||
+    comparePosition(left.start, right.start) ||
+    comparePosition(left.end, right.end)
+  );
+}
+
+function clonePosition(value: unknown): CSharpWorkerPositionLike {
+  if (!closedObject(value, ['line', 'column'])) fail('protocol_invalid');
+  if (!positiveInteger(value.line) || !positiveInteger(value.column))
+    fail('protocol_invalid');
+  return Object.freeze({ line: value.line, column: value.column });
+}
+
+function cloneLocation(
+  value: unknown,
+  allowedPaths: ReadonlySet<string>,
+): CSharpWorkerLocation {
+  if (!closedObject(value, ['path', 'start', 'end'])) fail('protocol_invalid');
+  if (!safePath(value.path) || !allowedPaths.has(value.path))
+    fail('protocol_invalid');
+  const start = clonePosition(value.start);
+  const end = clonePosition(value.end);
+  if (comparePosition(start, end) > 0) fail('protocol_invalid');
+  return Object.freeze({
+    path: value.path,
+    start,
+    end,
+  });
+}
+
+function cloneSymbol(
+  value: unknown,
+  allowedPaths: ReadonlySet<string>,
+): CSharpWorkerSymbol {
+  if (
+    !closedObject(value, [
+      'kind',
+      'path',
+      'name',
+      'qualifiedName',
+      'memberRole',
+    ]) ||
+    typeof value.kind !== 'string' ||
+    !workerNodeKinds.has(value.kind as CSharpWorkerSymbol['kind']) ||
+    !safePath(value.path) ||
+    !allowedPaths.has(value.path) ||
+    !safeText(value.name) ||
+    !safeText(value.qualifiedName) ||
+    typeof value.memberRole !== 'string' ||
+    !workerMemberRoles.has(value.memberRole as CSharpWorkerSymbol['memberRole'])
+  )
+    fail('protocol_invalid');
+  return Object.freeze({
+    kind: value.kind as CSharpWorkerSymbol['kind'],
+    path: value.path,
+    name: value.name,
+    qualifiedName: value.qualifiedName,
+    memberRole: value.memberRole as CSharpWorkerSymbol['memberRole'],
+  });
+}
+
+function compareSymbol(
+  left: CSharpWorkerSymbol,
+  right: CSharpWorkerSymbol,
+): number {
+  return (
+    ordinal(left.path, right.path) ||
+    ordinal(left.qualifiedName, right.qualifiedName) ||
+    ordinal(left.kind, right.kind) ||
+    ordinal(left.memberRole, right.memberRole) ||
+    ordinal(left.name, right.name)
+  );
+}
+
+function cloneDeclaration(
+  value: unknown,
+  allowedPaths: ReadonlySet<string>,
+): CSharpWorkerDeclaration {
+  if (
+    !closedObject(value, [
+      'kind',
+      'path',
+      'name',
+      'qualifiedName',
+      'memberRole',
+      'parent',
+      'locations',
+    ])
+  )
+    fail('protocol_invalid');
+  const symbol = cloneSymbol(
+    {
+      kind: value.kind,
+      path: value.path,
+      name: value.name,
+      qualifiedName: value.qualifiedName,
+      memberRole: value.memberRole,
+    },
+    allowedPaths,
+  );
+  if (symbol.kind === 'module') fail('protocol_invalid');
+  if (
+    !closedObject(value.parent, [
+      'kind',
+      'path',
+      'name',
+      'qualifiedName',
+      'memberRole',
+    ])
+  )
+    fail('protocol_invalid');
+  const parent = cloneSymbol(value.parent, allowedPaths);
+  if (
+    !['module', 'namespace', 'class', 'interface', 'type', 'function'].includes(
+      parent.kind,
+    )
+  )
+    fail('protocol_invalid');
+  if (
+    !Array.isArray(value.locations) ||
+    value.locations.length === 0 ||
+    value.locations.length > 4096
+  )
+    fail('protocol_invalid');
+  const locations = value.locations.map((item) =>
+    cloneLocation(item, allowedPaths),
+  );
+  if (
+    !locations.every(
+      (item, index) =>
+        index === 0 || compareLocation(locations[index - 1]!, item) <= 0,
+    )
+  )
+    fail('protocol_invalid');
+  return Object.freeze({
+    ...symbol,
+    parent,
+    locations: Object.freeze(locations),
+  });
+}
+
+function cloneRelationship(
+  value: unknown,
+  allowedPaths: ReadonlySet<string>,
+): CSharpWorkerRelationship {
+  if (!closedObject(value, ['kind', 'status', 'source', 'target', 'location']))
+    fail('protocol_invalid');
+  if (
+    typeof value.kind !== 'string' ||
+    !workerRelationshipKinds.has(value.kind as CSharpWorkerRelationshipKind) ||
+    typeof value.status !== 'string' ||
+    !workerRelationshipStatuses.has(
+      value.status as CSharpWorkerRelationshipStatus,
+    )
+  )
+    fail('protocol_invalid');
+  const source = cloneSymbol(value.source, allowedPaths);
+  const status = value.status as CSharpWorkerRelationshipStatus;
+  const target =
+    value.target === undefined
+      ? undefined
+      : cloneSymbol(value.target, allowedPaths);
+  if ((status === 'resolved') !== (target !== undefined))
+    fail('protocol_invalid');
+  const location =
+    value.location === undefined
+      ? undefined
+      : cloneLocation(value.location, allowedPaths);
+  return Object.freeze({
+    kind: value.kind as CSharpWorkerRelationshipKind,
+    status,
+    source,
+    ...(target === undefined ? {} : { target }),
+    ...(location === undefined ? {} : { location }),
+  });
+}
+
+function compareDeclaration(
+  left: CSharpWorkerDeclaration,
+  right: CSharpWorkerDeclaration,
+): number {
+  return (
+    compareSymbol(left, right) ||
+    compareSymbol(left.parent, right.parent) ||
+    compareLocation(left.locations[0]!, right.locations[0]!)
+  );
+}
+
+const emptyLocation: CSharpWorkerLocation = {
+  path: '',
+  start: { line: 0, column: 0 },
+  end: { line: 0, column: 0 },
+};
+
+function compareRelationship(
+  left: CSharpWorkerRelationship,
+  right: CSharpWorkerRelationship,
+): number {
+  return (
+    ordinal(left.kind, right.kind) ||
+    ordinal(left.status, right.status) ||
+    compareSymbol(left.source, right.source) ||
+    compareSymbol(left.target ?? left.source, right.target ?? right.source) ||
+    compareLocation(
+      left.location ?? emptyLocation,
+      right.location ?? emptyLocation,
+    )
+  );
+}
+
 function sorted<T extends { readonly path: string }>(
   items: readonly T[],
 ): boolean {
@@ -273,7 +548,7 @@ function cloneManifest(value: CSharpManifest): CSharpManifest {
   if (
     projects.some((project) =>
       project.references.some(
-        (reference) => reference === project.path || !paths.has(reference),
+        (reference) => reference === project.path,
       ),
     )
   )
@@ -507,6 +782,8 @@ function parseResponse(
         'sourceCount',
         'syntaxTreeCount',
         'diagnosticCount',
+        'declarations',
+        'relationships',
       ]) ||
       !safePath(project.path)
     )
@@ -520,11 +797,49 @@ function parseResponse(
       !nonNegativeInteger(diagnosticCount)
     )
       fail('protocol_invalid');
+    const allowedPaths = new Set(
+      expectedProjects.flatMap((item) => item.files),
+    );
+    const declarations =
+      project.declarations === undefined
+        ? []
+        : Array.isArray(project.declarations)
+          ? project.declarations.map((item) =>
+              cloneDeclaration(item, allowedPaths),
+            )
+          : fail('protocol_invalid');
+    const relationships =
+      project.relationships === undefined
+        ? []
+        : Array.isArray(project.relationships)
+          ? project.relationships.map((item) =>
+              cloneRelationship(item, allowedPaths),
+            )
+          : fail('protocol_invalid');
+    if (
+      !declarations.every(
+        (item, index) =>
+          index === 0 ||
+          compareDeclaration(declarations[index - 1]!, item) <= 0,
+      ) ||
+      !relationships.every(
+        (item, index) =>
+          index === 0 ||
+          compareRelationship(relationships[index - 1]!, item) <= 0,
+      )
+    )
+      fail('protocol_invalid');
     return Object.freeze({
       path: project.path,
       sourceCount,
       syntaxTreeCount,
       diagnosticCount,
+      ...(project.declarations === undefined
+        ? {}
+        : { declarations: Object.freeze(declarations) }),
+      ...(project.relationships === undefined
+        ? {}
+        : { relationships: Object.freeze(relationships) }),
     });
   });
   const diagnostics = value.diagnostics.map(
@@ -580,6 +895,21 @@ function parseResponse(
             (diagnostic.path === undefined ||
               project.files.includes(diagnostic.path)),
         ),
+    )
+  )
+    fail('protocol_invalid');
+  const allowedPaths = new Set(expectedProjects.flatMap((item) => item.files));
+  if (
+    projects.some((project) =>
+      [...(project.declarations ?? []), ...(project.relationships ?? [])].some(
+        (item) =>
+          'locations' in item
+            ? item.locations.some(
+                (location) => !allowedPaths.has(location.path),
+              )
+            : item.location !== undefined &&
+              !allowedPaths.has(item.location.path),
+      ),
     )
   )
     fail('protocol_invalid');
