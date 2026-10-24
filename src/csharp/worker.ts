@@ -547,9 +547,7 @@ function cloneManifest(value: CSharpManifest): CSharpManifest {
   const paths = new Set(projects.map((project) => project.path));
   if (
     projects.some((project) =>
-      project.references.some(
-        (reference) => reference === project.path,
-      ),
+      project.references.some((reference) => reference === project.path),
     )
   )
     fail('input_invalid');
