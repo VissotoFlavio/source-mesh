@@ -811,6 +811,7 @@ async function discoverProjectFiles(
     filesystem: state.filesystem,
     extensions: ['.cs'],
     includeDeclarations: true,
+    excludedDirectoryNames: ['bin', 'obj'],
     consumeDirectoryEntries: (count) => {
       if (state.directoryEntries > MAX_DIRECTORY_ENTRIES - count) return false;
       state.directoryEntries += count;

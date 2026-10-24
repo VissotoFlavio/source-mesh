@@ -99,6 +99,7 @@ export interface DiscoverSourceFilesOptions {
   readonly filesystem?: DiscoveryFileSystem;
   readonly extensions?: readonly string[];
   readonly includeDeclarations?: boolean;
+  readonly excludedDirectoryNames?: readonly string[];
   readonly consumeDirectoryEntries?: (count: number) => boolean;
 }
 
@@ -137,6 +138,7 @@ interface DiscoveryState {
   readonly visitedDirectories: Set<string>;
   readonly extensions: ReadonlySet<string>;
   readonly includeDeclarations: boolean;
+  readonly excludedDirectoryNames: ReadonlySet<string>;
   readonly consumeDirectoryEntries: ((count: number) => boolean) | undefined;
   inspectedEntries: number;
   sourceBytes: number;
@@ -594,6 +596,11 @@ async function inspectDirectory(
     }
     if (hasReservedDirectory(relativePath) || isSecretFile(relativePath))
       continue;
+    if (
+      entry.isDirectory() &&
+      state.excludedDirectoryNames.has(entry.name.toLowerCase())
+    )
+      continue;
 
     if (entry.isSymbolicLink()) {
       addDiagnostic(state, diagnostic('symlink_skipped', relativePath));
@@ -821,6 +828,9 @@ export async function discoverSourceFiles(
       }),
     ),
     includeDeclarations: options.includeDeclarations ?? false,
+    excludedDirectoryNames: new Set(
+      (options.excludedDirectoryNames ?? []).map((name) => name.toLowerCase()),
+    ),
     consumeDirectoryEntries: options.consumeDirectoryEntries,
     inspectedEntries: 0,
     sourceBytes: 0,

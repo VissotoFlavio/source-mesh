@@ -117,6 +117,21 @@ test('csharp project discovery builds a contained reference closure and compile 
   assert.equal(JSON.stringify(result.manifest).includes('<Project'), false);
 });
 
+test('csharp project discovery excludes generated sources under bin and obj', async () => {
+  const root = fixture();
+  write(root, 'App.csproj', '<Project />');
+  write(root, 'App.cs', 'class App {}');
+  write(root, 'bin/Debug/net8.0/App.AssemblyInfo.cs', 'class GeneratedBin {}');
+  write(root, 'obj/Debug/net8.0/App.AssemblyInfo.cs', 'class GeneratedObj {}');
+
+  const result = await discoverCSharpManifest(root, {
+    project: 'App.csproj',
+  });
+
+  assert.deepEqual(result.diagnostics, []);
+  assert.deepEqual(result.manifest?.projects[0]?.files, ['App.cs']);
+});
+
 test('csharp XML structural limits fail closed without a manifest', async () => {
   const cases = [
     `<Project>${'<ItemGroup />'.repeat(CSHARP_MAX_XML_NODES)}</Project>`,
