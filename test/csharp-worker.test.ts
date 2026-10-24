@@ -144,6 +144,35 @@ test('C# worker rejects manifest paths that could escape the staging root', asyn
   );
 });
 
+test('C# worker sanitizes temporary staging failures', async () => {
+  let invoked = false;
+  await assert.rejects(
+    analyzeCSharpManifestForTest(
+      root,
+      manifest,
+      async () => {
+        invoked = true;
+        return {
+          stdout: Buffer.alloc(0),
+          stderr: Buffer.alloc(0),
+          exitCode: 0,
+          timedOut: false,
+        };
+      },
+      helper,
+      host,
+      async () => {
+        throw new Error('C:\\private\\temporary-directory');
+      },
+    ),
+    (error: unknown) =>
+      error instanceof CSharpWorkerError &&
+      error.code === 'process_failed' &&
+      error.message === 'The local C# analysis helper could not complete.',
+  );
+  assert.equal(invoked, false);
+});
+
 test('C# worker rejects duplicate references and Windows-unsafe logical paths', async () => {
   const duplicateReferences: CSharpManifest = {
     ...manifest,

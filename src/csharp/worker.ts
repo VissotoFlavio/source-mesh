@@ -84,6 +84,7 @@ interface SourcePlan extends WorkerSource {
 }
 
 type WorkerRunner = (invocation: WorkerInvocation) => Promise<WorkerExecution>;
+type StagingCreator = (prefix: string) => Promise<string>;
 
 const helperDll = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -636,6 +637,7 @@ async function executeWorker(
   runner: WorkerRunner,
   artifact = helperDll,
   host = dotnetHost,
+  createStaging: StagingCreator = fs.mkdtemp,
 ): Promise<CSharpWorkerResult> {
   const safeManifest = cloneManifest(manifest);
   const sourcePlans = createSourcePlans(safeManifest);
@@ -652,7 +654,9 @@ async function executeWorker(
     }) + '\n';
   if (Buffer.byteLength(request, 'utf8') > CSHARP_WORKER_MAX_REQUEST_BYTES)
     fail('resource_limit');
-  const staging = await fs.mkdtemp(path.join(tmpdir(), 'sourcemesh-roslyn-'));
+  const staging = await createStaging(
+    path.join(tmpdir(), 'sourcemesh-roslyn-'),
+  ).catch(() => fail('process_failed'));
   let result: CSharpWorkerResult | undefined;
   let failure: unknown;
   try {
@@ -711,6 +715,14 @@ export function analyzeCSharpManifestForTest(
   runner: WorkerRunner,
   artifact: string,
   host: string,
+  createStaging?: StagingCreator,
 ): Promise<CSharpWorkerResult> {
-  return executeWorker(repositoryRoot, manifest, runner, artifact, host);
+  return executeWorker(
+    repositoryRoot,
+    manifest,
+    runner,
+    artifact,
+    host,
+    createStaging,
+  );
 }
