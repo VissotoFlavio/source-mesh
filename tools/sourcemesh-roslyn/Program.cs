@@ -5,6 +5,7 @@ using System.Runtime.InteropServices;
 using Microsoft.Win32.SafeHandles;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
 
 record Request(int Version, Manifest Manifest, List<Source> Sources);
 record Manifest(string Language, Selection Selection, Solution? Solution, List<Project> Projects);
@@ -12,8 +13,13 @@ record Selection(string Kind, string Path);
 record Solution(string Path, List<string> Projects);
 record Project(string Path, string? TargetFramework, string? LangVersion, List<string> References, List<string> Files);
 record Source(string Path, string Staged);
+record PositionResult(int Line, int Column);
+record LocationResult(string Path, PositionResult Start, PositionResult End);
+record SymbolResult(string Kind, string Path, string Name, string QualifiedName, string MemberRole);
+record DeclarationResult(string Kind, string Path, string Name, string QualifiedName, string MemberRole, SymbolResult Parent, List<LocationResult> Locations);
+record RelationshipResult(string Kind, string Status, SymbolResult Source, SymbolResult? Target, LocationResult? Location);
 record Response(int Version, List<ProjectResult> Projects, List<DiagnosticResult> Diagnostics);
-record ProjectResult(string Path, int SourceCount, int SyntaxTreeCount, int DiagnosticCount);
+record ProjectResult(string Path, int SourceCount, int SyntaxTreeCount, int DiagnosticCount, List<DeclarationResult> Declarations, List<RelationshipResult> Relationships);
 record DiagnosticResult(string Project, string Code, string Severity, string? Path, int? Line, int? Column);
 
 static class WindowsPath
@@ -172,6 +178,386 @@ internal static class Program
     const long MaxAggregateBytes = 256L * 1024 * 1024;
     const int MaxDiagnostics = 4096;
 
+    sealed class ProjectAnalysis
+    {
+        public readonly Project Project;
+        public readonly Dictionary<SyntaxTree, SemanticModel> Models;
+        public readonly Dictionary<SyntaxNode, SymbolResult> Symbols = new();
+        public readonly Dictionary<string, List<SymbolResult>> LocalSymbols = new(StringComparer.Ordinal);
+        public readonly List<DeclarationResult> Declarations = new();
+        public readonly List<RelationshipResult> Relationships = new();
+
+        public ProjectAnalysis(Project project, Dictionary<SyntaxTree, SemanticModel> models)
+        {
+            Project = project;
+            Models = models;
+        }
+    }
+
+    static string Display(ISymbol symbol) =>
+        symbol.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat).Replace("global::", "", StringComparison.Ordinal);
+
+    static string SymbolKey(ISymbol symbol)
+    {
+        if (symbol is IAliasSymbol alias) return SymbolKey(alias.Target);
+        if (symbol is INamespaceSymbol namespaceSymbol)
+            return $"namespace:{Display(namespaceSymbol)}";
+        if (symbol is INamedTypeSymbol namedType)
+            return $"type:{Display(namedType)}";
+        if (symbol is IMethodSymbol method)
+        {
+            var container = method.ContainingSymbol is null ? "" : SymbolKey(method.ContainingSymbol);
+            var parameters = string.Join(",", method.Parameters.Select(parameter => Display(parameter.Type)));
+            return $"method:{container}.{method.Name}({parameters})";
+        }
+        if (symbol is IPropertySymbol property)
+            return $"property:{SymbolKey(property.ContainingSymbol)}.{property.Name}";
+        if (symbol is IFieldSymbol field)
+            return $"field:{SymbolKey(field.ContainingSymbol)}.{field.Name}";
+        if (symbol is IParameterSymbol parameter)
+            return $"parameter:{SymbolKey(parameter.ContainingSymbol)}.{parameter.Name}";
+        return $"symbol:{symbol.Kind}:{Display(symbol)}";
+    }
+
+    static SymbolResult Module(string path) => new("module", path, path, path, "none");
+
+    static string JoinName(string prefix, string name) =>
+        string.IsNullOrEmpty(prefix) ? name : $"{prefix}.{name}";
+
+    static string LastName(string value)
+    {
+        var separator = value.LastIndexOf('.');
+        return separator < 0 ? value : value[(separator + 1)..];
+    }
+
+    static LocationResult Location(SyntaxNode node)
+    {
+        var span = node.GetLocation().GetLineSpan();
+        return new(
+            span.Path,
+            new(span.StartLinePosition.Line + 1, span.StartLinePosition.Character + 1),
+            new(span.EndLinePosition.Line + 1, span.EndLinePosition.Character + 1));
+    }
+
+    static string MemberRole(ISymbol? symbol) => symbol?.IsStatic == true ? "static" : "instance";
+
+    static void AddLocalSymbol(ProjectAnalysis analysis, ISymbol? symbol, SymbolResult result)
+    {
+        if (symbol is null) return;
+        var key = SymbolKey(symbol);
+        var values = analysis.LocalSymbols.TryGetValue(key, out var existing)
+            ? existing
+            : new List<SymbolResult>();
+        if (!values.Contains(result)) values.Add(result);
+        analysis.LocalSymbols[key] = values;
+    }
+
+    static void AddDeclaration(ProjectAnalysis analysis, SyntaxNode node, ISymbol? symbol, SymbolResult result, SymbolResult parent)
+    {
+        analysis.Symbols[node] = result;
+        AddLocalSymbol(analysis, symbol, result);
+        analysis.Declarations.Add(new(
+            result.Kind,
+            result.Path,
+            result.Name,
+            result.QualifiedName,
+            result.MemberRole,
+            parent,
+            new List<LocationResult> { Location(node) }));
+    }
+
+    static void AddParameters(ProjectAnalysis analysis, SyntaxNode owner, ParameterListSyntax parameterList, SymbolResult function)
+    {
+        var model = analysis.Models[owner.SyntaxTree];
+        foreach (var parameter in parameterList.Parameters)
+        {
+            if (parameter.Identifier.IsMissing) continue;
+            var name = parameter.Identifier.ValueText;
+            var result = new SymbolResult("parameter", owner.SyntaxTree.FilePath, name, JoinName(function.QualifiedName, name), "none");
+            AddDeclaration(analysis, parameter, model.GetDeclaredSymbol(parameter), result, function);
+        }
+    }
+
+    static void CollectNode(
+        ProjectAnalysis analysis,
+        SyntaxNode node,
+        SymbolResult module,
+        SymbolResult? namespaceSymbol,
+        SymbolResult? typeSymbol,
+        SymbolResult? functionSymbol)
+    {
+        var model = analysis.Models[node.SyntaxTree];
+        if (node is BaseNamespaceDeclarationSyntax namespaceDeclaration)
+        {
+            var name = namespaceDeclaration.Name.ToString();
+            var qualifiedName = JoinName(namespaceSymbol?.QualifiedName ?? "", name);
+            var result = new SymbolResult("namespace", node.SyntaxTree.FilePath, LastName(name), qualifiedName, "none");
+            AddDeclaration(analysis, namespaceDeclaration, model.GetDeclaredSymbol(namespaceDeclaration), result, namespaceSymbol ?? module);
+            foreach (var member in namespaceDeclaration.Members)
+                CollectNode(analysis, member, module, result, null, null);
+            return;
+        }
+
+        if (node is BaseTypeDeclarationSyntax typeDeclaration)
+        {
+            var name = typeDeclaration.Identifier.ValueText;
+            if (string.IsNullOrEmpty(name)) return;
+            var kind = typeDeclaration is ClassDeclarationSyntax ? "class"
+                : typeDeclaration is InterfaceDeclarationSyntax ? "interface" : "type";
+            var parent = typeSymbol ?? namespaceSymbol ?? module;
+            var result = new SymbolResult(kind, node.SyntaxTree.FilePath, name, JoinName(parent.QualifiedName == module.QualifiedName ? "" : parent.QualifiedName, name), "none");
+            AddDeclaration(analysis, typeDeclaration, model.GetDeclaredSymbol(typeDeclaration), result, parent);
+            if (typeDeclaration is TypeDeclarationSyntax declaredType)
+                foreach (var member in declaredType.Members)
+                    CollectNode(analysis, member, module, namespaceSymbol, result, null);
+            return;
+        }
+
+        if (node is MethodDeclarationSyntax method)
+        {
+            var parent = typeSymbol ?? functionSymbol ?? module;
+            var name = method.Identifier.ValueText;
+            var methodSymbol = model.GetDeclaredSymbol(method);
+            var result = new SymbolResult("function", node.SyntaxTree.FilePath, name, JoinName(parent.QualifiedName == module.QualifiedName ? "" : parent.QualifiedName, name), MemberRole(methodSymbol));
+            AddDeclaration(analysis, method, methodSymbol, result, parent);
+            AddParameters(analysis, method, method.ParameterList, result);
+            if (method.Body is not null)
+                foreach (var child in method.Body.ChildNodes())
+                    CollectNode(analysis, child, module, namespaceSymbol, typeSymbol, result);
+            if (method.ExpressionBody is not null)
+                CollectNode(analysis, method.ExpressionBody.Expression, module, namespaceSymbol, typeSymbol, result);
+            return;
+        }
+
+        if (node is LocalFunctionStatementSyntax localFunction)
+        {
+            var parent = functionSymbol ?? typeSymbol ?? module;
+            var name = localFunction.Identifier.ValueText;
+            var localSymbol = model.GetDeclaredSymbol(localFunction);
+            var result = new SymbolResult("function", node.SyntaxTree.FilePath, name, JoinName(parent.QualifiedName == module.QualifiedName ? "" : parent.QualifiedName, name), MemberRole(localSymbol));
+            AddDeclaration(analysis, localFunction, localSymbol, result, parent);
+            AddParameters(analysis, localFunction, localFunction.ParameterList, result);
+            if (localFunction.Body is not null)
+                foreach (var child in localFunction.Body.ChildNodes())
+                    CollectNode(analysis, child, module, namespaceSymbol, typeSymbol, result);
+            return;
+        }
+
+        if (node is ConstructorDeclarationSyntax || node is AccessorDeclarationSyntax)
+            return;
+
+        if (node is PropertyDeclarationSyntax property)
+        {
+            var parent = typeSymbol ?? module;
+            var name = property.Identifier.ValueText;
+            var propertySymbol = model.GetDeclaredSymbol(property);
+            var result = new SymbolResult("variable", node.SyntaxTree.FilePath, name, JoinName(parent.QualifiedName == module.QualifiedName ? "" : parent.QualifiedName, name), MemberRole(propertySymbol));
+            AddDeclaration(analysis, property, propertySymbol, result, parent);
+            return;
+        }
+
+        if (node is FieldDeclarationSyntax field)
+        {
+            var parent = typeSymbol ?? module;
+            foreach (var variable in field.Declaration.Variables)
+            {
+                var name = variable.Identifier.ValueText;
+                var fieldSymbol = model.GetDeclaredSymbol(variable);
+                var result = new SymbolResult("variable", node.SyntaxTree.FilePath, name, JoinName(parent.QualifiedName == module.QualifiedName ? "" : parent.QualifiedName, name), MemberRole(fieldSymbol));
+                AddDeclaration(analysis, variable, fieldSymbol, result, parent);
+            }
+            return;
+        }
+
+        if (node is EventFieldDeclarationSyntax eventField)
+        {
+            var parent = typeSymbol ?? module;
+            foreach (var variable in eventField.Declaration.Variables)
+            {
+                var name = variable.Identifier.ValueText;
+                var fieldSymbol = model.GetDeclaredSymbol(variable);
+                var result = new SymbolResult("variable", node.SyntaxTree.FilePath, name, JoinName(parent.QualifiedName == module.QualifiedName ? "" : parent.QualifiedName, name), MemberRole(fieldSymbol));
+                AddDeclaration(analysis, variable, fieldSymbol, result, parent);
+            }
+            return;
+        }
+
+        foreach (var child in node.ChildNodes())
+            CollectNode(analysis, child, module, namespaceSymbol, typeSymbol, functionSymbol);
+    }
+
+    static void CollectDeclarations(ProjectAnalysis analysis)
+    {
+        foreach (var tree in analysis.Models.Keys.OrderBy(item => item.FilePath, StringComparer.Ordinal))
+        {
+            var module = Module(tree.FilePath);
+            foreach (var member in ((CompilationUnitSyntax)tree.GetRoot()).Members)
+                CollectNode(analysis, member, module, null, null, null);
+        }
+    }
+
+    static SymbolResult? FindFunction(ProjectAnalysis analysis, SyntaxNode node)
+    {
+        for (SyntaxNode? current = node; current is not null; current = current.Parent)
+            if (analysis.Symbols.TryGetValue(current, out var result) && result.Kind == "function")
+                return result;
+        return null;
+    }
+
+    static (string Status, SymbolResult? Target) Resolve(
+        Dictionary<string, List<SymbolResult>> allSymbols,
+        SymbolInfo info)
+    {
+        var symbols = info.CandidateSymbols.Length > 0
+            ? info.CandidateSymbols.Cast<ISymbol>().ToArray()
+            : info.Symbol is null ? Array.Empty<ISymbol>() : new[] { info.Symbol };
+        if (symbols.Length == 0) return ("unresolved", null);
+        if (symbols.Length > 1) return ("ambiguous", null);
+        var key = SymbolKey(symbols[0]);
+        if (!allSymbols.TryGetValue(key, out var local)) return ("external", null);
+        var candidates = local.Distinct().ToList();
+        return candidates.Count == 1 ? ("resolved", candidates[0]) : ("ambiguous", null);
+    }
+
+    static void Relationship(
+        ProjectAnalysis analysis,
+        string kind,
+        string status,
+        SymbolResult source,
+        SymbolResult? target,
+        SyntaxNode node)
+    {
+        analysis.Relationships.Add(new(kind, status, source, target, Location(node)));
+    }
+
+    static void ResolvedRelationship(
+        ProjectAnalysis analysis,
+        Dictionary<string, List<SymbolResult>> allSymbols,
+        string kind,
+        SymbolResult source,
+        SymbolInfo info,
+        SyntaxNode node,
+        Func<SymbolResult, bool> targetIsAllowed)
+    {
+        var resolved = Resolve(allSymbols, info);
+        if (resolved.Status != "resolved")
+        {
+            Relationship(analysis, kind, resolved.Status, source, null, node);
+            return;
+        }
+        if (!targetIsAllowed(resolved.Target!))
+        {
+            Relationship(analysis, kind, "unsupported", source, null, node);
+            return;
+        }
+        Relationship(analysis, kind, "resolved", source, resolved.Target, node);
+    }
+
+    static void CollectRelationships(
+        ProjectAnalysis analysis,
+        Dictionary<string, List<SymbolResult>> allSymbols)
+    {
+        foreach (var tree in analysis.Models.Keys.OrderBy(item => item.FilePath, StringComparer.Ordinal))
+        {
+            var model = analysis.Models[tree];
+            var module = Module(tree.FilePath);
+            void Visit(SyntaxNode node)
+            {
+                if (node is UsingDirectiveSyntax usingDirective)
+                {
+                    if (usingDirective.Alias is not null || usingDirective.GlobalKeyword.RawKind != 0 || usingDirective.StaticKeyword.RawKind != 0)
+                        Relationship(analysis, "uses", "unsupported", module, null, node);
+                    else
+                        ResolvedRelationship(analysis, allSymbols, "uses", module, model.GetSymbolInfo(usingDirective.Name!), node, target => target.Kind == "namespace");
+                }
+                else if (node is ExternAliasDirectiveSyntax)
+                    Relationship(analysis, "uses", "unsupported", module, null, node);
+
+                if (node is BaseTypeDeclarationSyntax typeDeclaration && analysis.Symbols.TryGetValue(node, out var owner))
+                {
+                    if (typeDeclaration.BaseList is not null && owner.Kind is "class" or "interface")
+                        foreach (var baseType in typeDeclaration.BaseList.Types)
+                        {
+                            var symbol = model.GetTypeInfo(baseType.Type).Type;
+                            var info = model.GetSymbolInfo(baseType.Type);
+                            var relationKind = owner.Kind == "interface"
+                                ? "extends"
+                                : symbol is INamedTypeSymbol { TypeKind: TypeKind.Interface } ? "implements" : "extends";
+                            ResolvedRelationship(
+                                analysis,
+                                allSymbols,
+                                relationKind,
+                                owner,
+                                info,
+                                baseType,
+                                target => relationKind == "implements" ? target.Kind == "interface" : target.Kind is "class" or "interface");
+                        }
+                }
+
+                if (node is InvocationExpressionSyntax invocation)
+                {
+                    var source = FindFunction(analysis, node) ?? module;
+                    var info = model.GetSymbolInfo(invocation);
+                    var type = model.GetTypeInfo(invocation.Expression).Type;
+                    if (type is IDynamicTypeSymbol)
+                        Relationship(analysis, "calls", "dynamic", source, null, node);
+                    else if (info.Symbol is IMethodSymbol method && method.MethodKind is MethodKind.Constructor or MethodKind.PropertyGet or MethodKind.PropertySet)
+                        Relationship(analysis, "calls", "unsupported", source, null, node);
+                    else
+                        ResolvedRelationship(analysis, allSymbols, "calls", source, info, node, target => target.Kind == "function");
+                }
+                else if (node is ObjectCreationExpressionSyntax or ImplicitObjectCreationExpressionSyntax)
+                {
+                    var source = FindFunction(analysis, node) ?? module;
+                    Relationship(analysis, "calls", "unsupported", source, null, node);
+                }
+
+                foreach (var child in node.ChildNodes()) Visit(child);
+            }
+            Visit(tree.GetRoot());
+        }
+    }
+
+    static int CompareLocation(LocationResult left, LocationResult right) =>
+        string.CompareOrdinal(left.Path, right.Path) != 0
+            ? string.CompareOrdinal(left.Path, right.Path)
+            : left.Start.Line != right.Start.Line
+                ? left.Start.Line - right.Start.Line
+                : left.Start.Column != right.Start.Column
+                    ? left.Start.Column - right.Start.Column
+                    : left.End.Line != right.End.Line
+                        ? left.End.Line - right.End.Line
+                        : left.End.Column - right.End.Column;
+
+    static int CompareSymbol(SymbolResult left, SymbolResult right) =>
+        string.CompareOrdinal(left.Path, right.Path) != 0
+            ? string.CompareOrdinal(left.Path, right.Path)
+            : string.CompareOrdinal(left.QualifiedName, right.QualifiedName) != 0
+                ? string.CompareOrdinal(left.QualifiedName, right.QualifiedName)
+                : string.CompareOrdinal(left.Kind, right.Kind) != 0
+                    ? string.CompareOrdinal(left.Kind, right.Kind)
+                    : string.CompareOrdinal(left.MemberRole, right.MemberRole) != 0
+                        ? string.CompareOrdinal(left.MemberRole, right.MemberRole)
+                        : string.CompareOrdinal(left.Name, right.Name);
+
+    static int CompareDeclaration(DeclarationResult left, DeclarationResult right) =>
+        CompareSymbol(new(left.Kind, left.Path, left.Name, left.QualifiedName, left.MemberRole), new(right.Kind, right.Path, right.Name, right.QualifiedName, right.MemberRole)) != 0
+            ? CompareSymbol(new(left.Kind, left.Path, left.Name, left.QualifiedName, left.MemberRole), new(right.Kind, right.Path, right.Name, right.QualifiedName, right.MemberRole))
+            : CompareSymbol(left.Parent, right.Parent) != 0
+                ? CompareSymbol(left.Parent, right.Parent)
+                : CompareLocation(left.Locations[0], right.Locations[0]);
+
+    static int CompareRelationship(RelationshipResult left, RelationshipResult right) =>
+        string.CompareOrdinal(left.Kind, right.Kind) != 0
+            ? string.CompareOrdinal(left.Kind, right.Kind)
+            : string.CompareOrdinal(left.Status, right.Status) != 0
+                ? string.CompareOrdinal(left.Status, right.Status)
+                : CompareSymbol(left.Source, right.Source) != 0
+                    ? CompareSymbol(left.Source, right.Source)
+                    : CompareSymbol(left.Target ?? left.Source, right.Target ?? right.Source) != 0
+                        ? CompareSymbol(left.Target ?? left.Source, right.Target ?? right.Source)
+                        : CompareLocation(left.Location ?? new("", new(0, 0), new(0, 0)), right.Location ?? new("", new(0, 0), new(0, 0)));
+
     public static int Main()
     {
         try
@@ -192,7 +578,7 @@ internal static class Program
             if (bytes.Length is 0 or > MaxFrameBytes) Invalid();
             var line = new System.Text.UTF8Encoding(false, true).GetString(bytes.ToArray());
             if (!line.EndsWith('\n') || line[..^1].Contains('\n')) Invalid();
-            var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = false, PropertyNamingPolicy = JsonNamingPolicy.CamelCase, UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow };
+            var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = false, PropertyNamingPolicy = JsonNamingPolicy.CamelCase, DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull, UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow };
             var request = JsonSerializer.Deserialize<Request>(line, options) ?? throw new InvalidOperationException();
             var manifest = request.Manifest ?? throw new InvalidOperationException();
             var declaredProjects = manifest.Projects ?? throw new InvalidOperationException();
@@ -204,7 +590,7 @@ internal static class Program
             if (declared.Count != declaredProjects.Count) Invalid();
             if (manifest.Solution is { } solution && (solution.Projects is null || !Relative(solution.Path) || solution.Projects.Count > MaxSolutionProjects || solution.Projects.Any(project => !Relative(project)) || solution.Projects.Distinct(StringComparer.Ordinal).Count() != solution.Projects.Count || !solution.Projects.SequenceEqual(declaredProjects.OrderBy(x => x.Path, StringComparer.Ordinal).Select(x => x.Path), StringComparer.Ordinal))) Invalid();
             if ((selection.Kind == "solution" && (manifest.Solution is null || manifest.Solution.Path != selection.Path)) || (selection.Kind == "project" && (manifest.Solution is not null || !declared.Contains(selection.Path)))) Invalid();
-            if (declaredProjects.SelectMany(x => x.Files).Count() > MaxReadOperations || declaredProjects.Any(x => x.References.Any(reference => reference == x.Path || !declared.Contains(reference)))) Invalid();
+            if (declaredProjects.SelectMany(x => x.Files).Count() > MaxReadOperations || declaredProjects.Any(x => x.References.Any(reference => reference == x.Path))) Invalid();
             var logicalFiles = declaredProjects.SelectMany(x => x.Files).Distinct(StringComparer.Ordinal).OrderBy(x => x, StringComparer.Ordinal).ToArray();
             if (sources.Count != logicalFiles.Length || sources.Any(source => !Relative(source.Path)) || sources.Select(source => source.Path).Distinct(StringComparer.Ordinal).Count() != sources.Count || sources.Select(source => source.Staged).Distinct(StringComparer.Ordinal).Count() != sources.Count || !sources.OrderBy(source => source.Path, StringComparer.Ordinal).Select((source, index) => source.Path == logicalFiles[index] && source.Staged == StagedName(index)).All(valid => valid)) Invalid();
             var sourcePaths = sources.ToDictionary(source => source.Path, source => source.Staged, StringComparer.Ordinal);
@@ -214,10 +600,11 @@ internal static class Program
             var stagingRoot = Path.GetFullPath(Environment.CurrentDirectory).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
             MetadataReference[] runtimeReferences = RuntimeReferences();
             var compilations = new Dictionary<string, CSharpCompilation>(StringComparer.Ordinal);
+            var analyses = new List<ProjectAnalysis>();
             var pending = declaredProjects.OrderBy(x => x.Path, StringComparer.Ordinal).ToList();
             while (pending.Count > 0)
             {
-                var project = pending.FirstOrDefault(candidate => candidate.References is not null && candidate.References.All(compilations.ContainsKey)) ?? throw new InvalidOperationException();
+                var project = pending.FirstOrDefault(candidate => candidate.References is not null && candidate.References.All(reference => !declared.Contains(reference) || compilations.ContainsKey(reference))) ?? throw new InvalidOperationException();
                 pending.Remove(project);
                 var projectFiles = project.Files ?? throw new InvalidOperationException();
                 var projectReferences = project.References ?? throw new InvalidOperationException();
@@ -232,14 +619,17 @@ internal static class Program
                     aggregateBytes += stream.Length;
                     trees.Add(CSharpSyntaxTree.ParseText(WindowsPath.ReadVerified(stream, stagingRoot, full), parseOptions, path: file));
                 }
-                var references = runtimeReferences.Concat(projectReferences.Select(reference => compilations[reference].ToMetadataReference()));
+                var references = runtimeReferences.Concat(projectReferences.Where(compilations.ContainsKey).Select(reference => compilations[reference].ToMetadataReference()));
                 var compilation = CSharpCompilation.Create(
                     project.Path,
                     trees,
                     references,
                     new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
                 compilations.Add(project.Path, compilation);
-                foreach (var tree in trees) _ = compilation.GetSemanticModel(tree);
+                var models = trees.ToDictionary(tree => tree, tree => compilation.GetSemanticModel(tree));
+                var analysis = new ProjectAnalysis(project, models);
+                CollectDeclarations(analysis);
+                analyses.Add(analysis);
                 var diagnosticCount = 0;
                 foreach (var diagnostic in compilation.GetDiagnostics())
                 {
@@ -250,7 +640,28 @@ internal static class Program
                     var path = Relative(span.Path) ? span.Path : null;
                     diagnostics.Add(new(project.Path, diagnostic.Severity == DiagnosticSeverity.Warning ? "compiler_warning" : "compiler_error", diagnostic.Severity == DiagnosticSeverity.Warning ? "warning" : "error", path, path is null ? null : span.StartLinePosition.Line + 1, path is null ? null : span.StartLinePosition.Character + 1));
                 }
-                projects.Add(new(project.Path, trees.Count, trees.Count, diagnosticCount));
+            }
+            var allSymbols = new Dictionary<string, List<SymbolResult>>(StringComparer.Ordinal);
+            foreach (var analysis in analyses)
+                foreach (var (key, values) in analysis.LocalSymbols)
+                {
+                    var existing = allSymbols.TryGetValue(key, out var current) ? current : new List<SymbolResult>();
+                    foreach (var value in values)
+                        if (!existing.Contains(value)) existing.Add(value);
+                    allSymbols[key] = existing;
+                }
+            foreach (var analysis in analyses)
+            {
+                CollectRelationships(analysis, allSymbols);
+                var declarations = analysis.Declarations
+                    .OrderBy(item => item, Comparer<DeclarationResult>.Create(CompareDeclaration))
+                    .ToList();
+                var relationships = analysis.Relationships
+                    .OrderBy(item => item, Comparer<RelationshipResult>.Create(CompareRelationship))
+                    .ToList();
+                var trees = analysis.Models.Keys.Count;
+                var diagnosticCount = diagnostics.Count(item => item.Project == analysis.Project.Path);
+                projects.Add(new(analysis.Project.Path, trees, trees, diagnosticCount, declarations, relationships));
             }
             diagnostics = diagnostics.OrderBy(x => x.Project, StringComparer.Ordinal).ThenBy(x => x.Path, StringComparer.Ordinal).ThenBy(x => x.Line).ThenBy(x => x.Column).ThenBy(x => x.Code, StringComparer.Ordinal).ToList();
             projects = projects.OrderBy(x => x.Path, StringComparer.Ordinal).ToList();

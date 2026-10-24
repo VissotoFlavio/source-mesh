@@ -7,6 +7,8 @@ import {
   createGraphQueryService,
   discoverCSharpManifest,
   discoverSourceFiles,
+  analyzeCSharpManifest,
+  extractCSharpDeclarationGraph,
   extractDeclarationGraph,
   loadProject,
   openValidatedSnapshot,
@@ -115,6 +117,7 @@ type ParsedCommand =
 
 interface SnapshotAnalyzeResult {
   readonly kind: 'snapshot';
+  readonly schemaVersion: 1 | 2;
   readonly snapshotPath: string;
   readonly completeness: SnapshotV1['completeness'];
   readonly digest: string;
@@ -135,6 +138,8 @@ export interface CliIO {
 
 export interface CliServices {
   readonly discoverCSharpManifest: typeof discoverCSharpManifest;
+  readonly analyzeCSharpManifest?: typeof analyzeCSharpManifest;
+  readonly extractCSharpDeclarationGraph?: typeof extractCSharpDeclarationGraph;
   readonly discoverSourceFiles: typeof discoverSourceFiles;
   readonly loadProject: typeof loadProject;
   readonly extractDeclarationGraph: typeof extractDeclarationGraph;
@@ -147,6 +152,8 @@ export interface CliServices {
 
 const productionServices: CliServices = {
   discoverCSharpManifest,
+  analyzeCSharpManifest,
+  extractCSharpDeclarationGraph,
   discoverSourceFiles,
   loadProject,
   extractDeclarationGraph,
@@ -494,8 +501,6 @@ function parseArguments(argv: readonly string[]): ParsedCommand {
       if ((solutionValue === undefined) === (projectValue === undefined))
         throw invalid('selection');
       if (tsconfig !== undefined) throw invalid('tsconfig');
-      if (values.has('--snapshot')) throw invalid('snapshot');
-      if (values.has('--overwrite')) throw invalid('overwrite');
     }
     const solution =
       solutionValue === undefined
@@ -689,7 +694,38 @@ async function executeAnalyze(
       });
       if (manifest.manifest === undefined || manifest.diagnostics.length > 0)
         throw analysisFailure();
-      return { kind: 'csharp-manifest', manifest: manifest.manifest };
+      if (
+        services.analyzeCSharpManifest === undefined ||
+        services.extractCSharpDeclarationGraph === undefined
+      )
+        return { kind: 'csharp-manifest', manifest: manifest.manifest };
+      const worker = await services.analyzeCSharpManifest(
+        command.root,
+        manifest.manifest,
+      );
+      const snapshot = services.extractCSharpDeclarationGraph({
+        repositoryRoot: command.root,
+        manifest: manifest.manifest,
+        worker,
+      });
+      let result: SnapshotWriteResult;
+      try {
+        result = await services.writeSnapshot(command.root, snapshot, {
+          path: command.snapshot,
+          mode: command.overwrite ? 'replace' : 'create-only',
+        });
+      } catch (error) {
+        if (error instanceof SnapshotError) throw snapshotFailure(error);
+        throw analysisFailure();
+      }
+      return {
+        kind: 'snapshot',
+        schemaVersion: 2,
+        snapshotPath: command.snapshot,
+        completeness: snapshot.completeness,
+        digest: result.digest,
+        bytes: result.bytes,
+      };
     }
     const discovery = await services.discoverSourceFiles(command.root);
     if (
@@ -729,6 +765,7 @@ async function executeAnalyze(
     }
     return {
       kind: 'snapshot',
+      schemaVersion: 1,
       snapshotPath: command.snapshot,
       completeness: snapshot.completeness,
       digest: result.digest,
@@ -870,7 +907,9 @@ function emitSuccess(
         : result;
     const schemaVersion =
       command.command === 'analyze'
-        ? 1
+        ? (result as AnalyzeResult).kind === 'snapshot'
+          ? (result as SnapshotAnalyzeResult).schemaVersion
+          : 1
         : querySchemaVersion(result as QueryResponse);
     io.stdout(
       `${JSON.stringify({

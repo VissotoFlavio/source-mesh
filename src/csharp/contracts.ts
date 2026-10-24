@@ -72,6 +72,71 @@ export interface CSharpManifestResult {
   readonly diagnostics: readonly CSharpDiscoveryDiagnostic[];
 }
 
+export type CSharpWorkerNodeKind =
+  | 'module'
+  | 'namespace'
+  | 'class'
+  | 'interface'
+  | 'function'
+  | 'variable'
+  | 'type'
+  | 'parameter';
+
+export type CSharpWorkerMemberRole = 'none' | 'static' | 'instance';
+
+export interface CSharpWorkerSymbol {
+  readonly kind: CSharpWorkerNodeKind;
+  readonly path: string;
+  readonly name: string;
+  readonly qualifiedName: string;
+  readonly memberRole: CSharpWorkerMemberRole;
+}
+
+export interface CSharpWorkerPosition {
+  readonly line: number;
+  readonly column: number;
+}
+
+export interface CSharpWorkerLocation {
+  readonly path: string;
+  readonly start: CSharpWorkerPosition;
+  readonly end: CSharpWorkerPosition;
+}
+
+export interface CSharpWorkerDeclaration extends CSharpWorkerSymbol {
+  readonly parent: CSharpWorkerSymbol;
+  readonly locations: readonly CSharpWorkerLocation[];
+}
+
+export type CSharpWorkerRelationshipKind =
+  'uses' | 'extends' | 'implements' | 'calls';
+
+export type CSharpWorkerRelationshipStatus =
+  | 'resolved'
+  | 'external'
+  | 'unresolved'
+  | 'ambiguous'
+  | 'dynamic'
+  | 'unsupported'
+  | 'missing-source';
+
+export interface CSharpWorkerRelationship {
+  readonly kind: CSharpWorkerRelationshipKind;
+  readonly status: CSharpWorkerRelationshipStatus;
+  readonly source: CSharpWorkerSymbol;
+  readonly target?: CSharpWorkerSymbol;
+  readonly location?: CSharpWorkerLocation;
+}
+
+export interface CSharpWorkerProjectResult {
+  readonly path: string;
+  readonly sourceCount: number;
+  readonly syntaxTreeCount: number;
+  readonly diagnosticCount: number;
+  readonly declarations?: readonly CSharpWorkerDeclaration[];
+  readonly relationships?: readonly CSharpWorkerRelationship[];
+}
+
 export interface DiscoverCSharpManifestOptions {
   readonly filesystem?: DiscoveryFileSystem;
 }

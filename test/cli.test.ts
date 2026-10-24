@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { test } from 'node:test';
-import { fileId, openValidatedSnapshot } from '../src/index.js';
+import { fileId, openValidatedSnapshot, repositoryIdV2 } from '../src/index.js';
 import type { CliIO, CliServices } from '../src/cli.js';
 import { main } from '../src/cli.js';
 import type {
@@ -16,6 +16,7 @@ import type {
   QueryResponseV1,
   SearchResponseV1,
   Snapshot,
+  SnapshotV2,
 } from '../src/index.js';
 
 function capture(): CliIO & {
@@ -330,11 +331,32 @@ test('csharp analyze uses the injected manifest discovery service', async () => 
   assert.equal(JSON.parse(failureIO.stderrValue).error.code, 'analysis_failed');
 });
 
-test('csharp analyze rejects snapshot persistence options', async () => {
+test('csharp analyze writes a v2 snapshot and accepts persistence options', async () => {
+  const manifest = {
+    language: 'csharp' as const,
+    selection: { kind: 'project' as const, path: 'App.csproj' },
+    projects: [{ path: 'App.csproj', references: [], files: ['App.cs'] }],
+  };
+  const snapshot: SnapshotV2 = {
+    schemaVersion: 2,
+    completeness: 'complete',
+    repository: { root: '.', name: 'repository' },
+    nodes: [
+      {
+        id: repositoryIdV2(),
+        kind: 'repository',
+        root: '.',
+        name: 'repository',
+      },
+    ],
+    edges: [],
+    diagnostics: [],
+  };
   for (const option of [
     ['--snapshot', '.sourcemesh/ignored.json'],
     ['--overwrite'],
   ]) {
+    let writes = 0;
     const io = capture();
     assert.equal(
       await main(
@@ -346,19 +368,38 @@ test('csharp analyze rejects snapshot persistence options', async () => {
           'csharp',
           '--project',
           'App.csproj',
+          '--output',
+          'json',
           ...option,
         ],
         injectedServices({
-          discoverCSharpManifest: async () => {
-            throw new Error('discovery must not run');
+          discoverCSharpManifest: async () => ({ manifest, diagnostics: [] }),
+          analyzeCSharpManifest: async () => ({
+            projects: [],
+            diagnostics: [],
+          }),
+          extractCSharpDeclarationGraph: () => snapshot,
+          writeSnapshot: async (_root, value, options) => {
+            writes += 1;
+            assert.equal(value.schemaVersion, 2);
+            assert.equal(
+              options.mode,
+              option[0] === '--overwrite' ? 'replace' : 'create-only',
+            );
+            return {
+              path: '/repo/.sourcemesh/result.json',
+              digest: 'b'.repeat(64),
+              bytes: 10,
+            };
           },
         }),
         io,
       ),
-      2,
+      0,
     );
-    assert.equal(io.stdoutValue, '');
-    assert.match(io.stderrValue, /arguments are invalid/u);
+    assert.equal(writes, 1);
+    assert.equal(io.stderrValue, '');
+    assert.equal(JSON.parse(io.stdoutValue).schemaVersion, 2);
   }
 });
 

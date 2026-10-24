@@ -35,14 +35,42 @@ try {
   };
   const result = await analyzeCSharpManifest(root, manifest);
   assert.deepEqual(result.diagnostics, []);
-  assert.deepEqual(result.projects, [
-    {
-      path: 'App.csproj',
-      sourceCount: 1,
-      syntaxTreeCount: 1,
-      diagnosticCount: 0,
-    },
-  ]);
+  assert.equal(result.projects.length, 1);
+  assert.equal(result.projects[0].path, 'App.csproj');
+  assert.equal(result.projects[0].sourceCount, 1);
+  assert.equal(result.projects[0].syntaxTreeCount, 1);
+  assert.equal(result.projects[0].diagnosticCount, 0);
+  assert.deepEqual(
+    result.projects[0].declarations.map((item) => item.name),
+    ['App', 'Run'],
+  );
+  assert.deepEqual(
+    result.projects[0].relationships.map((item) => [item.kind, item.status]),
+    [
+      ['calls', 'external'],
+      ['calls', 'unsupported'],
+      ['uses', 'external'],
+      ['uses', 'external'],
+    ],
+  );
+
+  await fs.mkdir(path.join(root, 'src', 'Unlisted'), { recursive: true });
+  await fs.writeFile(
+    path.join(root, 'src', 'Unlisted', 'Unlisted.csproj'),
+    '<Project />',
+  );
+  const unlistedReferenceResult = await analyzeCSharpManifest(root, {
+    ...manifest,
+    projects: [
+      {
+        ...manifest.projects[0],
+        references: ['src/Unlisted/Unlisted.csproj'],
+      },
+    ],
+  });
+  assert.deepEqual(unlistedReferenceResult.diagnostics, []);
+  assert.equal(unlistedReferenceResult.projects.length, 1);
+  assert.equal(unlistedReferenceResult.projects[0].path, 'App.csproj');
 
   await fs.writeFile(
     path.join(root, 'src', 'App.cs'),

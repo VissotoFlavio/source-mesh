@@ -95,6 +95,22 @@ export type {
   CSharpWorkerProjectResult,
   CSharpWorkerResult,
 } from './csharp/worker.js';
+export type {
+  CSharpWorkerDeclaration,
+  CSharpWorkerLocation,
+  CSharpWorkerMemberRole,
+  CSharpWorkerNodeKind,
+  CSharpWorkerPosition,
+  CSharpWorkerRelationship,
+  CSharpWorkerRelationshipKind,
+  CSharpWorkerRelationshipStatus,
+  CSharpWorkerSymbol,
+} from './csharp/contracts.js';
+export {
+  extractCSharpDeclarationGraph,
+  extractCSharpGraph,
+} from './csharp/extractor.js';
+export type { ExtractCSharpDeclarationGraphRequest } from './csharp/extractor.js';
 export {
   loadProject,
   PROJECT_LOADER_FALLBACK_OPTIONS,

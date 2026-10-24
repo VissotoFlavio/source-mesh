@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- Deterministic C# graph extraction from the approved Roslyn DTO, including
+  schema-v2 containment, local references/uses/heritage/call edges, and
+  fail-closed relationship diagnostics (#45).
+
 - Local offline Roslyn helper boundary with staged C# inputs, a fixed helper
   invocation, and closed JSONL protocol validation (#44).
 

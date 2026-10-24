@@ -16,6 +16,9 @@ records their vetted hashes.
 Protocol v1 accepts exactly one bounded UTF-8 JSONL request on stdin and emits one
 UTF-8 JSONL response on stdout. Any malformed, oversized, or invalid request exits
 nonzero without diagnostic text; normal operation emits no stderr output.
+Each project response contains only relative-path declaration candidates and
+relationship outcomes. The parent Node process recalculates schema-v2 graph
+identities and decides which resolved local outcomes become edges.
 
 The package feed and build output are repository-local, so neither is published
 by the private npm package. Build the committed feed without network:
