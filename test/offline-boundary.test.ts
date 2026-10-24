@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { test } from 'node:test';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const guardUrl = new URL('../scripts/deny-network.mjs', import.meta.url).href;
 
@@ -70,3 +72,35 @@ test('offline guard rejects representative network and escape paths', async (t) 
     });
   }
 });
+
+test(
+  'offline guard permits only the fixed Roslyn invocation',
+  {
+    skip: process.platform !== 'win32',
+  },
+  () => {
+    const helper = path.resolve(
+      path.dirname(fileURLToPath(import.meta.url)),
+      '../tools/sourcemesh-roslyn/bin/Release/net10.0/sourcemesh-roslyn.dll',
+    );
+    const host = String.raw`C:\Program Files\dotnet\dotnet.exe`;
+    const source = [
+      "import { spawn } from 'node:child_process';",
+      `const child = spawn(${JSON.stringify(host)}, [${JSON.stringify(helper)}], { cwd: process.cwd(), env: process.env, shell: false, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });`,
+      'child.stdin.end();',
+      "child.once('error', () => process.exit(0));",
+      "child.once('close', () => process.exit(0));",
+    ].join('\n');
+    const result = spawnSync(
+      process.execPath,
+      ['--import', guardUrl, '--input-type=module', '--eval', source],
+      { encoding: 'utf8' },
+    );
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.doesNotMatch(
+      result.stderr,
+      /offline boundary blocked a network call/,
+    );
+  },
+);
