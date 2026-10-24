@@ -8,6 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- Local offline Roslyn helper boundary with staged C# inputs, a fixed helper
+  invocation, and closed JSONL protocol validation (#44).
+
 - Contained C#/.NET solution and project manifest discovery with explicit CLI
   selection, literal project metadata support, deterministic compile-file
   approval, and fail-closed XML/path/resource boundaries (#43).

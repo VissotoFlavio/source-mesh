@@ -1,0 +1,8 @@
+This helper redistributes these versioned Roslyn packages from its local feed:
+
+- Microsoft.CodeAnalysis.CSharp 5.9.0
+- Microsoft.CodeAnalysis.Common 5.9.0
+- Microsoft.CodeAnalysis.Analyzers 5.9.0-1.26328.17
+
+Each package declares the MIT License. Their embedded `ThirdPartyNotices` files
+remain in the committed `.nupkg` artifacts under `packages/`.

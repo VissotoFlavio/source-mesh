@@ -48,6 +48,22 @@ npm run check
 
 It runs `format:check`, `lint`, `typecheck`, `test`, `build`, `offline:check`, and `pack:check`. Do not commit generated `dist/`, dependency, coverage, cache, log, environment, or secret files.
 
+### Local Roslyn helper (Windows)
+
+When a change touches `src/csharp/worker.ts`, the offline guard, or
+`tools/sourcemesh-roslyn/`, run this additional Windows-only validation after
+the normal gate. It restores only the versioned local feed, compiles the
+helper without restore, and executes its real offline protocol check:
+
+```powershell
+dotnet restore tools/sourcemesh-roslyn/sourcemesh-roslyn.csproj --locked-mode --configfile tools/sourcemesh-roslyn/NuGet.offline.config
+dotnet build tools/sourcemesh-roslyn/sourcemesh-roslyn.csproj --no-restore --configuration Release
+npm run csharp:offline:check
+```
+
+The C# helper is intentionally Windows-only; do not add this command to the
+cross-platform Node.js validation gate.
+
 ## Pull requests
 
 - Target the branch defined by the workflow table.

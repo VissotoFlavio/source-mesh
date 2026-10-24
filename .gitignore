@@ -3,6 +3,8 @@ node_modules/
 dist/
 coverage/
 .sourcemesh/
+tools/sourcemesh-roslyn/bin/
+tools/sourcemesh-roslyn/obj/
 
 # Tool caches
 .eslintcache

@@ -84,6 +84,18 @@ export type {
   DiscoverCSharpManifestOptions,
 } from './csharp/contracts.js';
 export {
+  analyzeCSharpManifest,
+  CSHARP_WORKER_MAX_REQUEST_BYTES,
+  CSHARP_WORKER_MAX_RESPONSE_BYTES,
+  CSHARP_WORKER_TIMEOUT_MS,
+  CSharpWorkerError,
+} from './csharp/worker.js';
+export type {
+  CSharpWorkerDiagnostic,
+  CSharpWorkerProjectResult,
+  CSharpWorkerResult,
+} from './csharp/worker.js';
+export {
   loadProject,
   PROJECT_LOADER_FALLBACK_OPTIONS,
   PROJECT_ROOT_EXTENSIONS,
