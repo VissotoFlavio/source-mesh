@@ -54,6 +54,24 @@ try {
     ],
   );
 
+  await fs.mkdir(path.join(root, 'src', 'Unlisted'), { recursive: true });
+  await fs.writeFile(
+    path.join(root, 'src', 'Unlisted', 'Unlisted.csproj'),
+    '<Project />',
+  );
+  const unlistedReferenceResult = await analyzeCSharpManifest(root, {
+    ...manifest,
+    projects: [
+      {
+        ...manifest.projects[0],
+        references: ['src/Unlisted/Unlisted.csproj'],
+      },
+    ],
+  });
+  assert.deepEqual(unlistedReferenceResult.diagnostics, []);
+  assert.equal(unlistedReferenceResult.projects.length, 1);
+  assert.equal(unlistedReferenceResult.projects[0].path, 'App.csproj');
+
   await fs.writeFile(
     path.join(root, 'src', 'App.cs'),
     ['global using System;', 'public class Legacy {}'].join('\n'),

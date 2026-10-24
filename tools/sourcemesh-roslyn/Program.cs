@@ -604,7 +604,7 @@ internal static class Program
             var pending = declaredProjects.OrderBy(x => x.Path, StringComparer.Ordinal).ToList();
             while (pending.Count > 0)
             {
-                var project = pending.FirstOrDefault(candidate => candidate.References is not null && candidate.References.All(compilations.ContainsKey)) ?? throw new InvalidOperationException();
+                var project = pending.FirstOrDefault(candidate => candidate.References is not null && candidate.References.All(reference => !declared.Contains(reference) || compilations.ContainsKey(reference))) ?? throw new InvalidOperationException();
                 pending.Remove(project);
                 var projectFiles = project.Files ?? throw new InvalidOperationException();
                 var projectReferences = project.References ?? throw new InvalidOperationException();
