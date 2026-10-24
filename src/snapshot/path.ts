@@ -1,5 +1,6 @@
 import path from 'node:path';
 import { lstat, realpath } from 'node:fs/promises';
+import { isWindowsUnsafePath } from '../discovery.js';
 import { SnapshotError } from './types.js';
 
 export const DEFAULT_SNAPSHOT_PATH = '.sourcemesh/graph.json';
@@ -108,6 +109,7 @@ export async function resolveSnapshotPath(
     typeof selected !== 'string' ||
     selected.length === 0 ||
     selected.includes('\0') ||
+    isWindowsUnsafePath(selected) ||
     path.isAbsolute(selected) ||
     /^[A-Za-z]:[\\/]/.test(selected) ||
     selected.startsWith('\\\\')

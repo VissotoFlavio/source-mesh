@@ -65,6 +65,7 @@ function queryResponse(): QueryResponseV1 {
 
 function injectedServices(overrides: Partial<CliServices> = {}): CliServices {
   return {
+    discoverCSharpManifest: async () => ({ diagnostics: [] }),
     discoverSourceFiles: async () => ({
       repositoryRoot: '/selected/root',
       sources: ['source.ts'],
@@ -249,6 +250,116 @@ test('analyze maps create-only and replace modes and emits a stable JSON result'
     0,
   );
   assert.deepEqual(writes, ['create-only', 'replace']);
+});
+
+test('csharp analyze uses the injected manifest discovery service', async () => {
+  let calls = 0;
+  const manifest = {
+    language: 'csharp' as const,
+    selection: { kind: 'project' as const, path: 'App.csproj' },
+    projects: [
+      {
+        path: 'App.csproj',
+        references: [],
+        files: ['App.cs'],
+      },
+    ],
+  };
+  const successIO = capture();
+  assert.equal(
+    await main(
+      [
+        'analyze',
+        '--root',
+        '/repo',
+        '--language',
+        'csharp',
+        '--project',
+        'App.csproj',
+        '--output',
+        'json',
+      ],
+      injectedServices({
+        discoverCSharpManifest: async (root, selection) => {
+          calls += 1;
+          assert.equal(root, '/repo');
+          assert.deepEqual(selection, { project: 'App.csproj' });
+          return { manifest, diagnostics: [] };
+        },
+      }),
+      successIO,
+    ),
+    0,
+  );
+  assert.equal(calls, 1);
+  assert.equal(
+    JSON.parse(successIO.stdoutValue).result.kind,
+    'csharp-manifest',
+  );
+
+  const failureIO = capture();
+  assert.equal(
+    await main(
+      [
+        'analyze',
+        '--root',
+        '/repo',
+        '--language',
+        'csharp',
+        '--project',
+        'App.csproj',
+        '--output',
+        'json',
+      ],
+      injectedServices({
+        discoverCSharpManifest: async () => ({
+          diagnostics: [
+            {
+              code: 'path_invalid' as const,
+              severity: 'error' as const,
+              message: 'The selected C# path is invalid.',
+            },
+          ],
+        }),
+      }),
+      failureIO,
+    ),
+    1,
+  );
+  assert.equal(failureIO.stdoutValue, '');
+  assert.equal(JSON.parse(failureIO.stderrValue).error.code, 'analysis_failed');
+});
+
+test('csharp analyze rejects snapshot persistence options', async () => {
+  for (const option of [
+    ['--snapshot', '.sourcemesh/ignored.json'],
+    ['--overwrite'],
+  ]) {
+    const io = capture();
+    assert.equal(
+      await main(
+        [
+          'analyze',
+          '--root',
+          '/repo',
+          '--language',
+          'csharp',
+          '--project',
+          'App.csproj',
+          ...option,
+        ],
+        injectedServices({
+          discoverCSharpManifest: async () => {
+            throw new Error('discovery must not run');
+          },
+        }),
+        io,
+      ),
+      2,
+    );
+    assert.equal(io.stdoutValue, '');
+    assert.match(io.stderrValue, /arguments are invalid/u);
+  }
 });
 
 test('query errors use exit code 3 and sanitized JSON envelopes', async () => {

@@ -30,6 +30,7 @@ import {
   repositoryId,
   repositoryIdV2,
 } from '../src/graph.js';
+import { resolveSnapshotPath } from '../src/snapshot/path.js';
 
 const roots: string[] = [];
 afterEach(async () => {
@@ -247,6 +248,15 @@ describe('schema-v1 snapshots', () => {
       ),
       false,
     );
+    if (process.platform === 'win32') {
+      await assert.rejects(
+        () => resolveSnapshotPath(root, '.sourcemesh/graph.json:stream'),
+        { code: 'path_invalid' },
+      );
+      await assert.rejects(() => resolveSnapshotPath(root, '.sourcemesh/CON'), {
+        code: 'path_invalid',
+      });
+    }
     try {
       const outside = path.join(root, 'outside.json');
       await writeFile(outside, 'outside');

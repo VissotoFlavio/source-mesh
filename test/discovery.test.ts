@@ -17,6 +17,10 @@ import path from 'node:path';
 import { win32 as win32Path } from 'node:path';
 import {
   discoverSourceFiles,
+  MAX_DIRECTORY_ENTRIES,
+  readFileBounded,
+  type DiscoveryDirectory,
+  type DiscoveryDirent,
   type DiscoveryFileSystem,
   type DiscoveryStats,
 } from '../src/discovery.js';
@@ -24,11 +28,23 @@ import { discoverSourceFiles as discoverFromIndex } from '../src/index.js';
 
 const fixtures: string[] = [];
 
+function directoryHandle(
+  entries: readonly DiscoveryDirent[],
+): DiscoveryDirectory {
+  let index = 0;
+  return {
+    next: async () => entries[index++],
+    close: async () => {},
+  };
+}
+
 const nativeFileSystem: DiscoveryFileSystem = {
   realpath,
   stat,
   lstat,
-  readdir: async (directory) => readdir(directory, { withFileTypes: true }),
+  openDirectory: async (directory) =>
+    directoryHandle(await readdir(directory, { withFileTypes: true })),
+  readFile: readFileBounded,
 };
 
 function fakeStats(
@@ -62,6 +78,21 @@ afterEach(async () => {
 describe('discoverSourceFiles', () => {
   it('is exported from the package entrypoint', () => {
     assert.equal(discoverFromIndex, discoverSourceFiles);
+  });
+
+  it('rejects a prevalidated file identity before reading bytes', async () => {
+    const root = await fixture();
+    const file = path.join(root, 'identity.ts');
+    await writeFile(file, 'const identity = true;');
+    const actual = await lstat(file);
+
+    await assert.rejects(
+      () =>
+        readFileBounded(file, 1024, {
+          ...fakeStats('file', actual.size, actual.ino + 1),
+        }),
+      (error: unknown) => (error as NodeJS.ErrnoException).code === 'EAGAIN',
+    );
   });
 
   it('returns deterministic portable source paths and the canonical root', async () => {
@@ -113,11 +144,11 @@ describe('discoverSourceFiles', () => {
 
     const orderedFileSystem = (reverse: boolean): DiscoveryFileSystem => ({
       ...nativeFileSystem,
-      readdir: async (directory) => {
+      openDirectory: async (directory) => {
         const entries = [
           ...(await readdir(directory, { withFileTypes: true })),
         ];
-        return reverse ? entries.reverse() : entries;
+        return directoryHandle(reverse ? entries.reverse() : entries);
       },
       lstat: async (candidate) => {
         if (candidate === disappearing) {
@@ -249,7 +280,11 @@ describe('discoverSourceFiles', () => {
         calls += 1;
         throw new Error('filesystem must not be called');
       },
-      readdir: async () => {
+      openDirectory: async () => {
+        calls += 1;
+        throw new Error('filesystem must not be called');
+      },
+      readFile: async () => {
         calls += 1;
         throw new Error('filesystem must not be called');
       },
@@ -360,9 +395,9 @@ describe('discoverSourceFiles', () => {
         assert.equal(candidate, root);
         return fakeStats('directory', 0, 1);
       },
-      readdir: async (directory) => {
+      openDirectory: async (directory) => {
         if (directory === root) {
-          return [
+          return directoryHandle([
             {
               name: 'a.ts',
               isDirectory: () => false,
@@ -373,16 +408,16 @@ describe('discoverSourceFiles', () => {
               isDirectory: () => true,
               isSymbolicLink: () => false,
             },
-          ];
+          ]);
         }
         assert.equal(directory, nested);
-        return [
+        return directoryHandle([
           {
             name: 'b.ts',
             isDirectory: () => false,
             isSymbolicLink: () => false,
           },
-        ];
+        ]);
       },
       lstat: async (candidate) => {
         if (candidate === root) return fakeStats('directory', 0, 1);
@@ -393,6 +428,9 @@ describe('discoverSourceFiles', () => {
         if (candidate === source || candidate === nestedSource) {
           return fakeStats('file', 0, candidate === source ? 2 : 3);
         }
+        throw new Error(`Unexpected path: ${candidate}`);
+      },
+      readFile: async (candidate) => {
         throw new Error(`Unexpected path: ${candidate}`);
       },
     };
@@ -415,17 +453,33 @@ describe('discoverSourceFiles', () => {
 
   it('returns resource_limit and no partial sources for entry and byte caps', async () => {
     const root = await fixture();
+    let yieldedEntries = 0;
+    let closed = false;
     const tooManyEntries: DiscoveryFileSystem = {
       ...nativeFileSystem,
-      readdir: async (directory) => {
+      openDirectory: async (directory) => {
         if (directory === root) {
-          return Array.from({ length: 100_001 }, (_, index) => ({
-            name: `entry-${index}.ts`,
-            isDirectory: () => false,
-            isSymbolicLink: () => false,
-          }));
+          let index = 0;
+          return {
+            next: async () => {
+              if (index > 100_000) return undefined;
+              const entry = {
+                name: `entry-${index}.ts`,
+                isDirectory: () => false,
+                isSymbolicLink: () => false,
+              };
+              index += 1;
+              yieldedEntries += 1;
+              return entry;
+            },
+            close: async () => {
+              closed = true;
+            },
+          };
         }
-        return readdir(directory, { withFileTypes: true });
+        return directoryHandle(
+          await readdir(directory, { withFileTypes: true }),
+        );
       },
     };
     const entryLimitResult = await discoverSourceFiles(root, {
@@ -437,6 +491,8 @@ describe('discoverSourceFiles', () => {
       entryLimitResult.diagnostics[0]?.reason,
       'directory_entries_exceeded',
     );
+    assert.equal(yieldedEntries, MAX_DIRECTORY_ENTRIES + 1);
+    assert.equal(closed, true);
 
     const largeFile = path.join(root, 'large.ts');
     await writeFile(largeFile, '');
