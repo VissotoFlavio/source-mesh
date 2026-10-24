@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- Contained C#/.NET solution and project manifest discovery with explicit CLI
+  selection, literal project metadata support, deterministic compile-file
+  approval, and fail-closed XML/path/resource boundaries (#43).
+
 - Additive schema-v2 snapshot support for local C#/.NET graph contracts,
   including solution/project/namespace nodes, `references`/`uses` edges,
   version-bound identities, v1-compatible queries, and fail-closed MCP startup.

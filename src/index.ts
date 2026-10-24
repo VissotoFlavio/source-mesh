@@ -43,9 +43,24 @@ export type {
   ExtractorIdentity,
 } from './extractor.js';
 
-export { discoverSourceFiles } from './discovery.js';
+export {
+  createDefaultDiscoveryFileSystem,
+  discoverSourceFiles,
+  isContainedPath,
+  isRemoteRoot,
+  isWindowsUnsafePath,
+  normalizeRelativePath,
+  isSerializedPathTooLong,
+  MAX_DIRECTORY_ENTRIES,
+  pathDepth,
+  pathIdentityKey,
+  readFileBounded,
+  resolveRepositoryPath,
+  toRepositoryPath,
+} from './discovery.js';
 export type {
   DiscoverSourceFilesOptions,
+  DiscoveryDirectory,
   DiscoveryDiagnostic,
   DiscoveryDirent,
   DiscoveryFileSystem,
@@ -54,6 +69,20 @@ export type {
   DiscoveryResult,
   DiscoveryStats,
 } from './discovery.js';
+export {
+  discoverCSharpManifest,
+  discoverCSharpProjectManifest,
+} from './csharp/discovery.js';
+export type {
+  CSharpDiscoveryDiagnostic,
+  CSharpDiscoverySelection,
+  CSharpManifest,
+  CSharpManifestResult,
+  CSharpProjectManifest,
+  CSharpSelectionKind,
+  CSharpSolutionManifest,
+  DiscoverCSharpManifestOptions,
+} from './csharp/contracts.js';
 export {
   loadProject,
   PROJECT_LOADER_FALLBACK_OPTIONS,

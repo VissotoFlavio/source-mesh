@@ -5,15 +5,18 @@ import fs from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
   createGraphQueryService,
+  discoverCSharpManifest,
   discoverSourceFiles,
   extractDeclarationGraph,
   loadProject,
   openValidatedSnapshot,
   writeSnapshot,
 } from './index.js';
+import { isWindowsUnsafePath } from './discovery.js';
 import type {
   FileRelationResponseV1,
   FileRelationResponseV2,
+  CSharpManifest,
   FunctionSelectorV1,
   GetSymbolResponseV1,
   GetSymbolResponseV2,
@@ -62,6 +65,9 @@ interface AnalyzeCommand {
   readonly root: string;
   readonly snapshot: string;
   readonly tsconfig?: string;
+  readonly language?: 'csharp';
+  readonly solution?: string;
+  readonly project?: string;
   readonly output: OutputFormat;
   readonly overwrite: boolean;
 }
@@ -107,12 +113,28 @@ type ParsedCommand =
   | FileRelationCommand
   | CallRelationCommand;
 
+interface SnapshotAnalyzeResult {
+  readonly kind: 'snapshot';
+  readonly snapshotPath: string;
+  readonly completeness: SnapshotV1['completeness'];
+  readonly digest: string;
+  readonly bytes: number;
+}
+
+interface CSharpManifestAnalyzeResult {
+  readonly kind: 'csharp-manifest';
+  readonly manifest: CSharpManifest;
+}
+
+type AnalyzeResult = SnapshotAnalyzeResult | CSharpManifestAnalyzeResult;
+
 export interface CliIO {
   readonly stdout: (value: string) => void;
   readonly stderr: (value: string) => void;
 }
 
 export interface CliServices {
+  readonly discoverCSharpManifest: typeof discoverCSharpManifest;
   readonly discoverSourceFiles: typeof discoverSourceFiles;
   readonly loadProject: typeof loadProject;
   readonly extractDeclarationGraph: typeof extractDeclarationGraph;
@@ -124,6 +146,7 @@ export interface CliServices {
 }
 
 const productionServices: CliServices = {
+  discoverCSharpManifest,
   discoverSourceFiles,
   loadProject,
   extractDeclarationGraph,
@@ -241,6 +264,7 @@ function normalizeRelativePath(value: string, field: string): string {
   if (
     value.length === 0 ||
     value.includes('\0') ||
+    isWindowsUnsafePath(value) ||
     path.posix.isAbsolute(value) ||
     path.win32.isAbsolute(value) ||
     value.startsWith('\\\\') ||
@@ -286,7 +310,7 @@ function helpText(command?: CommandName): string {
     ].join('\n');
   const usage: Record<CommandName, string> = {
     analyze:
-      'sourcemesh analyze --root <path> [--snapshot <relative>] [--tsconfig <relative>] [--output human|json] [--overwrite]',
+      'sourcemesh analyze --root <path> [--snapshot <relative>] [--tsconfig <relative>] [--language csharp --solution <relative>|--project <relative>] [--output human|json] [--overwrite]',
     mcp: 'sourcemesh mcp --root <path> [--snapshot <relative>]',
     symbol:
       'sourcemesh symbol --root <path> [--snapshot <relative>] --query <text> [--kind <kind>] [--path <relative>] [--container-id <node-id>] [--limit <1..100>] [--cursor <token>] [--allow-partial] [--output human|json]',
@@ -321,6 +345,9 @@ function optionKinds(command: CommandName): ReadonlyMap<string, OptionKind> {
     return new Map([
       ...common,
       ['--tsconfig', 'value'],
+      ['--language', 'value'],
+      ['--solution', 'value'],
+      ['--project', 'value'],
       ['--overwrite', 'flag'],
     ]);
   const query: [string, OptionKind][] = [
@@ -456,11 +483,36 @@ function parseArguments(argv: readonly string[]): ParsedCommand {
       tsconfigValue === undefined
         ? undefined
         : normalizeRelativePath(tsconfigValue, 'tsconfig');
+    const languageValue = valueOf(values, '--language');
+    const solutionValue = valueOf(values, '--solution');
+    const projectValue = valueOf(values, '--project');
+    if (languageValue === undefined) {
+      if (solutionValue !== undefined || projectValue !== undefined)
+        throw invalid('language');
+    } else {
+      if (languageValue !== 'csharp') throw invalid('language');
+      if ((solutionValue === undefined) === (projectValue === undefined))
+        throw invalid('selection');
+      if (tsconfig !== undefined) throw invalid('tsconfig');
+      if (values.has('--snapshot')) throw invalid('snapshot');
+      if (values.has('--overwrite')) throw invalid('overwrite');
+    }
+    const solution =
+      solutionValue === undefined
+        ? undefined
+        : normalizeRelativePath(solutionValue, 'solution');
+    const project =
+      projectValue === undefined
+        ? undefined
+        : normalizeRelativePath(projectValue, 'project');
     return {
       command,
       root,
       snapshot,
       ...(tsconfig === undefined ? {} : { tsconfig }),
+      ...(languageValue === undefined ? {} : { language: 'csharp' as const }),
+      ...(solution === undefined ? {} : { solution }),
+      ...(project === undefined ? {} : { project }),
       output: outputValue,
       overwrite: values.has('--overwrite'),
     };
@@ -626,13 +678,19 @@ function functionSelector(command: CallRelationCommand): FunctionSelectorV1 {
 async function executeAnalyze(
   command: AnalyzeCommand,
   services: CliServices,
-): Promise<{
-  readonly snapshotPath: string;
-  readonly completeness: SnapshotV1['completeness'];
-  readonly digest: string;
-  readonly bytes: number;
-}> {
+): Promise<AnalyzeResult> {
   try {
+    if (command.language === 'csharp') {
+      const manifest = await services.discoverCSharpManifest(command.root, {
+        ...(command.solution === undefined
+          ? {}
+          : { solution: command.solution }),
+        ...(command.project === undefined ? {} : { project: command.project }),
+      });
+      if (manifest.manifest === undefined || manifest.diagnostics.length > 0)
+        throw analysisFailure();
+      return { kind: 'csharp-manifest', manifest: manifest.manifest };
+    }
     const discovery = await services.discoverSourceFiles(command.root);
     if (
       discovery.repositoryRoot === undefined ||
@@ -670,6 +728,7 @@ async function executeAnalyze(
       throw analysisFailure();
     }
     return {
+      kind: 'snapshot',
       snapshotPath: command.snapshot,
       completeness: snapshot.completeness,
       digest: result.digest,
@@ -799,17 +858,37 @@ function emitSuccess(
   io: CliIO,
 ): void {
   if (command.output === 'json') {
+    const analysis = result as AnalyzeResult;
+    const jsonResult =
+      command.command === 'analyze' && analysis.kind === 'snapshot'
+        ? {
+            snapshotPath: analysis.snapshotPath,
+            completeness: analysis.completeness,
+            digest: analysis.digest,
+            bytes: analysis.bytes,
+          }
+        : result;
     const schemaVersion =
       command.command === 'analyze'
         ? 1
         : querySchemaVersion(result as QueryResponse);
     io.stdout(
-      `${JSON.stringify({ schemaVersion, command: command.command, result })}\n`,
+      `${JSON.stringify({
+        schemaVersion,
+        command: command.command,
+        result: jsonResult,
+      })}\n`,
     );
     return;
   }
   if (command.command === 'analyze') {
-    const analysis = result as Awaited<ReturnType<typeof executeAnalyze>>;
+    const analysis = result as AnalyzeResult;
+    if (analysis.kind === 'csharp-manifest') {
+      io.stdout(
+        `C# manifest discovery completed (${analysis.manifest.projects.length} projects)\n`,
+      );
+      return;
+    }
     io.stdout(
       `Snapshot written to ${analysis.snapshotPath} (${analysis.completeness}; ${analysis.bytes} bytes; ${analysis.digest})\n`,
     );
