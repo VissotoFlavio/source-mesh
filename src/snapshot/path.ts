@@ -127,13 +127,12 @@ export async function resolveSnapshotPath(
   if (!contained(root, target) || !contained(root, path.dirname(target)))
     throw invalid();
   const parent = path.dirname(target);
-  const allowMissingDefault =
-    selected === DEFAULT_SNAPSHOT_PATH &&
+  const allowMissingSnapshotDirectory =
     parent === path.join(root, '.sourcemesh');
   const parentIdentity = await validateParents(
     root,
     parent,
-    allowMissingDefault,
+    allowMissingSnapshotDirectory,
   );
   if (parentIdentity === undefined)
     return {

@@ -31,6 +31,13 @@ export const CSHARP_WORKER_MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
 export const CSHARP_WORKER_MAX_STDERR_BYTES = 64 * 1024;
 export const CSHARP_WORKER_MAX_DIAGNOSTICS = 4096;
 
+export type CSharpSourceEncoding = 'windows-1252';
+
+export interface CSharpWorkerOptions {
+  readonly sourceEncoding?: CSharpSourceEncoding;
+  readonly maxDiagnostics?: number;
+}
+
 export interface CSharpWorkerDiagnostic {
   readonly project: string;
   readonly code: 'compiler_error' | 'compiler_warning';
@@ -742,10 +749,296 @@ async function defaultRunner(
   });
 }
 
+const CSHARP_WORKER_MAX_CHUNK_BYTES = 2 * 1024 * 1024;
+const CSHARP_WORKER_MAX_CHUNK_MANIFEST_BYTES = 16 * 1024 * 1024;
+
+function parseChunkProject(
+  value: unknown,
+  expectedProjects: readonly CSharpProjectManifest[],
+): CSharpWorkerProjectResult {
+  if (
+    !closedObject(value, [
+      'path',
+      'sourceCount',
+      'syntaxTreeCount',
+      'diagnosticCount',
+      'declarations',
+      'relationships',
+    ]) ||
+    !safePath(value.path)
+  )
+    fail('protocol_invalid');
+  const sourceCount = value.sourceCount;
+  const syntaxTreeCount = value.syntaxTreeCount;
+  const diagnosticCount = value.diagnosticCount;
+  if (
+    !nonNegativeInteger(sourceCount) ||
+    !nonNegativeInteger(syntaxTreeCount) ||
+    !nonNegativeInteger(diagnosticCount)
+  )
+    fail('protocol_invalid');
+  const allowedPaths = new Set(expectedProjects.flatMap((item) => item.files));
+  const declarations =
+    value.declarations === undefined
+      ? []
+      : Array.isArray(value.declarations)
+        ? value.declarations.map((item) => cloneDeclaration(item, allowedPaths))
+        : fail('protocol_invalid');
+  const relationships =
+    value.relationships === undefined
+      ? []
+      : Array.isArray(value.relationships)
+        ? value.relationships.map((item) =>
+            cloneRelationship(item, allowedPaths),
+          )
+        : fail('protocol_invalid');
+  if (
+    !declarations.every(
+      (item, index) =>
+        index === 0 || compareDeclaration(declarations[index - 1]!, item) <= 0,
+    ) ||
+    !relationships.every(
+      (item, index) =>
+        index === 0 ||
+        compareRelationship(relationships[index - 1]!, item) <= 0,
+    )
+  )
+    fail('protocol_invalid');
+  return {
+    path: value.path,
+    sourceCount,
+    syntaxTreeCount,
+    diagnosticCount,
+    declarations,
+    relationships,
+  };
+}
+
+function parseChunkDiagnostic(value: unknown): CSharpWorkerDiagnostic {
+  if (
+    !closedObject(value, [
+      'project',
+      'code',
+      'severity',
+      'path',
+      'line',
+      'column',
+    ]) ||
+    !safePath(value.project) ||
+    (value.code !== 'compiler_error' && value.code !== 'compiler_warning') ||
+    (value.severity !== 'error' && value.severity !== 'warning') ||
+    (value.path !== undefined && !safePath(value.path))
+  )
+    fail('protocol_invalid');
+  const line = value.line;
+  const column = value.column;
+  if (
+    (line !== undefined && !positiveInteger(line)) ||
+    (column !== undefined && !positiveInteger(column))
+  )
+    fail('protocol_invalid');
+  return {
+    project: value.project,
+    code: value.code,
+    severity: value.severity,
+    ...(value.path === undefined ? {} : { path: value.path }),
+    ...(line === undefined ? {} : { line }),
+    ...(column === undefined ? {} : { column }),
+  };
+}
+
+async function parseChunkResponse(
+  value: unknown,
+  expectedProjects: readonly CSharpProjectManifest[],
+  staging: string,
+): Promise<CSharpWorkerResult> {
+  let chunksValue: unknown;
+  if (closedObject(value, ['version', 'chunks']) && value.version === 2) {
+    chunksValue = value.chunks;
+  } else if (
+    closedObject(value, ['version', 'manifest', 'bytes']) &&
+    value.version === 2 &&
+    safePath(value.manifest) &&
+    value.manifest === 'chunks.json' &&
+    positiveInteger(value.bytes) &&
+    value.bytes <= CSHARP_WORKER_MAX_CHUNK_MANIFEST_BYTES
+  ) {
+    const manifest = path.join(staging, value.manifest);
+    const stat = await fs.lstat(manifest).catch(() => fail('protocol_invalid'));
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.size !== value.bytes)
+      fail('protocol_invalid');
+    const bytes = await fs
+      .readFile(manifest)
+      .catch(() => fail('protocol_invalid'));
+    if (
+      bytes.byteLength !== value.bytes ||
+      bytes.byteLength > CSHARP_WORKER_MAX_CHUNK_MANIFEST_BYTES
+    )
+      fail('protocol_invalid');
+    try {
+      const manifestValue = JSON.parse(
+        new TextDecoder('utf-8', { fatal: true }).decode(bytes),
+      );
+      if (
+        !closedObject(manifestValue, ['version', 'chunks']) ||
+        manifestValue.version !== 1
+      )
+        fail('protocol_invalid');
+      chunksValue = manifestValue.chunks;
+    } catch {
+      fail('protocol_invalid');
+    }
+  } else {
+    fail('protocol_invalid');
+  }
+  if (
+    !Array.isArray(chunksValue) ||
+    chunksValue.length === 0 ||
+    chunksValue.length > expectedProjects.length * 4096
+  )
+    fail('protocol_invalid');
+  const expectedByPath = new Map(
+    expectedProjects.map((project) => [project.path, project]),
+  );
+  const grouped = new Map<
+    string,
+    {
+      project: CSharpWorkerProjectResult;
+      diagnostics: CSharpWorkerDiagnostic[];
+    }
+  >();
+  let previousIndex = -1;
+  for (const descriptor of chunksValue) {
+    if (
+      !closedObject(descriptor, ['index', 'project', 'bytes']) ||
+      !nonNegativeInteger(descriptor.index) ||
+      descriptor.index <= previousIndex ||
+      !safePath(descriptor.project) ||
+      !positiveInteger(descriptor.bytes) ||
+      descriptor.bytes > CSHARP_WORKER_MAX_CHUNK_BYTES ||
+      !expectedByPath.has(descriptor.project)
+    )
+      fail('protocol_invalid');
+    previousIndex = descriptor.index;
+    const file = path.join(
+      staging,
+      `chunk-${String(descriptor.index).padStart(6, '0')}.json`,
+    );
+    const stat = await fs.lstat(file).catch(() => fail('protocol_invalid'));
+    if (
+      !stat.isFile() ||
+      stat.isSymbolicLink() ||
+      stat.size !== descriptor.bytes
+    )
+      fail('protocol_invalid');
+    const bytes = await fs.readFile(file).catch(() => fail('protocol_invalid'));
+    if (
+      bytes.byteLength !== descriptor.bytes ||
+      bytes.byteLength > CSHARP_WORKER_MAX_CHUNK_BYTES
+    )
+      fail('protocol_invalid');
+    let chunkValue: unknown;
+    try {
+      chunkValue = JSON.parse(
+        new TextDecoder('utf-8', { fatal: true }).decode(bytes),
+      );
+    } catch {
+      fail('protocol_invalid');
+    }
+    if (
+      !closedObject(chunkValue, ['version', 'project', 'diagnostics']) ||
+      chunkValue.version !== 1 ||
+      !Array.isArray(chunkValue.diagnostics) ||
+      chunkValue.diagnostics.length > CSHARP_WORKER_MAX_DIAGNOSTICS
+    )
+      fail('protocol_invalid');
+    const project = parseChunkProject(chunkValue.project, expectedProjects);
+    if (project.path !== descriptor.project) fail('protocol_invalid');
+    const diagnostics = chunkValue.diagnostics.map(parseChunkDiagnostic);
+    if (
+      diagnostics.some(
+        (diagnostic) =>
+          diagnostic.project !== project.path ||
+          (diagnostic.path !== undefined &&
+            !expectedByPath.get(project.path)!.files.includes(diagnostic.path)),
+      )
+    )
+      fail('protocol_invalid');
+    const current = grouped.get(project.path);
+    if (current === undefined) {
+      grouped.set(project.path, { project, diagnostics });
+    } else {
+      if (
+        current.project.sourceCount !== project.sourceCount ||
+        current.project.syntaxTreeCount !== project.syntaxTreeCount ||
+        current.project.diagnosticCount !== project.diagnosticCount
+      )
+        fail('protocol_invalid');
+      current.project = {
+        ...current.project,
+        declarations: [
+          ...(current.project.declarations ?? []),
+          ...(project.declarations ?? []),
+        ],
+        relationships: [
+          ...(current.project.relationships ?? []),
+          ...(project.relationships ?? []),
+        ],
+      };
+      current.diagnostics.push(...diagnostics);
+    }
+  }
+  if (grouped.size !== expectedProjects.length) fail('protocol_invalid');
+  const compareDiagnostics = (
+    left: CSharpWorkerDiagnostic,
+    right: CSharpWorkerDiagnostic,
+  ): number =>
+    ordinal(left.project, right.project) ||
+    ordinal(left.path ?? '', right.path ?? '') ||
+    (left.line ?? 0) - (right.line ?? 0) ||
+    (left.column ?? 0) - (right.column ?? 0) ||
+    ordinal(left.code, right.code);
+  const projects = expectedProjects.map((expected) => {
+    const current = grouped.get(expected.path);
+    if (current === undefined) fail('protocol_invalid');
+    const diagnostics = current.diagnostics.sort(compareDiagnostics);
+    const project = current.project;
+    if (
+      project.sourceCount !== expected.files.length ||
+      project.syntaxTreeCount !== expected.files.length ||
+      project.diagnosticCount !== diagnostics.length ||
+      !project.declarations!.every(
+        (item, index) =>
+          index === 0 ||
+          compareDeclaration(project.declarations![index - 1]!, item) <= 0,
+      ) ||
+      !project.relationships!.every(
+        (item, index) =>
+          index === 0 ||
+          compareRelationship(project.relationships![index - 1]!, item) <= 0,
+      )
+    )
+      fail('protocol_invalid');
+    return Object.freeze({
+      ...project,
+      declarations: Object.freeze(project.declarations ?? []),
+      relationships: Object.freeze(project.relationships ?? []),
+    });
+  });
+  const diagnostics = projects.flatMap(
+    (project) => grouped.get(project.path)!.diagnostics,
+  );
+  return Object.freeze({
+    projects: Object.freeze(projects),
+    diagnostics: Object.freeze(diagnostics),
+  });
+}
+
 function parseResponse(
   stdout: Buffer,
   expectedProjects: readonly CSharpProjectManifest[],
-): CSharpWorkerResult {
+  staging?: string,
+): CSharpWorkerResult | Promise<CSharpWorkerResult> {
   if (
     stdout.byteLength === 0 ||
     stdout.byteLength > CSHARP_WORKER_MAX_RESPONSE_BYTES
@@ -765,6 +1058,8 @@ function parseResponse(
   } catch {
     fail('protocol_invalid');
   }
+  if (plainObject(value) && value.version === 2 && staging !== undefined)
+    return parseChunkResponse(value, expectedProjects, staging);
   if (
     !closedObject(value, ['version', 'projects', 'diagnostics']) ||
     value.version !== 1 ||
@@ -966,15 +1261,28 @@ async function executeWorker(
   artifact = helperDll,
   host = dotnetHost,
   createStaging: StagingCreator = fs.mkdtemp,
+  options: CSharpWorkerOptions = {},
 ): Promise<CSharpWorkerResult> {
   const safeManifest = cloneManifest(manifest);
   const sourcePlans = createSourcePlans(safeManifest);
   const helper = await verifyHelperAt(artifact);
   const verifiedHost = await verifyDotnetHost(host);
+  if (
+    options.maxDiagnostics !== undefined &&
+    (!positiveInteger(options.maxDiagnostics) ||
+      options.maxDiagnostics > 100_000)
+  )
+    fail('resource_limit');
   const request =
     JSON.stringify({
       version: 1,
       manifest: safeManifest,
+      ...(options.sourceEncoding === undefined
+        ? {}
+        : { sourceEncoding: options.sourceEncoding }),
+      ...(options.maxDiagnostics === undefined
+        ? {}
+        : { maxDiagnostics: options.maxDiagnostics }),
       sources: sourcePlans.map(({ path: sourcePath, staged }) => ({
         path: sourcePath,
         staged,
@@ -1011,7 +1319,11 @@ async function executeWorker(
       execution.stderr.byteLength !== 0
     )
       fail('process_failed');
-    result = parseResponse(execution.stdout, safeManifest.projects);
+    result = await parseResponse(
+      execution.stdout,
+      safeManifest.projects,
+      staging,
+    );
   } catch (error) {
     failure =
       error instanceof CSharpWorkerError
@@ -1032,8 +1344,17 @@ async function executeWorker(
 export function analyzeCSharpManifest(
   repositoryRoot: string,
   manifest: CSharpManifest,
+  options?: CSharpWorkerOptions,
 ): Promise<CSharpWorkerResult> {
-  return executeWorker(repositoryRoot, manifest, defaultRunner);
+  return executeWorker(
+    repositoryRoot,
+    manifest,
+    defaultRunner,
+    undefined,
+    undefined,
+    fs.mkdtemp,
+    options,
+  );
 }
 
 /** Test-only seam; it receives a fixed command and artifact argument. */
@@ -1044,6 +1365,7 @@ export function analyzeCSharpManifestForTest(
   artifact: string,
   host: string,
   createStaging?: StagingCreator,
+  options?: CSharpWorkerOptions,
 ): Promise<CSharpWorkerResult> {
   return executeWorker(
     repositoryRoot,
@@ -1052,5 +1374,6 @@ export function analyzeCSharpManifestForTest(
     artifact,
     host,
     createStaging,
+    options,
   );
 }

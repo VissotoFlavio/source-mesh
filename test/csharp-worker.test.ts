@@ -108,6 +108,107 @@ test('C# worker stages approved source files and accepts a deterministic respons
   });
 });
 
+test('C# worker reads bounded disk chunks and merges them deterministically', async () => {
+  let staging = '';
+  const parent = {
+    kind: 'module',
+    path: 'src/App.cs',
+    name: 'src/App.cs',
+    qualifiedName: 'src/App.cs',
+    memberRole: 'none',
+  };
+  const declaration = {
+    kind: 'class',
+    path: 'src/App.cs',
+    name: 'App',
+    qualifiedName: 'App',
+    memberRole: 'none',
+    parent,
+    locations: [
+      {
+        path: 'src/App.cs',
+        start: { line: 1, column: 1 },
+        end: { line: 1, column: 11 },
+      },
+    ],
+  };
+  const functionDeclaration = {
+    ...declaration,
+    kind: 'function',
+    name: 'Run',
+    qualifiedName: 'App.Run',
+    parent: {
+      kind: 'class',
+      path: 'src/App.cs',
+      name: 'App',
+      qualifiedName: 'App',
+      memberRole: 'none',
+    },
+  };
+  await analyzeCSharpManifestForTest(
+    root,
+    manifest,
+    async (invocation) => {
+      const makeChunk = (project: Record<string, unknown>) =>
+        JSON.stringify({ version: 1, project, diagnostics: [] });
+      const first = makeChunk({
+        path: 'App.csproj',
+        sourceCount: 1,
+        syntaxTreeCount: 1,
+        diagnosticCount: 0,
+        declarations: [declaration],
+        relationships: [],
+      });
+      const second = makeChunk({
+        path: 'App.csproj',
+        sourceCount: 1,
+        syntaxTreeCount: 1,
+        diagnosticCount: 0,
+        declarations: [functionDeclaration],
+        relationships: [],
+      });
+      await fs.writeFile(path.join(invocation.cwd, 'chunk-000000.json'), first);
+      await fs.writeFile(
+        path.join(invocation.cwd, 'chunk-000001.json'),
+        second,
+      );
+      const response = JSON.stringify({
+        version: 2,
+        chunks: [
+          {
+            index: 0,
+            project: 'App.csproj',
+            bytes: Buffer.byteLength(first),
+          },
+          {
+            index: 1,
+            project: 'App.csproj',
+            bytes: Buffer.byteLength(second),
+          },
+        ],
+      });
+      return {
+        stdout: Buffer.from(`${response}\n`),
+        stderr: Buffer.alloc(0),
+        exitCode: 0,
+        timedOut: false,
+      };
+    },
+    helper,
+    host,
+    async (prefix) => {
+      staging = await fs.mkdtemp(prefix);
+      return staging;
+    },
+  ).then((result) => {
+    assert.deepEqual(
+      result.projects[0]?.declarations?.map((item) => item.name),
+      ['App', 'Run'],
+    );
+  });
+  await assert.rejects(fs.lstat(staging));
+});
+
 test('C# worker fails closed when the trusted helper or runtime host is missing', async () => {
   await assert.rejects(
     analyzeCSharpManifestForTest(

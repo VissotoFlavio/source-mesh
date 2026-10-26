@@ -125,9 +125,17 @@ test('Velocy profile writes only its contained create-only snapshot and summariz
         assert.deepEqual(selection, { solution: VELOCY_SOLUTION_PATH });
         return { manifest, diagnostics: [] };
       },
-      analyzeCSharpManifest: async (selectedRoot, selectedManifest) => {
+      analyzeCSharpManifest: async (
+        selectedRoot,
+        selectedManifest,
+        options,
+      ) => {
         assert.equal(selectedRoot, root);
         assert.equal(selectedManifest, manifest);
+        assert.deepEqual(options, {
+          sourceEncoding: 'windows-1252',
+          maxDiagnostics: 100_000,
+        });
         return worker;
       },
       extractCSharpDeclarationGraph: ({ repositoryRoot, manifest: value }) => {

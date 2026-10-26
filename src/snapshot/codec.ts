@@ -37,7 +37,7 @@ export const MAX_BYTES = 64 * 1024 * 1024;
 const MAX_STRING = 16 * 1024;
 const MAX_NODES = 100_000;
 const MAX_EDGES = 200_000;
-const MAX_DIAGNOSTICS = 10_000;
+const MAX_DIAGNOSTICS = 100_000;
 const MAX_LOCATIONS_PER_ITEM = 4_096;
 const MAX_LOCATION_BYTES_PER_ITEM = 256 * 1024;
 const kinds = new Set<NodeKind>([
@@ -840,8 +840,10 @@ function endpointValidV2(kind: EdgeKindV2, from: NodeV2, to: NodeV2): boolean {
           'variable',
           'type',
         ].includes(to.kind)) ||
-      (['class', 'interface'].includes(from.kind) &&
-        ['function', 'variable'].includes(to.kind)) ||
+      (['class', 'interface', 'type'].includes(from.kind) &&
+        ['class', 'interface', 'type', 'function', 'variable'].includes(
+          to.kind,
+        )) ||
       (from.kind === 'function' &&
         [
           'class',

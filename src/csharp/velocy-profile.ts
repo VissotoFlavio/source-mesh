@@ -19,6 +19,9 @@ import type {
 
 export const VELOCY_SOLUTION_PATH = 'src/Velocy.API.sln';
 export const VELOCY_SNAPSHOT_PATH = '.sourcemesh/velocy-api.json';
+/** The target contains legacy Windows-1252 files without an encoding marker. */
+export const VELOCY_SOURCE_ENCODING = 'windows-1252' as const;
+export const VELOCY_MAX_DIAGNOSTICS = 100_000;
 
 export type VelocyAcceptanceFailureCode =
   | 'confirmation_required'
@@ -152,7 +155,10 @@ export async function runVelocyLocalAcceptance(
   const manifest: CSharpManifest = manifestResult.manifest;
   let worker: CSharpWorkerResult;
   try {
-    worker = await services.analyzeCSharpManifest(repositoryRoot, manifest);
+    worker = await services.analyzeCSharpManifest(repositoryRoot, manifest, {
+      sourceEncoding: VELOCY_SOURCE_ENCODING,
+      maxDiagnostics: VELOCY_MAX_DIAGNOSTICS,
+    });
   } catch (error) {
     analysisFailure(error);
   }

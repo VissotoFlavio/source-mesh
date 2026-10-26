@@ -91,6 +91,8 @@ export {
   CSharpWorkerError,
 } from './csharp/worker.js';
 export type {
+  CSharpSourceEncoding,
+  CSharpWorkerOptions,
   CSharpWorkerDiagnostic,
   CSharpWorkerProjectResult,
   CSharpWorkerResult,

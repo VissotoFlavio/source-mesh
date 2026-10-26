@@ -31,6 +31,16 @@ analysis boundary. It does not search for a Velocy checkout. When
 `SM_VELOCY_ROOT` is absent, the command exits successfully without inspecting
 any path outside the SourceMesh checkout.
 
+The profile uses an explicit Windows-1252 compatibility policy for source files
+without an encoding marker. UTF-8 is always attempted first; Windows-1252 is
+used only for the explicitly approved Velocy profile, never as an implicit
+fallback for general C# analysis.
+
+The profile also uses an explicit higher diagnostic budget because the solution
+has many external-reference diagnostics without restore. Diagnostics remain
+bounded and are persisted in private chunks; the ordinary C# worker keeps its
+default lower limit.
+
 The profile does not read `NuGet.Config` to restore dependencies, invoke
 `dotnet restore`, `dotnet build`, or `dotnet run`, follow links outside the
 selected root, or transmit target data. The offline guard rejects network
