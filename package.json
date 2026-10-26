@@ -12,7 +12,43 @@
     "sourcemesh": "./dist/cli.js"
   },
   "files": [
-    "dist"
+    "dist",
+    "tools/sourcemesh-roslyn/bin/Release/net10.0/Microsoft.CodeAnalysis.CSharp.dll",
+    "tools/sourcemesh-roslyn/bin/Release/net10.0/Microsoft.CodeAnalysis.dll",
+    "tools/sourcemesh-roslyn/bin/Release/net10.0/sourcemesh-roslyn.deps.json",
+    "tools/sourcemesh-roslyn/bin/Release/net10.0/sourcemesh-roslyn.dll",
+    "tools/sourcemesh-roslyn/bin/Release/net10.0/sourcemesh-roslyn.runtimeconfig.json",
+    "tools/sourcemesh-roslyn/bin/Release/net10.0/cs/Microsoft.CodeAnalysis.CSharp.resources.dll",
+    "tools/sourcemesh-roslyn/bin/Release/net10.0/cs/Microsoft.CodeAnalysis.resources.dll",
+    "tools/sourcemesh-roslyn/bin/Release/net10.0/de/Microsoft.CodeAnalysis.CSharp.resources.dll",
+    "tools/sourcemesh-roslyn/bin/Release/net10.0/de/Microsoft.CodeAnalysis.resources.dll",
+    "tools/sourcemesh-roslyn/bin/Release/net10.0/es/Microsoft.CodeAnalysis.CSharp.resources.dll",
+    "tools/sourcemesh-roslyn/bin/Release/net10.0/es/Microsoft.CodeAnalysis.resources.dll",
+    "tools/sourcemesh-roslyn/bin/Release/net10.0/fr/Microsoft.CodeAnalysis.CSharp.resources.dll",
+    "tools/sourcemesh-roslyn/bin/Release/net10.0/fr/Microsoft.CodeAnalysis.resources.dll",
+    "tools/sourcemesh-roslyn/bin/Release/net10.0/it/Microsoft.CodeAnalysis.CSharp.resources.dll",
+    "tools/sourcemesh-roslyn/bin/Release/net10.0/it/Microsoft.CodeAnalysis.resources.dll",
+    "tools/sourcemesh-roslyn/bin/Release/net10.0/ja/Microsoft.CodeAnalysis.CSharp.resources.dll",
+    "tools/sourcemesh-roslyn/bin/Release/net10.0/ja/Microsoft.CodeAnalysis.resources.dll",
+    "tools/sourcemesh-roslyn/bin/Release/net10.0/ko/Microsoft.CodeAnalysis.CSharp.resources.dll",
+    "tools/sourcemesh-roslyn/bin/Release/net10.0/ko/Microsoft.CodeAnalysis.resources.dll",
+    "tools/sourcemesh-roslyn/bin/Release/net10.0/pl/Microsoft.CodeAnalysis.CSharp.resources.dll",
+    "tools/sourcemesh-roslyn/bin/Release/net10.0/pl/Microsoft.CodeAnalysis.resources.dll",
+    "tools/sourcemesh-roslyn/bin/Release/net10.0/pt-BR/Microsoft.CodeAnalysis.CSharp.resources.dll",
+    "tools/sourcemesh-roslyn/bin/Release/net10.0/pt-BR/Microsoft.CodeAnalysis.resources.dll",
+    "tools/sourcemesh-roslyn/bin/Release/net10.0/ru/Microsoft.CodeAnalysis.CSharp.resources.dll",
+    "tools/sourcemesh-roslyn/bin/Release/net10.0/ru/Microsoft.CodeAnalysis.resources.dll",
+    "tools/sourcemesh-roslyn/bin/Release/net10.0/tr/Microsoft.CodeAnalysis.CSharp.resources.dll",
+    "tools/sourcemesh-roslyn/bin/Release/net10.0/tr/Microsoft.CodeAnalysis.resources.dll",
+    "tools/sourcemesh-roslyn/bin/Release/net10.0/zh-Hans/Microsoft.CodeAnalysis.CSharp.resources.dll",
+    "tools/sourcemesh-roslyn/bin/Release/net10.0/zh-Hans/Microsoft.CodeAnalysis.resources.dll",
+    "tools/sourcemesh-roslyn/bin/Release/net10.0/zh-Hant/Microsoft.CodeAnalysis.CSharp.resources.dll",
+    "tools/sourcemesh-roslyn/bin/Release/net10.0/zh-Hant/Microsoft.CodeAnalysis.resources.dll",
+    "THIRD-PARTY-NOTICES.md"
+  ],
+  "bundledDependencies": [
+    "@modelcontextprotocol/server",
+    "typescript"
   ],
   "scripts": {
     "format": "prettier --write .",
@@ -28,7 +64,9 @@
     "accept:velocy": "node --import ./scripts/deny-network.mjs --import tsx scripts/check-velocy-local.mjs",
     "e2e:check": "node --import tsx --test test/e2e/workflow.e2e.ts",
     "measure:e2e": "node scripts/measure-e2e.mjs",
+    "prepack": "npm run build && node scripts/check-package.mjs",
     "pack:check": "npm pack --dry-run",
+    "package:check": "npm run build && node scripts/check-packaged-install.mjs",
     "check": "npm run format:check && npm run lint && npm run typecheck && npm test && npm run build && npm run offline:check && npm run pack:check"
   },
   "devDependencies": {

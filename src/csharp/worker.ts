@@ -1251,6 +1251,16 @@ function parseResponse(
 }
 
 async function verifyHelperAt(artifact: string): Promise<string> {
+  let current = path.resolve(artifact);
+  while (true) {
+    const ancestor = await fs
+      .lstat(current)
+      .catch(() => fail('helper_missing'));
+    if (ancestor.isSymbolicLink()) fail('helper_missing');
+    const parent = path.dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
   const stat = await fs.lstat(artifact).catch(() => fail('helper_missing'));
   if (!stat.isFile() || stat.isSymbolicLink()) fail('helper_missing');
   return fs.realpath(artifact).catch(() => fail('helper_missing'));

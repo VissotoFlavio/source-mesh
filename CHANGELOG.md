@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- Offline Windows x64 npm package distribution with the prebuilt .NET 10
+  Roslyn helper, bundled production dependencies, third-party notices, closed
+  payload/integrity validation, and installed tarball C#/MCP coverage (#69).
+
 - Bounded SDK-style C# project metadata support for deterministic recursive
   compile removals and ignored resource/package items, with synthetic graph
   fixture coverage (#65).

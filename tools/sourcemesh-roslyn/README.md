@@ -23,12 +23,16 @@ and merges the chunks, recalculates schema-v2 graph identities, and decides whic
 resolved local outcomes become edges.
 
 The package feed and build output are repository-local, so neither is published
-by the private npm package. Build the committed feed without network:
+by the private npm package as source material. The Windows x64 Release payload
+is copied into the local npm tarball only after `scripts/check-package.mjs`
+validates its closed allowlist and SHA-256 inventory. Build the committed feed
+without network:
 
 ```powershell
 dotnet restore tools/sourcemesh-roslyn/sourcemesh-roslyn.csproj --locked-mode --configfile tools/sourcemesh-roslyn/NuGet.offline.config
 dotnet build tools/sourcemesh-roslyn/sourcemesh-roslyn.csproj --no-restore --configuration Release
 npm run csharp:offline:check
+npm run package:check
 ```
 
 `npm run csharp:offline:check` first rebuilds the repository-owned Release helper
@@ -42,3 +46,10 @@ limits, diagnostic budgets, and validation remain enforced. An integrating
 automation may explicitly pass a positive `timeoutMs` within Node's timer range;
 users can cancel a local command normally instead of being failed by an arbitrary
 default timeout.
+
+The package remains framework-dependent: a consumer must have .NET 10 installed
+at `C:\Program Files\dotnet\dotnet.exe`. Consumer installation uses
+`npm install --offline --ignore-scripts`; it never restores, compiles, downloads,
+or runs a lifecycle install script. The package distribution contract, bundled
+Node dependency inventory, payload sizes, and exclusions are documented in
+`docs/package-distribution.md` and `THIRD-PARTY-NOTICES.md`.
