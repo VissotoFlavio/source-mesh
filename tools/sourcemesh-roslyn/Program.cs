@@ -266,6 +266,22 @@ internal static class Program
             new List<LocationResult> { Location(node) }));
     }
 
+    static void CollectFunctionBody(
+        ProjectAnalysis analysis,
+        SyntaxNode? body,
+        SyntaxNode? expression,
+        SymbolResult module,
+        SymbolResult? namespaceSymbol,
+        SymbolResult? typeSymbol,
+        SymbolResult? functionSymbol)
+    {
+        if (body is not null)
+            foreach (var child in body.ChildNodes())
+                CollectNode(analysis, child, module, namespaceSymbol, typeSymbol, functionSymbol);
+        if (expression is not null)
+            CollectNode(analysis, expression, module, namespaceSymbol, typeSymbol, functionSymbol);
+    }
+
     static void AddParameters(ProjectAnalysis analysis, SyntaxNode owner, ParameterListSyntax parameterList, SymbolResult function)
     {
         var model = analysis.Models[owner.SyntaxTree];
@@ -290,6 +306,12 @@ internal static class Program
         if (node is BaseNamespaceDeclarationSyntax namespaceDeclaration)
         {
             var name = namespaceDeclaration.Name.ToString();
+            if (string.IsNullOrEmpty(name))
+            {
+                foreach (var member in namespaceDeclaration.Members)
+                    CollectNode(analysis, member, module, namespaceSymbol, null, null);
+                return;
+            }
             var qualifiedName = JoinName(namespaceSymbol?.QualifiedName ?? "", name);
             var result = new SymbolResult("namespace", node.SyntaxTree.FilePath, LastName(name), qualifiedName, "none");
             AddDeclaration(analysis, namespaceDeclaration, model.GetDeclaredSymbol(namespaceDeclaration), result, namespaceSymbol ?? module);
@@ -301,7 +323,13 @@ internal static class Program
         if (node is BaseTypeDeclarationSyntax typeDeclaration)
         {
             var name = typeDeclaration.Identifier.ValueText;
-            if (string.IsNullOrEmpty(name)) return;
+            if (string.IsNullOrEmpty(name))
+            {
+                if (typeDeclaration is TypeDeclarationSyntax malformedType)
+                    foreach (var member in malformedType.Members)
+                        CollectNode(analysis, member, module, namespaceSymbol, typeSymbol, functionSymbol);
+                return;
+            }
             var kind = typeDeclaration is ClassDeclarationSyntax ? "class"
                 : typeDeclaration is InterfaceDeclarationSyntax ? "interface" : "type";
             var parent = typeSymbol ?? namespaceSymbol ?? module;
@@ -317,15 +345,16 @@ internal static class Program
         {
             var parent = typeSymbol ?? functionSymbol ?? module;
             var name = method.Identifier.ValueText;
+            if (string.IsNullOrEmpty(name))
+            {
+                CollectFunctionBody(analysis, method.Body, method.ExpressionBody?.Expression, module, namespaceSymbol, typeSymbol, functionSymbol);
+                return;
+            }
             var methodSymbol = model.GetDeclaredSymbol(method);
             var result = new SymbolResult("function", node.SyntaxTree.FilePath, name, JoinName(parent.QualifiedName == module.QualifiedName ? "" : parent.QualifiedName, name), MemberRole(methodSymbol));
             AddDeclaration(analysis, method, methodSymbol, result, parent);
             AddParameters(analysis, method, method.ParameterList, result);
-            if (method.Body is not null)
-                foreach (var child in method.Body.ChildNodes())
-                    CollectNode(analysis, child, module, namespaceSymbol, typeSymbol, result);
-            if (method.ExpressionBody is not null)
-                CollectNode(analysis, method.ExpressionBody.Expression, module, namespaceSymbol, typeSymbol, result);
+            CollectFunctionBody(analysis, method.Body, method.ExpressionBody?.Expression, module, namespaceSymbol, typeSymbol, result);
             return;
         }
 
@@ -333,13 +362,16 @@ internal static class Program
         {
             var parent = functionSymbol ?? typeSymbol ?? module;
             var name = localFunction.Identifier.ValueText;
+            if (string.IsNullOrEmpty(name))
+            {
+                CollectFunctionBody(analysis, localFunction.Body, null, module, namespaceSymbol, typeSymbol, functionSymbol);
+                return;
+            }
             var localSymbol = model.GetDeclaredSymbol(localFunction);
             var result = new SymbolResult("function", node.SyntaxTree.FilePath, name, JoinName(parent.QualifiedName == module.QualifiedName ? "" : parent.QualifiedName, name), MemberRole(localSymbol));
             AddDeclaration(analysis, localFunction, localSymbol, result, parent);
             AddParameters(analysis, localFunction, localFunction.ParameterList, result);
-            if (localFunction.Body is not null)
-                foreach (var child in localFunction.Body.ChildNodes())
-                    CollectNode(analysis, child, module, namespaceSymbol, typeSymbol, result);
+            CollectFunctionBody(analysis, localFunction.Body, null, module, namespaceSymbol, typeSymbol, result);
             return;
         }
 
@@ -350,6 +382,7 @@ internal static class Program
         {
             var parent = typeSymbol ?? module;
             var name = property.Identifier.ValueText;
+            if (string.IsNullOrEmpty(name)) return;
             var propertySymbol = model.GetDeclaredSymbol(property);
             var result = new SymbolResult("variable", node.SyntaxTree.FilePath, name, JoinName(parent.QualifiedName == module.QualifiedName ? "" : parent.QualifiedName, name), MemberRole(propertySymbol));
             AddDeclaration(analysis, property, propertySymbol, result, parent);
@@ -362,6 +395,7 @@ internal static class Program
             foreach (var variable in field.Declaration.Variables)
             {
                 var name = variable.Identifier.ValueText;
+                if (string.IsNullOrEmpty(name)) continue;
                 var fieldSymbol = model.GetDeclaredSymbol(variable);
                 var result = new SymbolResult("variable", node.SyntaxTree.FilePath, name, JoinName(parent.QualifiedName == module.QualifiedName ? "" : parent.QualifiedName, name), MemberRole(fieldSymbol));
                 AddDeclaration(analysis, variable, fieldSymbol, result, parent);
@@ -375,6 +409,7 @@ internal static class Program
             foreach (var variable in eventField.Declaration.Variables)
             {
                 var name = variable.Identifier.ValueText;
+                if (string.IsNullOrEmpty(name)) continue;
                 var fieldSymbol = model.GetDeclaredSymbol(variable);
                 var result = new SymbolResult("variable", node.SyntaxTree.FilePath, name, JoinName(parent.QualifiedName == module.QualifiedName ? "" : parent.QualifiedName, name), MemberRole(fieldSymbol));
                 AddDeclaration(analysis, variable, fieldSymbol, result, parent);

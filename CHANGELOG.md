@@ -66,6 +66,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Changed
 
+- C# Roslyn boundary now preserves sanitized compiler diagnostics and valid
+  declarations when malformed syntax produces incomplete Roslyn symbols,
+  avoiding a protocol-level analysis failure.
+
 - Mantidas raízes canônicas consistentes entre descoberta, carregamento e
   extração no Windows, incluindo regressão para aliases de diretório (#38).
 
