@@ -90,7 +90,7 @@ jobs:
           cache-dependency-path: package-lock.json
 
       - name: Set up .NET 10
-        uses: actions/setup-dotnet@d4c94342e560b9d8f1d0bb6b0fc6b3efc6b6f7a # v4
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
         with:
           dotnet-version: 10.0.401
 
