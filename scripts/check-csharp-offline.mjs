@@ -54,6 +54,76 @@ try {
     ],
   );
 
+  await fs.writeFile(
+    path.join(root, 'src', 'App.cs'),
+    [
+      'namespace;',
+      'public class Recovered {}',
+      'class',
+      '{',
+      '    public class NestedRecovered {}',
+      '}',
+    ].join('\n'),
+  );
+  const malformedSyntaxResult = await analyzeCSharpManifest(root, manifest);
+  const repeatedMalformedSyntaxResult = await analyzeCSharpManifest(
+    root,
+    manifest,
+  );
+  assert.deepEqual(
+    malformedSyntaxResult.diagnostics,
+    repeatedMalformedSyntaxResult.diagnostics,
+  );
+  assert.deepEqual(
+    malformedSyntaxResult.diagnostics.map(
+      ({ project, code, severity, path: file, line, column }) => ({
+        project,
+        code,
+        severity,
+        path: file,
+        line,
+        column,
+      }),
+    ),
+    [
+      {
+        project: 'App.csproj',
+        code: 'compiler_error',
+        severity: 'error',
+        path: 'src/App.cs',
+        line: 1,
+        column: 10,
+      },
+      {
+        project: 'App.csproj',
+        code: 'compiler_error',
+        severity: 'error',
+        path: 'src/App.cs',
+        line: 3,
+        column: 6,
+      },
+    ],
+  );
+  assert.equal(JSON.stringify(malformedSyntaxResult).includes(root), false);
+  assert.deepEqual(
+    malformedSyntaxResult.projects[0].declarations
+      .map((item) => item.name)
+      .filter((name) => name === 'Recovered' || name === 'NestedRecovered'),
+    ['NestedRecovered', 'Recovered'],
+  );
+
+  await fs.writeFile(
+    path.join(root, 'src', 'App.cs'),
+    [
+      'using System;',
+      'using System.Collections.Generic;',
+      'public class App',
+      '{',
+      '    public void Run() => Console.WriteLine(new List<string> { "ok" }.Count);',
+      '}',
+    ].join('\n'),
+  );
+
   await fs.mkdir(path.join(root, 'src', 'Unlisted'), { recursive: true });
   await fs.writeFile(
     path.join(root, 'src', 'Unlisted', 'Unlisted.csproj'),

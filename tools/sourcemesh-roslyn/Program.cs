@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using Microsoft.Win32.SafeHandles;
@@ -7,7 +8,7 @@ using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 
-record Request(int Version, Manifest Manifest, List<Source> Sources);
+record Request(int Version, Manifest Manifest, string? SourceEncoding, int? MaxDiagnostics, List<Source> Sources);
 record Manifest(string Language, Selection Selection, Solution? Solution, List<Project> Projects);
 record Selection(string Kind, string Path);
 record Solution(string Path, List<string> Projects);
@@ -18,16 +19,19 @@ record LocationResult(string Path, PositionResult Start, PositionResult End);
 record SymbolResult(string Kind, string Path, string Name, string QualifiedName, string MemberRole);
 record DeclarationResult(string Kind, string Path, string Name, string QualifiedName, string MemberRole, SymbolResult Parent, List<LocationResult> Locations);
 record RelationshipResult(string Kind, string Status, SymbolResult Source, SymbolResult? Target, LocationResult? Location);
-record Response(int Version, List<ProjectResult> Projects, List<DiagnosticResult> Diagnostics);
+record Response(int Version, string Manifest, int Bytes);
+record ChunkManifest(int Version, List<ChunkDescriptor> Chunks);
 record ProjectResult(string Path, int SourceCount, int SyntaxTreeCount, int DiagnosticCount, List<DeclarationResult> Declarations, List<RelationshipResult> Relationships);
 record DiagnosticResult(string Project, string Code, string Severity, string? Path, int? Line, int? Column);
+record ChunkDescriptor(int Index, string Project, int Bytes);
+record Chunk(int Version, ProjectResult Project, List<DiagnosticResult> Diagnostics);
 
 static class WindowsPath
 {
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern uint GetFinalPathNameByHandle(SafeFileHandle handle, System.Text.StringBuilder path, uint length, uint flags);
 
-    public static string ReadVerified(FileStream stream, string root, string expectedPath)
+    public static string ReadVerified(FileStream stream, string root, string expectedPath, string? sourceEncoding)
     {
         var buffer = new System.Text.StringBuilder(32_768);
         var length = GetFinalPathNameByHandle(stream.SafeFileHandle, buffer, (uint)buffer.Capacity, 0);
@@ -36,8 +40,17 @@ static class WindowsPath
         if (resolved.StartsWith("\\\\?\\", StringComparison.Ordinal)) resolved = resolved[4..];
         resolved = Path.GetFullPath(resolved);
         if (!resolved.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) || !string.Equals(resolved, expectedPath, StringComparison.OrdinalIgnoreCase)) throw new InvalidOperationException();
-        using var reader = new StreamReader(stream, new System.Text.UTF8Encoding(false, true), false, 4096, true);
-        return reader.ReadToEnd();
+        var bytes = new byte[checked((int)stream.Length)];
+        stream.ReadExactly(bytes);
+        try
+        {
+            return new System.Text.UTF8Encoding(false, true).GetString(bytes);
+        }
+        catch (DecoderFallbackException) when (sourceEncoding == "windows-1252")
+        {
+            Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
+            return Encoding.GetEncoding(1252, EncoderFallback.ExceptionFallback, DecoderFallback.ExceptionFallback).GetString(bytes);
+        }
     }
 }
 
@@ -169,6 +182,8 @@ internal static class Program
 
     static void Invalid() => throw new InvalidOperationException();
     const int MaxFrameBytes = 2 * 1024 * 1024;
+    const int MaxChunkBytes = 2 * 1024 * 1024;
+    const int MaxChunkManifestBytes = 16 * 1024 * 1024;
     const int MaxProjects = 256;
     const int MaxSolutionProjects = 256;
     const int MaxReferences = 256;
@@ -266,6 +281,22 @@ internal static class Program
             new List<LocationResult> { Location(node) }));
     }
 
+    static void CollectFunctionBody(
+        ProjectAnalysis analysis,
+        SyntaxNode? body,
+        SyntaxNode? expression,
+        SymbolResult module,
+        SymbolResult? namespaceSymbol,
+        SymbolResult? typeSymbol,
+        SymbolResult? functionSymbol)
+    {
+        if (body is not null)
+            foreach (var child in body.ChildNodes())
+                CollectNode(analysis, child, module, namespaceSymbol, typeSymbol, functionSymbol);
+        if (expression is not null)
+            CollectNode(analysis, expression, module, namespaceSymbol, typeSymbol, functionSymbol);
+    }
+
     static void AddParameters(ProjectAnalysis analysis, SyntaxNode owner, ParameterListSyntax parameterList, SymbolResult function)
     {
         var model = analysis.Models[owner.SyntaxTree];
@@ -290,6 +321,12 @@ internal static class Program
         if (node is BaseNamespaceDeclarationSyntax namespaceDeclaration)
         {
             var name = namespaceDeclaration.Name.ToString();
+            if (string.IsNullOrEmpty(name))
+            {
+                foreach (var member in namespaceDeclaration.Members)
+                    CollectNode(analysis, member, module, namespaceSymbol, null, null);
+                return;
+            }
             var qualifiedName = JoinName(namespaceSymbol?.QualifiedName ?? "", name);
             var result = new SymbolResult("namespace", node.SyntaxTree.FilePath, LastName(name), qualifiedName, "none");
             AddDeclaration(analysis, namespaceDeclaration, model.GetDeclaredSymbol(namespaceDeclaration), result, namespaceSymbol ?? module);
@@ -301,7 +338,13 @@ internal static class Program
         if (node is BaseTypeDeclarationSyntax typeDeclaration)
         {
             var name = typeDeclaration.Identifier.ValueText;
-            if (string.IsNullOrEmpty(name)) return;
+            if (string.IsNullOrEmpty(name))
+            {
+                if (typeDeclaration is TypeDeclarationSyntax malformedType)
+                    foreach (var member in malformedType.Members)
+                        CollectNode(analysis, member, module, namespaceSymbol, typeSymbol, functionSymbol);
+                return;
+            }
             var kind = typeDeclaration is ClassDeclarationSyntax ? "class"
                 : typeDeclaration is InterfaceDeclarationSyntax ? "interface" : "type";
             var parent = typeSymbol ?? namespaceSymbol ?? module;
@@ -317,15 +360,16 @@ internal static class Program
         {
             var parent = typeSymbol ?? functionSymbol ?? module;
             var name = method.Identifier.ValueText;
+            if (string.IsNullOrEmpty(name))
+            {
+                CollectFunctionBody(analysis, method.Body, method.ExpressionBody?.Expression, module, namespaceSymbol, typeSymbol, functionSymbol);
+                return;
+            }
             var methodSymbol = model.GetDeclaredSymbol(method);
             var result = new SymbolResult("function", node.SyntaxTree.FilePath, name, JoinName(parent.QualifiedName == module.QualifiedName ? "" : parent.QualifiedName, name), MemberRole(methodSymbol));
             AddDeclaration(analysis, method, methodSymbol, result, parent);
             AddParameters(analysis, method, method.ParameterList, result);
-            if (method.Body is not null)
-                foreach (var child in method.Body.ChildNodes())
-                    CollectNode(analysis, child, module, namespaceSymbol, typeSymbol, result);
-            if (method.ExpressionBody is not null)
-                CollectNode(analysis, method.ExpressionBody.Expression, module, namespaceSymbol, typeSymbol, result);
+            CollectFunctionBody(analysis, method.Body, method.ExpressionBody?.Expression, module, namespaceSymbol, typeSymbol, result);
             return;
         }
 
@@ -333,13 +377,16 @@ internal static class Program
         {
             var parent = functionSymbol ?? typeSymbol ?? module;
             var name = localFunction.Identifier.ValueText;
+            if (string.IsNullOrEmpty(name))
+            {
+                CollectFunctionBody(analysis, localFunction.Body, null, module, namespaceSymbol, typeSymbol, functionSymbol);
+                return;
+            }
             var localSymbol = model.GetDeclaredSymbol(localFunction);
             var result = new SymbolResult("function", node.SyntaxTree.FilePath, name, JoinName(parent.QualifiedName == module.QualifiedName ? "" : parent.QualifiedName, name), MemberRole(localSymbol));
             AddDeclaration(analysis, localFunction, localSymbol, result, parent);
             AddParameters(analysis, localFunction, localFunction.ParameterList, result);
-            if (localFunction.Body is not null)
-                foreach (var child in localFunction.Body.ChildNodes())
-                    CollectNode(analysis, child, module, namespaceSymbol, typeSymbol, result);
+            CollectFunctionBody(analysis, localFunction.Body, null, module, namespaceSymbol, typeSymbol, result);
             return;
         }
 
@@ -350,6 +397,7 @@ internal static class Program
         {
             var parent = typeSymbol ?? module;
             var name = property.Identifier.ValueText;
+            if (string.IsNullOrEmpty(name)) return;
             var propertySymbol = model.GetDeclaredSymbol(property);
             var result = new SymbolResult("variable", node.SyntaxTree.FilePath, name, JoinName(parent.QualifiedName == module.QualifiedName ? "" : parent.QualifiedName, name), MemberRole(propertySymbol));
             AddDeclaration(analysis, property, propertySymbol, result, parent);
@@ -362,6 +410,7 @@ internal static class Program
             foreach (var variable in field.Declaration.Variables)
             {
                 var name = variable.Identifier.ValueText;
+                if (string.IsNullOrEmpty(name)) continue;
                 var fieldSymbol = model.GetDeclaredSymbol(variable);
                 var result = new SymbolResult("variable", node.SyntaxTree.FilePath, name, JoinName(parent.QualifiedName == module.QualifiedName ? "" : parent.QualifiedName, name), MemberRole(fieldSymbol));
                 AddDeclaration(analysis, variable, fieldSymbol, result, parent);
@@ -375,6 +424,7 @@ internal static class Program
             foreach (var variable in eventField.Declaration.Variables)
             {
                 var name = variable.Identifier.ValueText;
+                if (string.IsNullOrEmpty(name)) continue;
                 var fieldSymbol = model.GetDeclaredSymbol(variable);
                 var result = new SymbolResult("variable", node.SyntaxTree.FilePath, name, JoinName(parent.QualifiedName == module.QualifiedName ? "" : parent.QualifiedName, name), MemberRole(fieldSymbol));
                 AddDeclaration(analysis, variable, fieldSymbol, result, parent);
@@ -558,6 +608,79 @@ internal static class Program
                         ? CompareSymbol(left.Target ?? left.Source, right.Target ?? right.Source)
                         : CompareLocation(left.Location ?? new("", new(0, 0), new(0, 0)), right.Location ?? new("", new(0, 0), new(0, 0)));
 
+    static byte[] SerializeChunk(
+        ProjectResult project,
+        List<DiagnosticResult> diagnostics,
+        JsonSerializerOptions options)
+    {
+        var bytes = new System.Text.UTF8Encoding(false, true).GetBytes(
+            JsonSerializer.Serialize(new Chunk(1, project, diagnostics), options));
+        if (bytes.Length + 1 > MaxChunkBytes) Invalid();
+        return bytes;
+    }
+
+    static void WriteProjectChunks(
+        string stagingRoot,
+        ProjectResult project,
+        List<DiagnosticResult> diagnostics,
+        JsonSerializerOptions options,
+        List<ChunkDescriptor> descriptors,
+        ref int nextIndex)
+    {
+        var wrote = false;
+        var chunkIndex = nextIndex;
+        void WriteChunk(ProjectResult chunkProject, List<DiagnosticResult> chunkDiagnostics)
+        {
+            var chunkBytes = SerializeChunk(chunkProject, chunkDiagnostics, options);
+            var name = $"chunk-{chunkIndex:D6}.json";
+            var destination = Path.Combine(stagingRoot, name);
+            using (var stream = new FileStream(destination, FileMode.CreateNew, FileAccess.Write, FileShare.Read, 4096, FileOptions.SequentialScan))
+                stream.Write(chunkBytes, 0, chunkBytes.Length);
+            descriptors.Add(new ChunkDescriptor(chunkIndex, project.Path, chunkBytes.Length));
+            chunkIndex++;
+            wrote = true;
+        }
+
+        void WriteParts<T>(
+            IReadOnlyList<T> values,
+            Func<List<T>, ProjectResult> createProject,
+            Func<List<T>, List<DiagnosticResult>>? createDiagnostics = null)
+        {
+            var offset = 0;
+            while (offset < values.Count)
+            {
+                var count = Math.Min(1024, values.Count - offset);
+                while (true)
+                {
+                    var part = values.Skip(offset).Take(count).ToList();
+                    try
+                    {
+                        var chunkProject = createProject(part);
+                        var chunkDiagnostics = createDiagnostics is null
+                            ? new List<DiagnosticResult>()
+                            : createDiagnostics(part);
+                        SerializeChunk(chunkProject, chunkDiagnostics, options);
+                        WriteChunk(chunkProject, chunkDiagnostics);
+                        offset += count;
+                        break;
+                    }
+                    catch (InvalidOperationException)
+                    {
+                        if (count == 1) throw;
+                        count = (count + 1) / 2;
+                    }
+                }
+            }
+        }
+
+        WriteParts(project.Declarations, values => project with { Declarations = values, Relationships = new List<RelationshipResult>() });
+        WriteParts(project.Relationships, values => project with { Declarations = new List<DeclarationResult>(), Relationships = values });
+        WriteParts(diagnostics, values => project with { Declarations = new List<DeclarationResult>(), Relationships = new List<RelationshipResult>() }, values => values);
+        if (!wrote)
+            WriteChunk(project, diagnostics);
+        nextIndex = chunkIndex;
+    }
+
     public static int Main()
     {
         try
@@ -584,7 +707,7 @@ internal static class Program
             var declaredProjects = manifest.Projects ?? throw new InvalidOperationException();
             var selection = manifest.Selection ?? throw new InvalidOperationException();
             var sources = request.Sources ?? throw new InvalidOperationException();
-            if (request.Version != 1 || manifest.Language != "csharp" || selection.Kind is not ("solution" or "project") || !Relative(selection.Path) || declaredProjects.Count is 0 or > MaxProjects) Invalid();
+            if (request.Version != 1 || manifest.Language != "csharp" || request.SourceEncoding is not (null or "windows-1252") || request.MaxDiagnostics is not null && (request.MaxDiagnostics < 1 || request.MaxDiagnostics > 100_000) || selection.Kind is not ("solution" or "project") || !Relative(selection.Path) || declaredProjects.Count is 0 or > MaxProjects) Invalid();
             if (declaredProjects.Any(x => x.Files is null || x.References is null || !Relative(x.Path) || x.Files.Count > MaxFiles || x.References.Count > MaxReferences || x.Files.Distinct(StringComparer.Ordinal).Count() != x.Files.Count || x.References.Distinct(StringComparer.Ordinal).Count() != x.References.Count || x.Files.Any(file => !Relative(file)) || x.References.Any(reference => !Relative(reference)))) Invalid();
             var declared = declaredProjects.Select(x => x.Path).ToHashSet(StringComparer.Ordinal);
             if (declared.Count != declaredProjects.Count) Invalid();
@@ -594,13 +717,15 @@ internal static class Program
             var logicalFiles = declaredProjects.SelectMany(x => x.Files).Distinct(StringComparer.Ordinal).OrderBy(x => x, StringComparer.Ordinal).ToArray();
             if (sources.Count != logicalFiles.Length || sources.Any(source => !Relative(source.Path)) || sources.Select(source => source.Path).Distinct(StringComparer.Ordinal).Count() != sources.Count || sources.Select(source => source.Staged).Distinct(StringComparer.Ordinal).Count() != sources.Count || !sources.OrderBy(source => source.Path, StringComparer.Ordinal).Select((source, index) => source.Path == logicalFiles[index] && source.Staged == StagedName(index)).All(valid => valid)) Invalid();
             var sourcePaths = sources.ToDictionary(source => source.Path, source => source.Staged, StringComparer.Ordinal);
-            var projects = new List<ProjectResult>();
+            var diagnosticLimit = request.MaxDiagnostics ?? MaxDiagnostics;
             var diagnostics = new List<DiagnosticResult>();
+            var chunks = new List<ChunkDescriptor>();
+            var nextChunkIndex = 0;
             long aggregateBytes = 0;
             var stagingRoot = Path.GetFullPath(Environment.CurrentDirectory).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
             MetadataReference[] runtimeReferences = RuntimeReferences();
             var compilations = new Dictionary<string, CSharpCompilation>(StringComparer.Ordinal);
-            var analyses = new List<ProjectAnalysis>();
+            var allSymbols = new Dictionary<string, List<SymbolResult>>(StringComparer.Ordinal);
             var pending = declaredProjects.OrderBy(x => x.Path, StringComparer.Ordinal).ToList();
             while (pending.Count > 0)
             {
@@ -617,7 +742,7 @@ internal static class Program
                     using var stream = new FileStream(full, FileMode.Open, FileAccess.Read, FileShare.Read, 4096, FileOptions.SequentialScan);
                     if (stream.Length > MaxSourceBytes || stream.Length > MaxAggregateBytes - aggregateBytes) Invalid();
                     aggregateBytes += stream.Length;
-                    trees.Add(CSharpSyntaxTree.ParseText(WindowsPath.ReadVerified(stream, stagingRoot, full), parseOptions, path: file));
+                    trees.Add(CSharpSyntaxTree.ParseText(WindowsPath.ReadVerified(stream, stagingRoot, full, request.SourceEncoding), parseOptions, path: file));
                 }
                 var references = runtimeReferences.Concat(projectReferences.Where(compilations.ContainsKey).Select(reference => compilations[reference].ToMetadataReference()));
                 var compilation = CSharpCompilation.Create(
@@ -629,20 +754,6 @@ internal static class Program
                 var models = trees.ToDictionary(tree => tree, tree => compilation.GetSemanticModel(tree));
                 var analysis = new ProjectAnalysis(project, models);
                 CollectDeclarations(analysis);
-                analyses.Add(analysis);
-                var diagnosticCount = 0;
-                foreach (var diagnostic in compilation.GetDiagnostics())
-                {
-                    if (diagnostic.Severity is not (DiagnosticSeverity.Error or DiagnosticSeverity.Warning)) continue;
-                    if (diagnostics.Count >= MaxDiagnostics) Invalid();
-                    diagnosticCount++;
-                    var span = diagnostic.Location.GetLineSpan();
-                    var path = Relative(span.Path) ? span.Path : null;
-                    diagnostics.Add(new(project.Path, diagnostic.Severity == DiagnosticSeverity.Warning ? "compiler_warning" : "compiler_error", diagnostic.Severity == DiagnosticSeverity.Warning ? "warning" : "error", path, path is null ? null : span.StartLinePosition.Line + 1, path is null ? null : span.StartLinePosition.Character + 1));
-                }
-            }
-            var allSymbols = new Dictionary<string, List<SymbolResult>>(StringComparer.Ordinal);
-            foreach (var analysis in analyses)
                 foreach (var (key, values) in analysis.LocalSymbols)
                 {
                     var existing = allSymbols.TryGetValue(key, out var current) ? current : new List<SymbolResult>();
@@ -650,8 +761,17 @@ internal static class Program
                         if (!existing.Contains(value)) existing.Add(value);
                     allSymbols[key] = existing;
                 }
-            foreach (var analysis in analyses)
-            {
+                var projectDiagnostics = new List<DiagnosticResult>();
+                foreach (var diagnostic in compilation.GetDiagnostics())
+                {
+                    if (diagnostic.Severity is not (DiagnosticSeverity.Error or DiagnosticSeverity.Warning)) continue;
+                    if (diagnostics.Count >= diagnosticLimit) Invalid();
+                    var span = diagnostic.Location.GetLineSpan();
+                    var path = Relative(span.Path) ? span.Path : null;
+                    var item = new DiagnosticResult(project.Path, diagnostic.Severity == DiagnosticSeverity.Warning ? "compiler_warning" : "compiler_error", diagnostic.Severity == DiagnosticSeverity.Warning ? "warning" : "error", path, path is null ? null : span.StartLinePosition.Line + 1, path is null ? null : span.StartLinePosition.Character + 1);
+                    diagnostics.Add(item);
+                    projectDiagnostics.Add(item);
+                }
                 CollectRelationships(analysis, allSymbols);
                 var declarations = analysis.Declarations
                     .OrderBy(item => item, Comparer<DeclarationResult>.Create(CompareDeclaration))
@@ -659,13 +779,14 @@ internal static class Program
                 var relationships = analysis.Relationships
                     .OrderBy(item => item, Comparer<RelationshipResult>.Create(CompareRelationship))
                     .ToList();
-                var trees = analysis.Models.Keys.Count;
-                var diagnosticCount = diagnostics.Count(item => item.Project == analysis.Project.Path);
-                projects.Add(new(analysis.Project.Path, trees, trees, diagnosticCount, declarations, relationships));
+                var treeCount = analysis.Models.Keys.Count;
+                var projectResult = new ProjectResult(project.Path, treeCount, treeCount, projectDiagnostics.Count, declarations, relationships);
+                WriteProjectChunks(stagingRoot, projectResult, projectDiagnostics, options, chunks, ref nextChunkIndex);
             }
-            diagnostics = diagnostics.OrderBy(x => x.Project, StringComparer.Ordinal).ThenBy(x => x.Path, StringComparer.Ordinal).ThenBy(x => x.Line).ThenBy(x => x.Column).ThenBy(x => x.Code, StringComparer.Ordinal).ToList();
-            projects = projects.OrderBy(x => x.Path, StringComparer.Ordinal).ToList();
-            var output = new System.Text.UTF8Encoding(false, true).GetBytes(JsonSerializer.Serialize(new Response(1, projects, diagnostics), options));
+            var manifestBytes = new System.Text.UTF8Encoding(false, true).GetBytes(JsonSerializer.Serialize(new ChunkManifest(1, chunks), options));
+            if (manifestBytes.Length + 1 > MaxChunkManifestBytes) Invalid();
+            File.WriteAllBytes(Path.Combine(stagingRoot, "chunks.json"), manifestBytes);
+            var output = new System.Text.UTF8Encoding(false, true).GetBytes(JsonSerializer.Serialize(new Response(2, "chunks.json", manifestBytes.Length), options));
             if (output.Length + 1 > MaxFrameBytes) Invalid();
             using var stdout = Console.OpenStandardOutput();
             stdout.Write(output, 0, output.Length);

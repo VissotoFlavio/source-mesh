@@ -66,6 +66,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Changed
 
+- C# Roslyn analysis now persists bounded project chunks in the private staging
+  directory and validates/merges the chunk protocol without a monolithic helper
+  response; the Velocy profile explicitly permits its known legacy Windows-1252
+  source files (#67).
+
+- C# Roslyn boundary now preserves sanitized compiler diagnostics and valid
+  declarations when malformed syntax produces incomplete Roslyn symbols,
+  avoiding a protocol-level analysis failure.
+
 - Mantidas raízes canônicas consistentes entre descoberta, carregamento e
   extração no Windows, incluindo regressão para aliases de diretório (#38).
 

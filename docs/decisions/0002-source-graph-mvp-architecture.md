@@ -154,7 +154,7 @@ The following are hard caps, not implementation hints:
 | Snapshot nesting depth                      |      64 |
 | Graph nodes                                 | 100,000 |
 | Graph edges                                 | 200,000 |
-| Snapshot diagnostics                        |  10,000 |
+| Snapshot diagnostics                        | 100,000 |
 | Path depth                                  |     256 |
 | Module-resolution candidates per source     |  10,000 |
 | Config files inspected                      |       1 |
@@ -175,6 +175,12 @@ before opening or parsing the next item. A limit failure therefore cannot be
 used to parse an unbounded config, package manifest, or reference graph. The
 explicit `tsconfigPath` counts as the one config file; there is no autodiscovery
 that can consume more config files.
+
+The snapshot diagnostic cap is higher than the ordinary analysis diagnostic cap
+because a recoverable partial analysis may accumulate diagnostics from several
+independent graph stages. The snapshot remains bounded by the 64 MiB snapshot
+limit, and profile-specific integrations must opt in explicitly to any higher
+analysis budget; the general C# worker keeps its lower default.
 
 Analysis has one effective 30-second deadline. Repository and compiler work runs
 inside an interruptible worker/process boundary owned by the analysis service.

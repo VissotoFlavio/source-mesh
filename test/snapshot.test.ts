@@ -210,6 +210,23 @@ describe('schema-v1 snapshots', () => {
         false,
       );
     }
+    const customRoot = await mkdtemp(
+      path.join(process.cwd(), '.snapshot-custom-path-'),
+    );
+    roots.push(customRoot);
+    const custom = await writeSnapshot(customRoot, snapshot(), {
+      path: '.sourcemesh/custom.json',
+      mode: 'replace',
+    });
+    assert.equal(
+      custom.path,
+      path.join(customRoot, '.sourcemesh', 'custom.json'),
+    );
+    assert.equal(
+      (await openValidatedSnapshot(customRoot, '.sourcemesh/custom.json'))
+        .schemaVersion,
+      1,
+    );
     const createOnly = writeSnapshot(root, snapshot('other'), {
       mode: 'create-only',
     });

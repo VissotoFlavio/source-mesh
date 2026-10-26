@@ -5,7 +5,7 @@ import path from 'node:path';
 import { after, before, test } from 'node:test';
 import {
   analyzeCSharpManifestForTest,
-  CSHARP_WORKER_TIMEOUT_MS,
+  CSHARP_WORKER_MAX_TIMEOUT_MS,
   CSharpWorkerError,
 } from '../src/csharp/worker.js';
 import type { CSharpManifest } from '../src/csharp/contracts.js';
@@ -48,20 +48,21 @@ function runner(
     exitCode: number | null;
     timedOut: boolean;
   }> = {},
+  expectedTimeout?: number,
 ) {
   return async (invocation: {
     readonly command: string;
     readonly args: readonly string[];
     readonly cwd: string;
     readonly input: string;
-    readonly timeoutMs: number;
+    readonly timeoutMs?: number;
     readonly shell: boolean;
   }) => {
     assert.equal(invocation.command, host);
     assert.equal(invocation.args.length, 1);
     assert.equal(path.resolve(invocation.args[0]!), helper);
     assert.equal(invocation.shell, false);
-    assert.equal(invocation.timeoutMs, CSHARP_WORKER_TIMEOUT_MS);
+    assert.equal(invocation.timeoutMs, expectedTimeout);
     const request = JSON.parse(invocation.input) as {
       readonly sources: readonly {
         readonly path: string;
@@ -106,6 +107,141 @@ test('C# worker stages approved source files and accepts a deterministic respons
     ],
     diagnostics: [],
   });
+});
+
+test('C# worker applies a timeout only when an automation explicitly requests one', async () => {
+  await analyzeCSharpManifestForTest(
+    root,
+    manifest,
+    runner(
+      '{"version":1,"projects":[{"path":"App.csproj","sourceCount":1,"syntaxTreeCount":1,"diagnosticCount":0}],"diagnostics":[]}\n',
+      {},
+      30_000,
+    ),
+    helper,
+    host,
+    undefined,
+    { timeoutMs: 30_000 },
+  );
+});
+
+test('C# worker rejects an invalid explicit automation timeout', async () => {
+  await assert.rejects(
+    analyzeCSharpManifestForTest(
+      root,
+      manifest,
+      async () => {
+        throw new Error('runner must not start');
+      },
+      helper,
+      host,
+      undefined,
+      { timeoutMs: CSHARP_WORKER_MAX_TIMEOUT_MS + 1 },
+    ),
+    (error: unknown) =>
+      error instanceof CSharpWorkerError && error.code === 'resource_limit',
+  );
+});
+
+test('C# worker reads bounded disk chunks and merges them deterministically', async () => {
+  let staging = '';
+  const parent = {
+    kind: 'module',
+    path: 'src/App.cs',
+    name: 'src/App.cs',
+    qualifiedName: 'src/App.cs',
+    memberRole: 'none',
+  };
+  const declaration = {
+    kind: 'class',
+    path: 'src/App.cs',
+    name: 'App',
+    qualifiedName: 'App',
+    memberRole: 'none',
+    parent,
+    locations: [
+      {
+        path: 'src/App.cs',
+        start: { line: 1, column: 1 },
+        end: { line: 1, column: 11 },
+      },
+    ],
+  };
+  const functionDeclaration = {
+    ...declaration,
+    kind: 'function',
+    name: 'Run',
+    qualifiedName: 'App.Run',
+    parent: {
+      kind: 'class',
+      path: 'src/App.cs',
+      name: 'App',
+      qualifiedName: 'App',
+      memberRole: 'none',
+    },
+  };
+  await analyzeCSharpManifestForTest(
+    root,
+    manifest,
+    async (invocation) => {
+      const makeChunk = (project: Record<string, unknown>) =>
+        JSON.stringify({ version: 1, project, diagnostics: [] });
+      const first = makeChunk({
+        path: 'App.csproj',
+        sourceCount: 1,
+        syntaxTreeCount: 1,
+        diagnosticCount: 0,
+        declarations: [declaration],
+        relationships: [],
+      });
+      const second = makeChunk({
+        path: 'App.csproj',
+        sourceCount: 1,
+        syntaxTreeCount: 1,
+        diagnosticCount: 0,
+        declarations: [functionDeclaration],
+        relationships: [],
+      });
+      await fs.writeFile(path.join(invocation.cwd, 'chunk-000000.json'), first);
+      await fs.writeFile(
+        path.join(invocation.cwd, 'chunk-000001.json'),
+        second,
+      );
+      const response = JSON.stringify({
+        version: 2,
+        chunks: [
+          {
+            index: 0,
+            project: 'App.csproj',
+            bytes: Buffer.byteLength(first),
+          },
+          {
+            index: 1,
+            project: 'App.csproj',
+            bytes: Buffer.byteLength(second),
+          },
+        ],
+      });
+      return {
+        stdout: Buffer.from(`${response}\n`),
+        stderr: Buffer.alloc(0),
+        exitCode: 0,
+        timedOut: false,
+      };
+    },
+    helper,
+    host,
+    async (prefix) => {
+      staging = await fs.mkdtemp(prefix);
+      return staging;
+    },
+  ).then((result) => {
+    assert.deepEqual(
+      result.projects[0]?.declarations?.map((item) => item.name),
+      ['App', 'Run'],
+    );
+  });
+  await assert.rejects(fs.lstat(staging));
 });
 
 test('C# worker fails closed when the trusted helper or runtime host is missing', async () => {
