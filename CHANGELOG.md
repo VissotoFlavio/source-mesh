@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- Bounded SDK-style C# project metadata support for deterministic recursive
+  compile removals and ignored resource/package items, with synthetic graph
+  fixture coverage (#65).
+
 - Opt-in local Velocy API acceptance profile with a contained C# solution
   preflight, create-only local snapshot, aggregate sanitized output, and no
   CI or profile-level network execution (#47).
