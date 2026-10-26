@@ -6,5 +6,7 @@
     <ProjectReference Include="Library.csproj" />
     <Compile Remove="src\Library\Contracts.cs" />
     <Compile Remove="src\Library\Types.cs" />
+    <Compile Remove="src\App\Explicit.cs" />
+    <Compile Include="src\App\Explicit.cs" />
   </ItemGroup>
 </Project>

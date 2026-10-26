@@ -4,5 +4,6 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Remove="src\App\Entry.cs" />
+    <Compile Remove="src\App\Explicit.cs" />
   </ItemGroup>
 </Project>

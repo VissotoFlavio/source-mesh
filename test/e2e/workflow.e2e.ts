@@ -547,6 +547,7 @@ test(
     const appProject = findNode(snapshot, 'project', 'App');
     const libraryProject = findNode(snapshot, 'project', 'Library');
     const appFile = findFile(snapshot, 'src/App/Entry.cs');
+    const explicitFile = findFile(snapshot, 'src/App/Explicit.cs');
     const libraryFile = findFile(snapshot, 'src/Library/Contracts.cs');
     const appModule = findNode(snapshot, 'module', 'src/App/Entry.cs');
     const appNamespace = findQualifiedNode(
@@ -577,6 +578,16 @@ test(
       'function',
       'Synthetic.Library.BaseProcessor.Format',
     );
+    const explicitFeature = findQualifiedNode(
+      snapshot,
+      'class',
+      'Synthetic.App.ExplicitFeature',
+    );
+    const execute = findQualifiedNode(
+      snapshot,
+      'function',
+      'Synthetic.App.ExplicitFeature.Execute',
+    );
     const name = findNode(snapshot, 'variable', 'Name');
     const processValue = findQualifiedNode(
       snapshot,
@@ -586,6 +597,15 @@ test(
     const runInput = findNode(snapshot, 'parameter', 'input');
     assert.ok(findNode(snapshot, 'class', 'SharedType'));
     assert.ok(appFile.id);
+    assert.ok(explicitFile.id);
+    assert.equal(
+      'path' in explicitFeature ? explicitFeature.path : undefined,
+      'src/App/Explicit.cs',
+    );
+    assert.equal(
+      'path' in execute ? execute.path : undefined,
+      'src/App/Explicit.cs',
+    );
     assert.ok(libraryFile.id);
     assert.ok(appNamespace.id);
     assert.ok(name.id);
@@ -601,6 +621,7 @@ test(
     assert.equal(hasEdge('extends', application.id, baseProcessor.id), true);
     assert.equal(hasEdge('implements', application.id, processor.id), true);
     assert.equal(hasEdge('calls', run.id, process.id), true);
+    assert.equal(hasEdge('calls', run.id, execute.id), true);
     assert.equal(hasEdge('calls', process.id, format.id), true);
 
     const requestTable = [

@@ -13,7 +13,7 @@ namespace Synthetic.App
 
         public int Run(int input)
         {
-            return Process(input);
+            return ExplicitFeature.Execute(Process(input));
         }
     }
 }
