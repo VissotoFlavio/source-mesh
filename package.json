@@ -24,6 +24,7 @@
     "build": "npm run clean && tsc -p tsconfig.build.json",
     "offline:check": "npm run build && node --import ./scripts/deny-network.mjs --import tsx --test test/project-loader.offline.test.ts && node --import ./scripts/deny-network.mjs ./dist/cli.js --help && npm run e2e:check && node --import tsx --test test/mcp-stdio.integration.test.ts",
     "csharp:offline:check": "node --import ./scripts/deny-network.mjs --import tsx ./scripts/check-csharp-offline.mjs",
+    "accept:velocy": "node --import ./scripts/deny-network.mjs --import tsx scripts/check-velocy-local.mjs",
     "e2e:check": "node --import tsx --test test/e2e/workflow.e2e.ts",
     "measure:e2e": "node scripts/measure-e2e.mjs",
     "pack:check": "npm pack --dry-run",
