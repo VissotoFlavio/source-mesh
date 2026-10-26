@@ -35,3 +35,10 @@ npm run csharp:offline:check
 from the current sources, then executes it beneath the repository offline guard.
 It verifies platform references such as `Console` and `List<T>`, and proves that
 a diagnostic stream exceeding the bounded protocol limit fails closed.
+
+Local analysis has no implicit wall-clock deadline: elapsed time depends on the
+repository and the host machine. Source and protocol byte limits, read-operation
+limits, diagnostic budgets, and validation remain enforced. An integrating
+automation may explicitly pass a positive `timeoutMs` within Node's timer range;
+users can cancel a local command normally instead of being failed by an arbitrary
+default timeout.

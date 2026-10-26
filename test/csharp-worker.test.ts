@@ -5,7 +5,7 @@ import path from 'node:path';
 import { after, before, test } from 'node:test';
 import {
   analyzeCSharpManifestForTest,
-  CSHARP_WORKER_TIMEOUT_MS,
+  CSHARP_WORKER_MAX_TIMEOUT_MS,
   CSharpWorkerError,
 } from '../src/csharp/worker.js';
 import type { CSharpManifest } from '../src/csharp/contracts.js';
@@ -48,20 +48,21 @@ function runner(
     exitCode: number | null;
     timedOut: boolean;
   }> = {},
+  expectedTimeout?: number,
 ) {
   return async (invocation: {
     readonly command: string;
     readonly args: readonly string[];
     readonly cwd: string;
     readonly input: string;
-    readonly timeoutMs: number;
+    readonly timeoutMs?: number;
     readonly shell: boolean;
   }) => {
     assert.equal(invocation.command, host);
     assert.equal(invocation.args.length, 1);
     assert.equal(path.resolve(invocation.args[0]!), helper);
     assert.equal(invocation.shell, false);
-    assert.equal(invocation.timeoutMs, CSHARP_WORKER_TIMEOUT_MS);
+    assert.equal(invocation.timeoutMs, expectedTimeout);
     const request = JSON.parse(invocation.input) as {
       readonly sources: readonly {
         readonly path: string;
@@ -106,6 +107,40 @@ test('C# worker stages approved source files and accepts a deterministic respons
     ],
     diagnostics: [],
   });
+});
+
+test('C# worker applies a timeout only when an automation explicitly requests one', async () => {
+  await analyzeCSharpManifestForTest(
+    root,
+    manifest,
+    runner(
+      '{"version":1,"projects":[{"path":"App.csproj","sourceCount":1,"syntaxTreeCount":1,"diagnosticCount":0}],"diagnostics":[]}\n',
+      {},
+      30_000,
+    ),
+    helper,
+    host,
+    undefined,
+    { timeoutMs: 30_000 },
+  );
+});
+
+test('C# worker rejects an invalid explicit automation timeout', async () => {
+  await assert.rejects(
+    analyzeCSharpManifestForTest(
+      root,
+      manifest,
+      async () => {
+        throw new Error('runner must not start');
+      },
+      helper,
+      host,
+      undefined,
+      { timeoutMs: CSHARP_WORKER_MAX_TIMEOUT_MS + 1 },
+    ),
+    (error: unknown) =>
+      error instanceof CSharpWorkerError && error.code === 'resource_limit',
+  );
 });
 
 test('C# worker reads bounded disk chunks and merges them deterministically', async () => {

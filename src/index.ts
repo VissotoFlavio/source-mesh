@@ -87,7 +87,7 @@ export {
   analyzeCSharpManifest,
   CSHARP_WORKER_MAX_REQUEST_BYTES,
   CSHARP_WORKER_MAX_RESPONSE_BYTES,
-  CSHARP_WORKER_TIMEOUT_MS,
+  CSHARP_WORKER_MAX_TIMEOUT_MS,
   CSharpWorkerError,
 } from './csharp/worker.js';
 export type {

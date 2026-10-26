@@ -25,7 +25,8 @@ import { normalizeRelativePath, readFileBounded } from '../discovery.js';
 
 export type { CSharpWorkerProjectResult } from './contracts.js';
 
-export const CSHARP_WORKER_TIMEOUT_MS = 15_000;
+/** Maximum delay accepted by Node's timer APIs when an automation opts in. */
+export const CSHARP_WORKER_MAX_TIMEOUT_MS = 2_147_483_647;
 export const CSHARP_WORKER_MAX_REQUEST_BYTES = 2 * 1024 * 1024;
 export const CSHARP_WORKER_MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
 export const CSHARP_WORKER_MAX_STDERR_BYTES = 64 * 1024;
@@ -36,6 +37,11 @@ export type CSharpSourceEncoding = 'windows-1252';
 export interface CSharpWorkerOptions {
   readonly sourceEncoding?: CSharpSourceEncoding;
   readonly maxDiagnostics?: number;
+  /**
+   * Optional automation deadline. Local analysis deliberately has no implicit
+   * wall-clock limit because elapsed time depends on the repository and host.
+   */
+  readonly timeoutMs?: number;
 }
 
 export interface CSharpWorkerDiagnostic {
@@ -71,7 +77,7 @@ interface WorkerInvocation {
   readonly args: readonly [string];
   readonly cwd: string;
   readonly input: string;
-  readonly timeoutMs: number;
+  readonly timeoutMs?: number;
   readonly shell: false;
   readonly env: Readonly<Record<string, string | undefined>>;
 }
@@ -696,7 +702,10 @@ async function defaultRunner(
       timedOut = true;
       child.kill();
     };
-    const timer = setTimeout(stop, invocation.timeoutMs);
+    const timer =
+      invocation.timeoutMs === undefined
+        ? undefined
+        : setTimeout(stop, invocation.timeoutMs);
     const append = (
       target: Buffer[],
       chunk: Buffer,
@@ -728,7 +737,7 @@ async function defaultRunner(
       );
     });
     child.on('error', () => {
-      clearTimeout(timer);
+      if (timer !== undefined) clearTimeout(timer);
       resolve({
         stdout: Buffer.concat(output),
         stderr: Buffer.concat(errors),
@@ -737,7 +746,7 @@ async function defaultRunner(
       });
     });
     child.on('close', (exitCode) => {
-      clearTimeout(timer);
+      if (timer !== undefined) clearTimeout(timer);
       resolve({
         stdout: Buffer.concat(output),
         stderr: Buffer.concat(errors),
@@ -1273,6 +1282,12 @@ async function executeWorker(
       options.maxDiagnostics > 100_000)
   )
     fail('resource_limit');
+  if (
+    options.timeoutMs !== undefined &&
+    (!positiveInteger(options.timeoutMs) ||
+      options.timeoutMs > CSHARP_WORKER_MAX_TIMEOUT_MS)
+  )
+    fail('resource_limit');
   const request =
     JSON.stringify({
       version: 1,
@@ -1302,7 +1317,9 @@ async function executeWorker(
       args: [helper],
       cwd: staging,
       input: request,
-      timeoutMs: CSHARP_WORKER_TIMEOUT_MS,
+      ...(options.timeoutMs === undefined
+        ? {}
+        : { timeoutMs: options.timeoutMs }),
       shell: false,
       env: {
         SYSTEMROOT: process.env.SYSTEMROOT,
