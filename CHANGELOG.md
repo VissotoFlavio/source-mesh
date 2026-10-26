@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- Opt-in local Velocy API acceptance profile with a contained C# solution
+  preflight, create-only local snapshot, aggregate sanitized output, and no
+  CI or profile-level network execution (#47).
+
 - Repository-owned synthetic C# solution fixture with offline end-to-end
   coverage for deterministic v2 snapshots, CLI/MCP DTO parity, and fail-closed
   helper and persistence paths (#46).

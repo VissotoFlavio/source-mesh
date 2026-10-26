@@ -132,6 +132,13 @@ fixture- and host-specific; they are not production capacity, latency SLOs, or
 arbitrary-repository scale claims. The complete validation record and limitations
 are in [docs/mvp-validation.md](docs/mvp-validation.md).
 
+## Optional Velocy API acceptance
+
+The real Velocy API checkout can be checked locally with the explicit,
+opt-in-only profile described in [docs/velocy-local-acceptance.md](docs/velocy-local-acceptance.md).
+It is outside CI, does not restore or build the target, and writes only a
+create-only snapshot inside the target's `.sourcemesh/` directory.
+
 ## Project status
 
 SourceMesh is pre-release. Package publication, releases, hosted processing, and
