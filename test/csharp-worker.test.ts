@@ -108,6 +108,31 @@ test('C# worker stages approved source files and accepts a deterministic respons
   });
 });
 
+test('C# worker fails closed when the trusted helper or runtime host is missing', async () => {
+  await assert.rejects(
+    analyzeCSharpManifestForTest(
+      root,
+      manifest,
+      runner(''),
+      path.join(root, 'missing', 'sourcemesh-roslyn.dll'),
+      host,
+    ),
+    (error: unknown) =>
+      error instanceof CSharpWorkerError && error.code === 'helper_missing',
+  );
+  await assert.rejects(
+    analyzeCSharpManifestForTest(
+      root,
+      manifest,
+      runner(''),
+      helper,
+      path.join(root, 'missing', 'dotnet.exe'),
+    ),
+    (error: unknown) =>
+      error instanceof CSharpWorkerError && error.code === 'helper_missing',
+  );
+});
+
 test('C# worker rejects malformed frames and helper failures', async () => {
   for (const [response, overrides] of [
     ['{}\n', {}],

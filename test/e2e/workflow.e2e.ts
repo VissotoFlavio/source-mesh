@@ -6,7 +6,7 @@ import { pathToFileURL } from 'node:url';
 import { after, test } from 'node:test';
 import { Client } from '@modelcontextprotocol/client';
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
-import { openValidatedSnapshot, type SnapshotV1 } from '../../src/index.js';
+import { openValidatedSnapshot, type Snapshot } from '../../src/index.js';
 import {
   MCP_MAX_MESSAGE_BYTES,
   MCP_TOOL_NAMES,
@@ -14,6 +14,12 @@ import {
 
 const repository = process.cwd();
 const fixture = path.join(repository, 'test', 'fixtures', 'e2e-project');
+const csharpFixture = path.join(
+  repository,
+  'test',
+  'fixtures',
+  'csharp-project',
+);
 const cliEntry = path.join(repository, 'dist', 'cli.js');
 const denyNetwork = path.join(repository, 'scripts', 'deny-network.mjs');
 const sourceMarker = 'E2E_SOURCE_TEXT_MARKER';
@@ -29,7 +35,7 @@ interface ProcessResult {
 }
 
 interface CliEnvelope {
-  readonly schemaVersion: 1;
+  readonly schemaVersion: 1 | 2;
   readonly command: string;
   readonly result?: unknown;
   readonly error?: Record<string, unknown>;
@@ -84,22 +90,37 @@ function analyzeArgs(root: string): string[] {
   ];
 }
 
+function csharpAnalyzeArgs(root: string): string[] {
+  return [
+    'analyze',
+    '--root',
+    root,
+    '--language',
+    'csharp',
+    '--solution',
+    'Synthetic.sln',
+    '--overwrite',
+    '--output',
+    'json',
+  ];
+}
+
 function snapshotPath(root: string): string {
   return path.join(root, '.sourcemesh', 'graph.json');
 }
 
-async function createFixtureCopy(): Promise<string> {
+async function createFixtureCopy(source = fixture): Promise<string> {
   const root = await mkdtemp(path.join(repository, '.e2e-workflow-'));
   temporaryRoots.push(root);
-  await cp(fixture, root, { recursive: true });
+  await cp(source, root, { recursive: true });
   return root;
 }
 
 function findNode(
-  snapshot: SnapshotV1,
-  kind: SnapshotV1['nodes'][number]['kind'],
+  snapshot: Snapshot,
+  kind: Snapshot['nodes'][number]['kind'],
   name: string,
-): SnapshotV1['nodes'][number] {
+): Snapshot['nodes'][number] {
   const node = snapshot.nodes.find(
     (candidate) =>
       candidate.kind === kind && 'name' in candidate && candidate.name === name,
@@ -108,10 +129,25 @@ function findNode(
   return node;
 }
 
+function findQualifiedNode(
+  snapshot: Snapshot,
+  kind: Snapshot['nodes'][number]['kind'],
+  qualifiedName: string,
+): Snapshot['nodes'][number] {
+  const node = snapshot.nodes.find(
+    (candidate) =>
+      candidate.kind === kind &&
+      'qualifiedName' in candidate &&
+      candidate.qualifiedName === qualifiedName,
+  );
+  assert.ok(node, `missing ${kind} ${qualifiedName}`);
+  return node;
+}
+
 function findFile(
-  snapshot: SnapshotV1,
+  snapshot: Snapshot,
   relativePath: string,
-): SnapshotV1['nodes'][number] {
+): Snapshot['nodes'][number] {
   const node = snapshot.nodes.find(
     (candidate) => candidate.kind === 'file' && candidate.path === relativePath,
   );
@@ -471,3 +507,243 @@ test('built local workflow is deterministic, bounded, equivalent, and offline', 
   );
   assertNoPrivateValues(allowedPartial, malformedRoot);
 });
+
+test(
+  'built C# workflow proves v2 extraction, equivalence, and fail-closed persistence',
+  { skip: process.platform !== 'win32' },
+  async () => {
+    const firstRoot = await createFixtureCopy(csharpFixture);
+    const secondRoot = await createFixtureCopy(csharpFixture);
+
+    const firstAnalysis = assertCliSuccess(
+      await runSourceMesh(firstRoot, csharpAnalyzeArgs(firstRoot)),
+    );
+    const secondAnalysis = assertCliSuccess(
+      await runSourceMesh(secondRoot, csharpAnalyzeArgs(secondRoot)),
+    );
+    assert.equal(firstAnalysis.command, 'analyze');
+    assert.equal(firstAnalysis.schemaVersion, 2);
+    assert.equal(secondAnalysis.schemaVersion, 2);
+    assert.deepEqual(firstAnalysis.result, secondAnalysis.result);
+    assertNoPrivateValues(firstAnalysis, firstRoot);
+    assertNoPrivateValues(secondAnalysis, secondRoot);
+
+    const firstBytes = await readFile(snapshotPath(firstRoot));
+    const secondBytes = await readFile(snapshotPath(secondRoot));
+    assert.deepEqual(firstBytes, secondBytes);
+
+    const repeated = assertCliSuccess(
+      await runSourceMesh(firstRoot, csharpAnalyzeArgs(firstRoot)),
+    );
+    assert.deepEqual(repeated.result, firstAnalysis.result);
+    assert.deepEqual(firstBytes, await readFile(snapshotPath(firstRoot)));
+
+    const snapshot = await openValidatedSnapshot(firstRoot);
+    assert.equal(snapshot.schemaVersion, 2);
+    assert.equal(snapshot.completeness, 'complete');
+    assertNoPrivateValues(snapshot, firstRoot);
+    assertNoPrivateValues(firstBytes.toString('utf8'), firstRoot);
+
+    const appProject = findNode(snapshot, 'project', 'App');
+    const libraryProject = findNode(snapshot, 'project', 'Library');
+    const appFile = findFile(snapshot, 'src/App/Entry.cs');
+    const explicitFile = findFile(snapshot, 'src/App/Explicit.cs');
+    const libraryFile = findFile(snapshot, 'src/Library/Contracts.cs');
+    const appModule = findNode(snapshot, 'module', 'src/App/Entry.cs');
+    const appNamespace = findQualifiedNode(
+      snapshot,
+      'namespace',
+      'Synthetic.App',
+    );
+    const libraryNamespace = findQualifiedNode(
+      snapshot,
+      'namespace',
+      'Synthetic.Library',
+    );
+    const application = findNode(snapshot, 'class', 'Application');
+    const baseProcessor = findNode(snapshot, 'class', 'BaseProcessor');
+    const processor = findNode(snapshot, 'interface', 'IProcessor');
+    const process = findQualifiedNode(
+      snapshot,
+      'function',
+      'Synthetic.App.Application.Process',
+    );
+    const run = findQualifiedNode(
+      snapshot,
+      'function',
+      'Synthetic.App.Application.Run',
+    );
+    const format = findQualifiedNode(
+      snapshot,
+      'function',
+      'Synthetic.Library.BaseProcessor.Format',
+    );
+    const explicitFeature = findQualifiedNode(
+      snapshot,
+      'class',
+      'Synthetic.App.ExplicitFeature',
+    );
+    const execute = findQualifiedNode(
+      snapshot,
+      'function',
+      'Synthetic.App.ExplicitFeature.Execute',
+    );
+    const name = findNode(snapshot, 'variable', 'Name');
+    const processValue = findQualifiedNode(
+      snapshot,
+      'parameter',
+      'Synthetic.App.Application.Process.value',
+    );
+    const runInput = findNode(snapshot, 'parameter', 'input');
+    assert.ok(findNode(snapshot, 'class', 'SharedType'));
+    assert.ok(appFile.id);
+    assert.ok(explicitFile.id);
+    assert.equal(
+      'path' in explicitFeature ? explicitFeature.path : undefined,
+      'src/App/Explicit.cs',
+    );
+    assert.equal(
+      'path' in execute ? execute.path : undefined,
+      'src/App/Explicit.cs',
+    );
+    assert.ok(libraryFile.id);
+    assert.ok(appNamespace.id);
+    assert.ok(name.id);
+    assert.ok(processValue.id);
+    assert.ok(runInput.id);
+
+    const hasEdge = (kind: string, from: string, to: string): boolean =>
+      snapshot.edges.some(
+        (edge) => edge.kind === kind && edge.from === from && edge.to === to,
+      );
+    assert.equal(hasEdge('references', appProject.id, libraryProject.id), true);
+    assert.equal(hasEdge('uses', appModule.id, libraryNamespace.id), true);
+    assert.equal(hasEdge('extends', application.id, baseProcessor.id), true);
+    assert.equal(hasEdge('implements', application.id, processor.id), true);
+    assert.equal(hasEdge('calls', run.id, process.id), true);
+    assert.equal(hasEdge('calls', run.id, execute.id), true);
+    assert.equal(hasEdge('calls', process.id, format.id), true);
+
+    const requestTable = [
+      {
+        command: ['symbol', '--query', 'Application', '--limit', '10'],
+        tool: 'searchSymbols',
+        input: { query: 'Application', limit: 10, allowPartial: true },
+      },
+      {
+        command: ['details', '--id', application.id, '--limit', '10'],
+        tool: 'getSymbol',
+        input: { nodeId: application.id, limit: 10, allowPartial: true },
+      },
+      {
+        command: ['dependencies', '--file-id', appFile.id, '--limit', '10'],
+        tool: 'listFileDependencies',
+        input: { fileId: appFile.id, limit: 10, allowPartial: true },
+      },
+      {
+        command: ['dependents', '--file-id', libraryFile.id, '--limit', '10'],
+        tool: 'listFileDependents',
+        input: { fileId: libraryFile.id, limit: 10, allowPartial: true },
+      },
+      {
+        command: [
+          'callers',
+          '--name',
+          'Process',
+          '--qualified-name',
+          'Synthetic.App.Application.Process',
+          '--limit',
+          '10',
+        ],
+        tool: 'listCallers',
+        input: {
+          function: {
+            name: 'Process',
+            qualifiedName: 'Synthetic.App.Application.Process',
+          },
+          limit: 10,
+          allowPartial: true,
+        },
+      },
+      {
+        command: ['callees', '--name', 'Run', '--limit', '10'],
+        tool: 'listCallees',
+        input: {
+          function: { name: 'Run' },
+          limit: 10,
+          allowPartial: true,
+        },
+      },
+    ] as const;
+
+    const cliResults: unknown[] = [];
+    for (const request of requestTable) {
+      const result = await cliQuery(firstRoot, request.command);
+      const envelope = assertCliSuccess(result);
+      assert.equal(envelope.schemaVersion, 2);
+      assert.equal(envelope.command, request.command[0]);
+      assert.ok(envelope.result);
+      assertBoundedPages(envelope.result, 10);
+      assertNoPrivateValues(envelope, firstRoot);
+      cliResults.push(envelope.result);
+    }
+
+    const mcp = await startMcp(firstRoot);
+    try {
+      const listed = await mcp.client.listTools();
+      assert.deepEqual(
+        listed.tools.map((tool) => tool.name),
+        [...MCP_TOOL_NAMES],
+      );
+      for (const tool of listed.tools) {
+        assert.equal(tool.annotations?.readOnlyHint, true);
+        assert.equal(tool.annotations?.destructiveHint, false);
+        assert.equal(tool.annotations?.idempotentHint, true);
+        assert.equal(tool.annotations?.openWorldHint, false);
+      }
+
+      for (const [index, request] of requestTable.entries()) {
+        const response = await mcp.client.callTool({
+          name: request.tool,
+          arguments: request.input,
+        });
+        assert.equal(response.isError ?? false, false);
+        assert.deepEqual(response.structuredContent, cliResults[index]);
+        assert.equal(response.content.length, 1);
+        assert.equal(response.content[0]?.type, 'text');
+        assertBoundedPages(response.structuredContent, 10);
+        assertNoPrivateValues(response.structuredContent, firstRoot);
+        assertNoPrivateValues(
+          response.content[0]?.type === 'text'
+            ? response.content[0].text
+            : response.content[0],
+          firstRoot,
+        );
+      }
+    } finally {
+      await mcp.client.close();
+      assert.equal(mcp.transport.pid, null);
+      assert.equal(mcp.stderr(), '');
+    }
+
+    const noPersist = await runSourceMesh(firstRoot, [
+      'analyze',
+      '--root',
+      firstRoot,
+      '--language',
+      'csharp',
+      '--solution',
+      'Synthetic.sln',
+      '--output',
+      'json',
+    ]);
+    assert.equal(noPersist.code, 4);
+    assert.equal(noPersist.stdout, '');
+    assert.equal(
+      parseJson<CliEnvelope>(noPersist.stderr).error?.code,
+      'snapshot_conflict',
+    );
+    assert.deepEqual(firstBytes, await readFile(snapshotPath(firstRoot)));
+    assertNoPrivateValues(noPersist.stderr, firstRoot);
+  },
+);
