@@ -117,6 +117,109 @@ test('csharp project discovery builds a contained reference closure and compile 
   assert.equal(JSON.stringify(result.manifest).includes('<Project'), false);
 });
 
+test('csharp discovery supports bounded SDK metadata and recursive item removals', async () => {
+  const root = fixture();
+  write(
+    root,
+    'App.csproj',
+    `<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UserSecretsId>synthetic-development</UserSecretsId>
+    <OutputType>Exe</OutputType>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Remove="Generated\\**" />
+    <Content Remove="Generated\\**" />
+    <EmbeddedResource Remove="Generated\\**" />
+    <None Remove="Generated\\**" />
+    <EmbeddedResource Include="data\\resource.json" Link="Resources\\resource.json" LogicalName="Synthetic.Resource" />
+    <PackageReference Include="Synthetic.Package" Version="1.0.0" PrivateAssets="all" />
+  </ItemGroup>
+</Project>`,
+  );
+  write(root, 'App.cs', 'class App {}');
+  write(root, 'Generated/Excluded.cs', 'class Excluded {}');
+  write(root, 'Generated/Nested/AlsoExcluded.cs', 'class AlsoExcluded {}');
+  write(root, 'data/resource.json', '{}');
+
+  const result = await discoverCSharpManifest(root, { project: 'App.csproj' });
+
+  assert.deepEqual(result.diagnostics, []);
+  assert.deepEqual(result.manifest?.projects[0]?.files, ['App.cs']);
+  assert.equal(
+    JSON.stringify(result.manifest).includes('Synthetic.Package'),
+    false,
+  );
+  assert.equal(
+    JSON.stringify(result.manifest).includes('resource.json'),
+    false,
+  );
+});
+
+test('csharp discovery rejects unsupported SDK item variants', async () => {
+  const root = fixture();
+  write(root, 'App.cs', 'class App {}');
+  const cases = [
+    {
+      content:
+        '<Project><ItemGroup><Compile Remove="Generated\\*\\*.cs" /></ItemGroup></Project>',
+      code: 'unsupported_construct',
+    },
+    {
+      content:
+        '<Project><ItemGroup><Compile Remove="..\\outside\\**" /></ItemGroup></Project>',
+      code: 'path_invalid',
+    },
+    {
+      content:
+        '<Project><ItemGroup><Content Include="data\\resource.json" /></ItemGroup></Project>',
+      code: 'unsupported_construct',
+    },
+    {
+      content:
+        '<Project><ItemGroup><PackageReference Include="Synthetic.Package"><Unsupported>all</Unsupported></PackageReference></ItemGroup></Project>',
+      code: 'unsupported_construct',
+    },
+    {
+      content:
+        '<Project><ItemGroup><Compile Include="App.cs" Link="..\\outside\\App.cs" /></ItemGroup></Project>',
+      code: 'unsupported_construct',
+    },
+    {
+      content:
+        '<Project><ItemGroup><Compile Include="App.cs" Link="Linked\\*.cs" /></ItemGroup></Project>',
+      code: 'unsupported_construct',
+    },
+    {
+      content:
+        '<Project><ItemGroup><EmbeddedResource Include="data\\resource.json" Link="Resources\\resource.json" LogicalName="Synthetic/Resource" /></ItemGroup></Project>',
+      code: 'unsupported_construct',
+    },
+    {
+      content:
+        '<Project><ItemGroup><EmbeddedResource Include="data\\resource.json" LogicalName="$(LogicalName)" /></ItemGroup></Project>',
+      code: 'unsupported_construct',
+    },
+    {
+      content:
+        '<Project><ItemGroup><EmbeddedResource Include="data\\resource.json" LogicalName=".." /></ItemGroup></Project>',
+      code: 'unsupported_construct',
+    },
+  ];
+
+  for (const item of cases) {
+    write(root, 'App.csproj', item.content);
+    const result = await discoverCSharpManifest(root, {
+      project: 'App.csproj',
+    });
+    assert.equal(result.manifest, undefined);
+    assert.equal(result.diagnostics[0]?.code, item.code);
+  }
+});
+
 test('csharp project discovery excludes generated sources under bin and obj', async () => {
   const root = fixture();
   write(root, 'App.csproj', '<Project />');

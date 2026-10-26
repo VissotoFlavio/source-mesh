@@ -549,6 +549,13 @@ test(
     const appFile = findFile(snapshot, 'src/App/Entry.cs');
     const explicitFile = findFile(snapshot, 'src/App/Explicit.cs');
     const libraryFile = findFile(snapshot, 'src/Library/Contracts.cs');
+    assert.equal(
+      snapshot.nodes.some(
+        (node) =>
+          node.kind === 'file' && node.path.startsWith('src/App/Generated/'),
+      ),
+      false,
+    );
     const appModule = findNode(snapshot, 'module', 'src/App/Entry.cs');
     const appNamespace = findQualifiedNode(
       snapshot,

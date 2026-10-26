@@ -371,11 +371,129 @@ interface ParsedProject {
   readonly langVersion?: string;
   readonly references: readonly string[];
   readonly compile: readonly CompileOperation[];
+  readonly ignoredItems: readonly IgnoredItemOperation[];
 }
 
 interface CompileOperation {
   readonly kind: 'include' | 'remove';
   readonly value: string;
+}
+
+interface IgnoredItemOperation {
+  readonly kind: 'include' | 'remove';
+  readonly item: 'Content' | 'EmbeddedResource' | 'None';
+  readonly value: string;
+}
+
+const supportedProjectProperties = new Set([
+  'TargetFramework',
+  'LangVersion',
+  'Nullable',
+  'ImplicitUsings',
+  'UserSecretsId',
+  'OutputType',
+  'IsPackable',
+]);
+
+const supportedIgnoredItemKinds = new Set([
+  'Content',
+  'EmbeddedResource',
+  'None',
+] as const);
+
+function isRecursiveItemPattern(value: string): boolean {
+  return value.endsWith('\\**') || value.endsWith('/**');
+}
+
+function assertProjectItemAttributes(
+  node: XmlNode,
+  allowed: readonly string[],
+  required: string,
+): void {
+  assertAttributes(node, allowed);
+  if (
+    node.attributes.size === 0 ||
+    !node.attributes.has(required) ||
+    node.children.length > 0 ||
+    trimXmlWhitespace(node.text) !== ''
+  )
+    throw new CSharpFailure('unsupported_construct');
+}
+
+function assertSafeLink(value: string): void {
+  const portable = value.replaceAll('\\', '/');
+  if (
+    value.length === 0 ||
+    [...value].some((character) => {
+      const codePoint = character.codePointAt(0)!;
+      return codePoint < 0x20 || codePoint === 0x7f;
+    }) ||
+    hasMsBuildExpression(value) ||
+    ['?', '*', '[', ']', '%'].some((character) => value.includes(character)) ||
+    path.posix.isAbsolute(portable) ||
+    path.win32.isAbsolute(value) ||
+    /^[A-Za-z]:[\\/]/u.test(value) ||
+    value.startsWith('\\') ||
+    isWindowsUnsafePath(value) ||
+    portable
+      .split('/')
+      .some((segment) => segment === '' || segment === '.' || segment === '..')
+  )
+    throw new CSharpFailure('unsupported_construct');
+}
+
+function assertSafeLogicalName(value: string): void {
+  if (
+    value.trim() === '' ||
+    value === '.' ||
+    value === '..' ||
+    [...value].some((character) => {
+      const codePoint = character.codePointAt(0)!;
+      return codePoint < 0x20 || codePoint === 0x7f;
+    }) ||
+    hasMsBuildExpression(value) ||
+    ['/', '\\', '?', '*', '[', ']', '%'].some((character) =>
+      value.includes(character),
+    )
+  )
+    throw new CSharpFailure('unsupported_construct');
+}
+
+function assertSafeMetadata(node: XmlNode): void {
+  const link = node.attributes.get('Link');
+  if (link !== undefined) assertSafeLink(link);
+  const logicalName = node.attributes.get('LogicalName');
+  if (logicalName !== undefined) assertSafeLogicalName(logicalName);
+}
+
+const supportedPackageReferenceMetadata = new Set([
+  'IncludeAssets',
+  'PrivateAssets',
+  'ExcludeAssets',
+  'GeneratePathProperty',
+]);
+
+function assertPackageReference(node: XmlNode): void {
+  assertAttributes(node, ['Include', 'Version', 'PrivateAssets']);
+  if (
+    node.attributes.size === 0 ||
+    !node.attributes.has('Include') ||
+    trimXmlWhitespace(node.text) !== ''
+  )
+    throw new CSharpFailure('unsupported_construct');
+  for (const metadata of node.children) {
+    if (!supportedPackageReferenceMetadata.has(metadata.name))
+      throw new CSharpFailure('unsupported_construct');
+    assertAttributes(metadata, []);
+    leafText(metadata);
+  }
+}
+
+function assertRecursiveItemPattern(value: string): void {
+  if (!isRecursiveItemPattern(value)) return;
+  const prefix = value.slice(0, -3);
+  if (prefix.length === 0 || isRecursiveItemPattern(prefix))
+    throw new CSharpFailure('unsupported_construct');
 }
 
 function parseProjectXml(source: string): ParsedProject {
@@ -386,6 +504,8 @@ function parseProjectXml(source: string): ParsedProject {
     throw new CSharpFailure('unsupported_construct');
   const references: string[] = [];
   const compile: CompileOperation[] = [];
+  const ignoredItems: IgnoredItemOperation[] = [];
+  const properties = new Set<string>();
   let targetFramework: string | undefined;
   let langVersion: string | undefined;
   for (const group of root.children) {
@@ -394,17 +514,16 @@ function parseProjectXml(source: string): ParsedProject {
     assertAttributes(group, []);
     for (const child of group.children) {
       if (group.name === 'PropertyGroup') {
-        if (child.name !== 'TargetFramework' && child.name !== 'LangVersion')
+        if (!supportedProjectProperties.has(child.name))
           throw new CSharpFailure('unsupported_construct');
         assertAttributes(child, []);
+        if (properties.has(child.name))
+          throw new CSharpFailure('unsupported_construct');
+        properties.add(child.name);
         const value = leafText(child);
         if (child.name === 'TargetFramework') {
-          if (targetFramework !== undefined)
-            throw new CSharpFailure('unsupported_construct');
           targetFramework = value;
-        } else {
-          if (langVersion !== undefined)
-            throw new CSharpFailure('unsupported_construct');
+        } else if (child.name === 'LangVersion') {
           langVersion = value;
         }
         continue;
@@ -419,19 +538,50 @@ function parseProjectXml(source: string): ParsedProject {
           throw new CSharpFailure('unsupported_construct');
         references.push(child.attributes.get('Include')!);
       } else if (child.name === 'Compile') {
-        assertAttributes(child, ['Include', 'Remove']);
+        assertAttributes(child, ['Include', 'Remove', 'Link']);
+        const include = child.attributes.get('Include');
+        const remove = child.attributes.get('Remove');
         if (
-          child.attributes.size !== 1 ||
+          (include === undefined && remove === undefined) ||
+          (include !== undefined && remove !== undefined) ||
+          (remove !== undefined && child.attributes.size !== 1) ||
+          (include !== undefined && child.attributes.size > 2) ||
           child.children.length > 0 ||
           trimXmlWhitespace(child.text) !== ''
         )
           throw new CSharpFailure('unsupported_construct');
-        const include = child.attributes.get('Include');
-        const remove = child.attributes.get('Remove');
+        assertSafeMetadata(child);
         if (include !== undefined)
           compile.push({ kind: 'include', value: include });
         else if (remove !== undefined)
           compile.push({ kind: 'remove', value: remove });
+      } else if (supportedIgnoredItemKinds.has(child.name as never)) {
+        const item = child.name as IgnoredItemOperation['item'];
+        const include = child.attributes.get('Include');
+        const remove = child.attributes.get('Remove');
+        if (include !== undefined && remove !== undefined)
+          throw new CSharpFailure('unsupported_construct');
+        if (include !== undefined) {
+          if (item !== 'EmbeddedResource')
+            throw new CSharpFailure('unsupported_construct');
+          assertProjectItemAttributes(
+            child,
+            ['Include', 'Link', 'LogicalName'],
+            'Include',
+          );
+          assertSafeMetadata(child);
+          ignoredItems.push({ kind: 'include', item, value: include });
+        } else if (remove !== undefined) {
+          assertProjectItemAttributes(child, ['Remove'], 'Remove');
+          assertRecursiveItemPattern(remove);
+          ignoredItems.push({ kind: 'remove', item, value: remove });
+        } else {
+          throw new CSharpFailure('unsupported_construct');
+        }
+      } else if (child.name === 'PackageReference') {
+        assertPackageReference(child);
+      } else if (child.name === 'Using') {
+        assertProjectItemAttributes(child, ['Include'], 'Include');
       } else {
         throw new CSharpFailure('unsupported_construct');
       }
@@ -442,6 +592,7 @@ function parseProjectXml(source: string): ParsedProject {
     ...(langVersion === undefined ? {} : { langVersion }),
     references,
     compile,
+    ignoredItems,
   };
 }
 
@@ -797,6 +948,26 @@ function resolveProjectLiteral(
   return resolveLiteral(directory, value, relativePath);
 }
 
+function resolveProjectPattern(
+  directory: string,
+  value: string,
+  relativePath: string,
+): string {
+  if (!isRecursiveItemPattern(value))
+    return resolveProjectLiteral(directory, value, relativePath);
+  assertRecursiveItemPattern(value);
+  const prefix = value.slice(0, -3);
+  return `${resolveProjectLiteral(directory, prefix, relativePath)}/**`;
+}
+
+function matchesProjectPattern(file: string, pattern: string): boolean {
+  if (!isRecursiveItemPattern(pattern))
+    return pathIdentityKey(file) === pathIdentityKey(pattern);
+  const prefix = pathIdentityKey(pattern.slice(0, -3));
+  const candidate = pathIdentityKey(file);
+  return candidate.startsWith(`${prefix}/`);
+}
+
 async function discoverProjectFiles(
   state: DiscoveryState,
   projectPath: string,
@@ -876,7 +1047,9 @@ async function parseProject(
   }
   const directory = projectDirectory(projectPath);
   const explicitOperationCount =
-    parsed.compile.length + parsed.references.length;
+    parsed.compile.length +
+    parsed.references.length +
+    parsed.ignoredItems.length;
   if (
     parsed.compile.length > CSHARP_MAX_EXPLICIT_COMPILE_ITEMS ||
     parsed.references.length > CSHARP_MAX_PROJECT_REFERENCES ||
@@ -903,6 +1076,7 @@ async function parseProject(
   const compileOperations: Array<{
     readonly kind: 'include' | 'remove';
     readonly path: string;
+    readonly pattern?: string;
     readonly identityKey?: string;
     readonly exists?: boolean;
   }> = [];
@@ -911,6 +1085,23 @@ async function parseProject(
     { readonly file: string; readonly identityKey: string }
   >();
   for (const operation of parsed.compile) {
+    if (
+      operation.kind === 'remove' &&
+      isRecursiveItemPattern(operation.value)
+    ) {
+      assertRecursiveItemPattern(operation.value);
+      const pattern = resolveProjectPattern(
+        directory,
+        operation.value,
+        projectPath,
+      );
+      compileOperations.push({
+        kind: operation.kind,
+        path: pattern,
+        pattern,
+      });
+      continue;
+    }
     const file = resolveProjectLiteral(directory, operation.value, projectPath);
     if (!file.toLowerCase().endsWith('.cs'))
       throw new CSharpFailure('unsupported_construct', projectPath);
@@ -981,9 +1172,27 @@ async function parseProject(
       if (file === undefined)
         throw new CSharpFailure('path_invalid', operation.path);
       defaultFiles.set(pathIdentityKey(operation.path), operation.path);
+    } else if (operation.pattern !== undefined) {
+      for (const [key, file] of defaultFiles)
+        if (matchesProjectPattern(file, operation.pattern))
+          defaultFiles.delete(key);
     } else if (operation.exists) {
       defaultFiles.delete(pathIdentityKey(operation.path));
     }
+  }
+  for (const operation of parsed.ignoredItems) {
+    if (operation.kind === 'remove') {
+      resolveProjectPattern(directory, operation.value, projectPath);
+      continue;
+    }
+    if (operation.item !== 'EmbeddedResource')
+      throw new CSharpFailure('unsupported_construct', projectPath);
+    const resource = resolveProjectLiteral(
+      directory,
+      operation.value,
+      projectPath,
+    );
+    await inspectContainedFile(state, resource, 'file', undefined, false);
   }
   const files = [...defaultFiles.values()].sort(ordinal);
   state.fileCount += files.length;
