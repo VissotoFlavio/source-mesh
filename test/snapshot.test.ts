@@ -1,11 +1,14 @@
 import {
+  link,
   lstat,
   mkdtemp,
   mkdir,
+  open,
   readFile,
   readdir,
   rm,
   symlink,
+  unlink,
   writeFile,
 } from 'node:fs/promises';
 import path from 'node:path';
@@ -31,6 +34,10 @@ import {
   repositoryIdV2,
 } from '../src/graph.js';
 import { resolveSnapshotPath } from '../src/snapshot/path.js';
+import {
+  configureSnapshotWriterForTesting,
+  type SnapshotWriterFileSystem,
+} from '../src/snapshot/writer.js';
 
 const roots: string[] = [];
 afterEach(async () => {
@@ -67,6 +74,51 @@ function snapshot(name = 'repository'): SnapshotV1 {
       },
     ],
     diagnostics: [],
+  };
+}
+
+function error(code: string): NodeJS.ErrnoException {
+  return Object.assign(new Error(code), { code });
+}
+function graphPath(root: string): string {
+  return path.join(root, '.sourcemesh', 'graph.json');
+}
+async function withWriterOverrides<T>(
+  overrides: Partial<SnapshotWriterFileSystem>,
+  platform: NodeJS.Platform,
+  run: () => Promise<T>,
+): Promise<T> {
+  const reset = configureSnapshotWriterForTesting(overrides, platform);
+  try {
+    return await run();
+  } finally {
+    reset();
+  }
+}
+function failFinalHandleMethod(
+  method: 'writeFile' | 'sync' | 'close' | 'chmod',
+) {
+  return async (
+    file: Parameters<typeof open>[0],
+    flags: Parameters<typeof open>[1],
+    mode?: Parameters<typeof open>[2],
+  ) => {
+    const handle = await open(file, flags, mode);
+    if (!String(file).endsWith(path.join('.sourcemesh', 'graph.json')))
+      return handle;
+    return new Proxy(handle, {
+      get(target, property) {
+        if (property !== method) {
+          const value = Reflect.get(target, property, target);
+          return typeof value === 'function' ? value.bind(target) : value;
+        }
+        return async (...args: unknown[]) => {
+          if (method === 'close') await target.close();
+          void args;
+          throw error('EIO');
+        };
+      },
+    }) as typeof handle;
   };
 }
 
@@ -302,6 +354,120 @@ describe('schema-v1 snapshots', () => {
       )
         throw error;
     }
+  });
+
+  it('uses exclusive Windows fallback only for supported link failures', async () => {
+    for (const code of ['EPERM', 'EOPNOTSUPP', 'ENOSYS']) {
+      const root = await mkdtemp(path.join(process.cwd(), '.snapshot-link-'));
+      roots.push(root);
+      let links = 0;
+      await withWriterOverrides(
+        {
+          link: async () => {
+            links += 1;
+            throw error(code);
+          },
+        },
+        'win32',
+        async () => {
+          const created = await writeSnapshot(root, snapshot(), {
+            mode: 'create-only',
+          });
+          const original = await readFile(created.path);
+          await assert.rejects(
+            () =>
+              writeSnapshot(root, snapshot('other'), { mode: 'create-only' }),
+            { code: 'snapshot_conflict' },
+          );
+          assert.deepEqual(await readFile(created.path), original);
+        },
+      );
+      assert.equal(links, 1);
+      assert.equal((await readdir(path.join(root, '.sourcemesh'))).length, 1);
+    }
+  });
+
+  it('fails closed when the link fallback is unavailable', async () => {
+    for (const [platform, code] of [
+      ['linux', 'EPERM'],
+      ['win32', 'EACCES'],
+    ] as const) {
+      const root = await mkdtemp(path.join(process.cwd(), '.snapshot-link-'));
+      roots.push(root);
+      await withWriterOverrides(
+        { link: async () => Promise.reject(error(code)) },
+        platform,
+        async () => {
+          await assert.rejects(
+            () => writeSnapshot(root, snapshot(), { mode: 'create-only' }),
+            { code: 'snapshot_io' },
+          );
+        },
+      );
+      await assert.rejects(() => lstat(graphPath(root)), { code: 'ENOENT' });
+      assert.equal((await readdir(path.join(root, '.sourcemesh'))).length, 0);
+    }
+  });
+
+  it('cleans up a failed Windows fallback so a retry can succeed', async () => {
+    for (const method of ['writeFile', 'sync', 'close', 'chmod'] as const) {
+      const root = await mkdtemp(
+        path.join(process.cwd(), '.snapshot-fallback-'),
+      );
+      roots.push(root);
+      await withWriterOverrides(
+        {
+          link: async () => Promise.reject(error('EPERM')),
+          open: failFinalHandleMethod(method),
+        },
+        'win32',
+        async () => {
+          await assert.rejects(
+            () => writeSnapshot(root, snapshot(), { mode: 'create-only' }),
+            { code: 'snapshot_io' },
+          );
+        },
+      );
+      await assert.rejects(() => lstat(graphPath(root)), { code: 'ENOENT' });
+      assert.equal((await readdir(path.join(root, '.sourcemesh'))).length, 0);
+      await writeSnapshot(root, snapshot(), { mode: 'create-only' });
+    }
+  });
+
+  it('does not fall back after hard-link publication cleanup fails', async () => {
+    const root = await mkdtemp(path.join(process.cwd(), '.snapshot-link-'));
+    roots.push(root);
+    let links = 0;
+    let finalOpens = 0;
+    let unlinks = 0;
+    await withWriterOverrides(
+      {
+        link: async (existingPath, newPath) => {
+          links += 1;
+          return link(existingPath, newPath);
+        },
+        open: async (file, flags, mode) => {
+          if (String(file) === graphPath(root)) finalOpens += 1;
+          return open(file, flags, mode);
+        },
+        unlink: async (file) => {
+          unlinks += 1;
+          if (unlinks === 1) throw error('EIO');
+          return unlink(file);
+        },
+      },
+      'win32',
+      async () => {
+        await assert.rejects(
+          () => writeSnapshot(root, snapshot(), { mode: 'create-only' }),
+          { code: 'snapshot_io' },
+        );
+      },
+    );
+    assert.equal(links, 1);
+    assert.equal(finalOpens, 0);
+    assert.equal((await lstat(graphPath(root))).isFile(), true);
+    assert.equal((await readdir(path.join(root, '.sourcemesh'))).length, 1);
   });
 });
 
