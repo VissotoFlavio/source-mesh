@@ -71,5 +71,38 @@ jobs:
       - name: Verify offline boundary
         run: npm run offline:check
 
-      - name: Validate package contents
-        run: npm run pack:check
+  package:
+    name: package (Windows x64)
+    runs-on: windows-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22.x
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          dotnet-version: 10.0.401
+
+      - name: Install dependencies without lifecycle scripts
+        run: npm ci --ignore-scripts
+
+      - name: Restore helper from the committed offline feed
+        shell: pwsh
+        run: dotnet restore tools/sourcemesh-roslyn/sourcemesh-roslyn.csproj --locked-mode --configfile tools/sourcemesh-roslyn/NuGet.offline.config
+
+      - name: Validate offline helper boundary
+        run: npm run csharp:offline:check
+
+      - name: Validate the real offline package installation
+        run: npm run package:check

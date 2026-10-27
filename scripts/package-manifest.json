@@ -1,0 +1,195 @@
+{
+  "platform": "win32-x64",
+  "dotnetFramework": "net10.0",
+  "helperPath": "tools/sourcemesh-roslyn/bin/Release/net10.0",
+  "helperIntegrityFile": "sourcemesh-roslyn.integrity.json",
+  "helperPayloadBytes": 17092239,
+  "maxTarballBytes": 26214400,
+  "bundledDependencies": ["@modelcontextprotocol/server", "typescript"],
+  "bundledPackages": [
+    {
+      "name": "@modelcontextprotocol/core",
+      "version": "2.3.1",
+      "license": "Apache-2.0",
+      "integrity": "sha512-laVmIhPGpWi7rG9q+0UigblRN0Hws/Yjlb6qLFtVqryXVLkc4h+yN8z731POD2LnAGQlFe7/tXhUm7Bi0YB91g==",
+      "sha256": "33EF37CA8788079A14C42C767ED5BD718E0B18CC5C507ED878C03091FC42BAB4"
+    },
+    {
+      "name": "@modelcontextprotocol/server",
+      "version": "2.3.1",
+      "license": "Apache-2.0",
+      "integrity": "sha512-e59MfWuSssj6DoQ96JCTqdW1AXT5/XtnTl0WWd6MU1Ka434fFUGGosCLJbGNySDhHGvxQWoRWK137FXYFkYNWw==",
+      "sha256": "14068219DDBAA96492059D0760549D896E9B16133A63F9A3F51F6BDA58706212"
+    },
+    {
+      "name": "typescript",
+      "version": "6.0.3",
+      "license": "Apache-2.0",
+      "integrity": "sha512-y2TvuxSZPDyQakkFRPZHKFm+KKVqIisdg9/CZwm9ftvKXLP8NRWj38/ODjNbr43SsoXqNuAisEf1GdCxqWcdBw==",
+      "sha256": "65B9F73009BF3171BCCD70D24647B043DB958F5A65C821496B34E4E180FC4EAE"
+    },
+    {
+      "name": "zod",
+      "version": "4.6.7",
+      "license": "MIT",
+      "integrity": "sha512-g8W2D2kU6a8untc053fX1uVBKzM7yqAxW/3zwk83+6RyF2+SKOuV+c0wBDhUwzV1PaGapmZH+rmcUzPf+3CGwg==",
+      "sha256": "4B6CDDFB1E115BE178DC6643D0BDB9E0DA1CBC20E9D03CF019634E4A2827554B"
+    }
+  ],
+  "helperFiles": [
+    {
+      "path": "Microsoft.CodeAnalysis.CSharp.dll",
+      "bytes": 7079208,
+      "sha256": "FC571A6647AC45B0B0DC1866B795529BB2EEB93ADF9BE97FCD5903CF482F700A"
+    },
+    {
+      "path": "Microsoft.CodeAnalysis.dll",
+      "bytes": 3103056,
+      "sha256": "55618D457128EEC582017545B8929EBF195669003B6EC737110F9519E1711D28"
+    },
+    {
+      "path": "sourcemesh-roslyn.deps.json",
+      "bytes": 4897,
+      "sha256": "5D26AE0A55972CEBBA7A544DD07333E8A76FAD33A9EE4B925055FF7A766DE60B"
+    },
+    {
+      "path": "sourcemesh-roslyn.dll",
+      "bytes": 68096
+    },
+    {
+      "path": "sourcemesh-roslyn.runtimeconfig.json",
+      "bytes": 342,
+      "sha256": "C230A317A54DD960BCBEB5F347F52E18DC665A26F7EFDA2159FCED9A5AC7E097"
+    },
+    {
+      "path": "cs/Microsoft.CodeAnalysis.CSharp.resources.dll",
+      "bytes": 453968,
+      "sha256": "2B6A9D8D2374C8EAEC5870A8C0D667FD368ECDFE79BE515F362BCEDA18C01E61"
+    },
+    {
+      "path": "cs/Microsoft.CodeAnalysis.resources.dll",
+      "bytes": 41296,
+      "sha256": "FE911689358538E1E7699F09C9D6D7FBEC3D9BEB6D6CEA1C0C95BF3FEE357205"
+    },
+    {
+      "path": "de/Microsoft.CodeAnalysis.CSharp.resources.dll",
+      "bytes": 485672,
+      "sha256": "15DA511C4181EBA5070DE3F8A4AD08314A2BEF72318752C8345D81A0E1622DF1"
+    },
+    {
+      "path": "de/Microsoft.CodeAnalysis.resources.dll",
+      "bytes": 42832,
+      "sha256": "1FA68ED5FA632888B6CD38E47437D882A8CD08196A93E5B6B457DC2EE54A6BB2"
+    },
+    {
+      "path": "es/Microsoft.CodeAnalysis.CSharp.resources.dll",
+      "bytes": 474920,
+      "sha256": "C2D9064272C8CCEF23A9B6EF6F5B07460BD13C261DFB002CFD32B1CD1F59AD97"
+    },
+    {
+      "path": "es/Microsoft.CodeAnalysis.resources.dll",
+      "bytes": 42280,
+      "sha256": "109AD6666A834B1CDB2DE9EE3EDDC6E1B4CC817D8116D3F16A3CB41B64484011"
+    },
+    {
+      "path": "fr/Microsoft.CodeAnalysis.CSharp.resources.dll",
+      "bytes": 488784,
+      "sha256": "DF600ED35161397628EE2509C38BE48D2557E5D7DF4ED7F1FF40B5468BAF5C7F"
+    },
+    {
+      "path": "fr/Microsoft.CodeAnalysis.resources.dll",
+      "bytes": 42832,
+      "sha256": "761AC4C13A78BC802BB766BA90C7EE505FCB4E1D3FDCA13B93DCB59319A5CB57"
+    },
+    {
+      "path": "it/Microsoft.CodeAnalysis.CSharp.resources.dll",
+      "bytes": 481064,
+      "sha256": "A0C40B0C1CD7C222FE7E9C841622F4F52168B6A46BC1D495BE3173086FEFEA8F"
+    },
+    {
+      "path": "it/Microsoft.CodeAnalysis.resources.dll",
+      "bytes": 42792,
+      "sha256": "BE3842CB9E846C7AFFF2D621CC5A789F968D55BAE4D9C9DF223023830EFB2602"
+    },
+    {
+      "path": "ja/Microsoft.CodeAnalysis.CSharp.resources.dll",
+      "bytes": 530768,
+      "sha256": "EB9081BF4ADFA9934265506E524690B0CD15F2200E4375A9F6C5FBAFF6CA779B"
+    },
+    {
+      "path": "ja/Microsoft.CodeAnalysis.resources.dll",
+      "bytes": 45352,
+      "sha256": "0072F5C6CDF9F6763046A0262B979D74238E9458A67E3587E5BCE15581331E69"
+    },
+    {
+      "path": "ko/Microsoft.CodeAnalysis.CSharp.resources.dll",
+      "bytes": 486736,
+      "sha256": "2A499820100E833B75AC6C5DFF31C78B2CCCFAF29078D02013A9869970C1B2D4"
+    },
+    {
+      "path": "ko/Microsoft.CodeAnalysis.resources.dll",
+      "bytes": 42792,
+      "sha256": "456C1483C7F7EE409638BE382E21A0BBC0926036F9A7A5E2587D13627ED96E51"
+    },
+    {
+      "path": "pl/Microsoft.CodeAnalysis.CSharp.resources.dll",
+      "bytes": 488272,
+      "sha256": "E29E1A79C78F4532C89AC6E39FBAB02328F99931938E7CF04896CE73BC2FFE79"
+    },
+    {
+      "path": "pl/Microsoft.CodeAnalysis.resources.dll",
+      "bytes": 42792,
+      "sha256": "85474560EF444C138974D43AF09516F33505D4AF4BBB53C2002264011F120B6D"
+    },
+    {
+      "path": "pt-BR/Microsoft.CodeAnalysis.CSharp.resources.dll",
+      "bytes": 466216,
+      "sha256": "9D54ABE93B9855913241105C083684CA8A70726E0650C30954717C199D87342F"
+    },
+    {
+      "path": "pt-BR/Microsoft.CodeAnalysis.resources.dll",
+      "bytes": 41768,
+      "sha256": "0F7CA6291A6D7F5EFAEC60C47EE901E6F6389F95C3DCCD396B1E724CF8345FAC"
+    },
+    {
+      "path": "ru/Microsoft.CodeAnalysis.CSharp.resources.dll",
+      "bytes": 640848,
+      "sha256": "458150A2D277A61F51AA2C21DB287F58AD94D92493D559837E383F8A7A7E8207"
+    },
+    {
+      "path": "ru/Microsoft.CodeAnalysis.resources.dll",
+      "bytes": 51496,
+      "sha256": "268D9FED2818E00F6D9DAC47C328B2A0B26FE9069D215BB5F04CFF3F3804EE7C"
+    },
+    {
+      "path": "tr/Microsoft.CodeAnalysis.CSharp.resources.dll",
+      "bytes": 462120,
+      "sha256": "5697B626C4BF3A6691B2ABB93C21F13471B29AB0E27EECDA929DFA9A64C962DE"
+    },
+    {
+      "path": "tr/Microsoft.CodeAnalysis.resources.dll",
+      "bytes": 41256,
+      "sha256": "8E495D4633316997235AB8988F4D760B34FBEE3016AD9D1628B2A40082157B6F"
+    },
+    {
+      "path": "zh-Hans/Microsoft.CodeAnalysis.CSharp.resources.dll",
+      "bytes": 411432,
+      "sha256": "8A56F20086E26C9CC600749E47CB1AD6968CB6FBEF84A3B3EDD82D973C43B929"
+    },
+    {
+      "path": "zh-Hans/Microsoft.CodeAnalysis.resources.dll",
+      "bytes": 38696,
+      "sha256": "1BD8BA7F33C2AF85D421FAB0E451B57D175D0596FA771BB7E8F2473483ECFF87"
+    },
+    {
+      "path": "zh-Hant/Microsoft.CodeAnalysis.CSharp.resources.dll",
+      "bytes": 410920,
+      "sha256": "DB3E642E4057A6F9FD8F10C18D3AF158FEE2FBDAA5E593DB0C00F441F0E4BCD7"
+    },
+    {
+      "path": "zh-Hant/Microsoft.CodeAnalysis.resources.dll",
+      "bytes": 38736,
+      "sha256": "DA5183E34FCB9F1051EB6113125C7D4B740E903E41F3DE7653C54F3F8119511D"
+    }
+  ]
+}

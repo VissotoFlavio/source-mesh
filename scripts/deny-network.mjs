@@ -32,10 +32,30 @@ function replaceMatchingMethods(target, predicate) {
 }
 
 const fixedDotnetHost = 'C:\\Program Files\\dotnet\\dotnet.exe';
-const fixedRoslynHelper = path.resolve(
-  path.dirname(fileURLToPath(import.meta.url)),
-  '../tools/sourcemesh-roslyn/bin/Release/net10.0/sourcemesh-roslyn.dll',
+const helperRelativePath = path.join(
+  'tools',
+  'sourcemesh-roslyn',
+  'bin',
+  'Release',
+  'net10.0',
+  'sourcemesh-roslyn.dll',
 );
+const fixedRoslynHelpers = new Set([
+  path.resolve(
+    path.dirname(fileURLToPath(import.meta.url)),
+    '../',
+    helperRelativePath,
+  ),
+]);
+const cliEntry = process.argv[1];
+if (
+  cliEntry !== undefined &&
+  path.basename(path.dirname(cliEntry)) === 'dist'
+) {
+  fixedRoslynHelpers.add(
+    path.resolve(path.dirname(path.dirname(cliEntry)), helperRelativePath),
+  );
+}
 const originalSpawn = childProcess.spawn;
 
 function isFixedRoslynSpawn(command, args, options) {
@@ -44,7 +64,7 @@ function isFixedRoslynSpawn(command, args, options) {
     command === fixedDotnetHost &&
     Array.isArray(args) &&
     args.length === 1 &&
-    args[0] === fixedRoslynHelper &&
+    fixedRoslynHelpers.has(args[0]) &&
     options !== null &&
     typeof options === 'object' &&
     options.shell === false &&

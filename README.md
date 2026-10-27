@@ -43,6 +43,36 @@ npm run offline:check
 npm run pack:check
 ```
 
+## Local package distribution
+
+The supported installed package is a Windows x64 tarball for a machine that
+already has the .NET 10 runtime installed. Build the helper from the committed
+offline NuGet feed, then create and validate a complete local tarball:
+
+```powershell
+dotnet restore tools/sourcemesh-roslyn/sourcemesh-roslyn.csproj --locked-mode --configfile tools/sourcemesh-roslyn/NuGet.offline.config
+npm run csharp:offline:check
+npm run package:check
+```
+
+`package:check` creates a real tarball containing `dist`, the Release `net10.0`
+Roslyn payload, and bundled production Node dependencies. It
+installs that tarball into an empty consumer with
+`npm install --offline --ignore-scripts`, analyzes the C# fixture, verifies a
+schema-v2 create-only snapshot, and queries the installed MCP over stdio under
+the offline guard. Consumer installation performs no restore, build, network
+access, telemetry, or lifecycle installation script. The tarball is a local
+artifact; this project does not publish it or auto-update it.
+
+The exact payload allowlist, approved dependency SHA-256 values, package
+versions, and size bounds are recorded in
+[scripts/package-manifest.json](scripts/package-manifest.json). The package
+build writes a per-tarball integrity manifest for the compiled helper DLL.
+Third-party license and integrity inventory is in
+[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md). See
+[docs/package-distribution.md](docs/package-distribution.md) for the supported
+contract and exclusions.
+
 After a build, analyze and query a repository locally:
 
 ```sh
