@@ -76,6 +76,9 @@ contract and exclusions.
 For the authorized Windows x64 local-checkout beta flow, see
 [docs/beta-checkout.md](docs/beta-checkout.md).
 
+For the ordered beta gates, safe execution rules, outcomes, and tester evidence
+limits, see the [beta validation runbook](docs/beta-validation-runbook.md).
+
 After a build, analyze and query a repository locally:
 
 ```sh

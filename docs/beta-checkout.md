@@ -102,6 +102,13 @@ if (($sourceMeshItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) 
   ($targetRootItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
   throw 'Refusing to run: SourceMesh or target root is a reparse point.'
 }
+$sourceMeshPrefix = "$sourceMeshRoot\"
+$targetPrefix = "$targetRoot\"
+if ([StringComparer]::OrdinalIgnoreCase.Equals($sourceMeshRoot, $targetRoot) -or
+  $sourceMeshRoot.StartsWith($targetPrefix, [StringComparison]::OrdinalIgnoreCase) -or
+  $targetRoot.StartsWith($sourceMeshPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+  throw 'Refusing to run: SourceMesh checkout and target must be distinct, non-containing roots.'
+}
 $nodeExe = (Get-Command node.exe -ErrorAction Stop).Source
 $nodeItem = Get-Item -LiteralPath $nodeExe -Force -ErrorAction Stop
 if ($nodeItem.PSIsContainer -or
@@ -115,7 +122,14 @@ if ($cliItem.PSIsContainer -or
   throw 'Refusing to run: CLI path must be a regular non-reparse file.'
 }
 Assert-NoReparseAncestors -Path $cliPath -Label 'CLI path'
-& $nodeExe $cliPath analyze --root $targetRoot --language csharp --solution 'src/Velocy.API.sln'
+$offlineGuard = Join-Path $sourceMeshRoot 'scripts\deny-network.mjs'
+$offlineGuardItem = Get-Item -LiteralPath $offlineGuard -Force -ErrorAction Stop
+if ($offlineGuardItem.PSIsContainer -or
+  ($offlineGuardItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+  throw 'Refusing to run: offline guard must be a regular non-reparse file.'
+}
+Assert-NoReparseAncestors -Path $offlineGuard -Label 'offline guard'
+& $nodeExe --import $offlineGuard $cliPath analyze --root $targetRoot --language csharp --solution 'src/Velocy.API.sln'
 if ($LASTEXITCODE -ne 0) {
   throw 'SourceMesh analyze failed; MCP was not started.'
 }
@@ -124,17 +138,27 @@ if ($LASTEXITCODE -ne 0) {
 The default snapshot is `.sourcemesh/graph.json` under the selected root. A
 successful analysis creates that snapshot; MCP only serves the validated
 snapshot and does not analyze the repository itself. For a TypeScript/JavaScript
-target, use the same absolute `$nodeExe` and `$cliPath` variables with
-`analyze --root $targetRoot` and no C# selector; the default language remains
-TypeScript/JavaScript.
+target, use the same absolute `$nodeExe`, `$offlineGuard`, and `$cliPath`
+variables with this guarded command and no C# selector:
+
+```powershell
+& $nodeExe --import $offlineGuard $cliPath analyze --root $targetRoot
+if ($LASTEXITCODE -ne 0) {
+  throw 'SourceMesh analyze failed; do not start MCP.'
+}
+```
+
+The default language remains TypeScript/JavaScript.
 
 ## Configure the local MCP host
 
-Configure the host with absolute paths for the Node executable, `dist/cli.js`,
-and the same target repository root used by `analyze`. Replace the placeholders
-with paths from the tester’s machine; this guide does not prescribe a
-host-specific Node install location. Keep the JSON string quoting and escape
-Windows backslashes as shown:
+Configure the host with absolute paths for the Node executable, the validated
+offline guard, `dist/cli.js`, and the same target repository root used by
+`analyze`. Replace the placeholders with paths from the tester’s machine; this
+guide does not prescribe a host-specific Node install location. The guard path
+must be the validated regular non-reparse file at
+`<absolute-path-to-source-mesh>\scripts\deny-network.mjs`. Keep the JSON string
+quoting and escape Windows backslashes as shown:
 
 ```json
 {
@@ -142,6 +166,8 @@ Windows backslashes as shown:
     "sourcemesh": {
       "command": "<absolute-path-to-node.exe>",
       "args": [
+        "--import",
+        "<absolute-path-to-source-mesh>\\scripts\\deny-network.mjs",
         "<absolute-path-to-source-mesh>\\dist\\cli.js",
         "mcp",
         "--root",
@@ -155,7 +181,7 @@ Windows backslashes as shown:
 The equivalent local command, using the same absolute paths and root, is:
 
 ```powershell
-& $nodeExe $cliPath mcp --root $targetRoot
+& $nodeExe --import $offlineGuard $cliPath mcp --root $targetRoot
 ```
 
 MCP protocol messages use stdout exclusively. Startup, lifecycle, and
@@ -187,7 +213,7 @@ command leaves the existing snapshot intact. To inspect the exact diagnostic,
 repeat the same command with `--output json`:
 
 ```powershell
-& $nodeExe $cliPath analyze --root $targetRoot --language csharp --solution 'src/Velocy.API.sln' --output json
+& $nodeExe --import $offlineGuard $cliPath analyze --root $targetRoot --language csharp --solution 'src/Velocy.API.sln' --output json
 ```
 
 That conflict command writes no stdout, writes this sanitized JSON envelope to
@@ -218,6 +244,7 @@ workflow instead:
 
 ```powershell
 $disposableRoot = 'C:\path with spaces\Velocy-beta-copy'
+Assert-NoReparseAncestors -Path $targetRoot -Label 'target root input'
 $targetResolved = (Resolve-Path -LiteralPath $targetRoot -ErrorAction Stop).Path.TrimEnd('\')
 $targetItem = Get-Item -LiteralPath $targetResolved -Force -ErrorAction Stop
 if (-not $targetItem.PSIsContainer) {
@@ -228,15 +255,22 @@ $disposableParent = Split-Path -LiteralPath $disposableRoot -Parent
 Assert-NoReparseAncestors -Path $disposableParent -Label 'destination parent'
 $disposableParentResolved = (Resolve-Path -LiteralPath $disposableParent -ErrorAction Stop).Path.TrimEnd('\')
 $disposableResolved = Join-Path $disposableParentResolved (Split-Path -LiteralPath $disposableRoot -Leaf)
+$validatedDestination = [System.IO.Path]::GetFullPath($disposableResolved).TrimEnd('\')
 $targetPrefix = "$targetResolved\"
-if ([StringComparer]::OrdinalIgnoreCase.Equals($disposableResolved, $targetResolved) -or
-  $disposableResolved.StartsWith($targetPrefix, [StringComparison]::OrdinalIgnoreCase)) {
-  throw 'Refusing to copy: disposable destination is equal to or contained by the target root.'
+if ([StringComparer]::OrdinalIgnoreCase.Equals($validatedDestination, $targetResolved) -or
+  $validatedDestination.StartsWith($targetPrefix, [StringComparison]::OrdinalIgnoreCase) -or
+  $targetResolved.StartsWith("$validatedDestination\", [StringComparison]::OrdinalIgnoreCase)) {
+  throw 'Refusing to copy: disposable destination is equal to, contained by, or contains the target root.'
+}
+$sourceMeshPrefix = "$sourceMeshRoot\"
+if ([StringComparer]::OrdinalIgnoreCase.Equals($validatedDestination, $sourceMeshRoot) -or
+  $validatedDestination.StartsWith($sourceMeshPrefix, [StringComparison]::OrdinalIgnoreCase) -or
+  $sourceMeshRoot.StartsWith("$validatedDestination\", [StringComparison]::OrdinalIgnoreCase)) {
+  throw 'Refusing to copy: disposable destination is equal to, contained by, or contains the SourceMesh root.'
 }
 if (Test-Path -LiteralPath $disposableResolved -ErrorAction Stop) {
   throw 'Refusing to copy: disposable destination already exists.'
 }
-$validatedDestination = [System.IO.Path]::GetFullPath($disposableResolved).TrimEnd('\')
 $robocopyExe = (Get-Command robocopy.exe -ErrorAction Stop).Source
 New-Item -ItemType Directory -LiteralPath $validatedDestination -ErrorAction Stop | Out-Null
 $createdDestination = Get-Item -LiteralPath $validatedDestination -Force -ErrorAction Stop
@@ -253,15 +287,27 @@ if (-not [StringComparer]::OrdinalIgnoreCase.Equals($createdCanonical, $validate
 }
 Assert-NoReparseAncestors -Path $createdCanonical -Label 'destination'
 # /XJ prevents recursive traversal through junctions; robocopy codes 0..7 are non-failures.
+$pendingDirectories = [System.Collections.Generic.Stack[string]]::new()
+$pendingDirectories.Push($targetResolved)
 try {
-  $sourceItems = @(Get-ChildItem -LiteralPath $targetResolved -Force -Recurse -ErrorAction Stop)
+  while ($pendingDirectories.Count -gt 0) {
+    $currentDirectory = $pendingDirectories.Pop()
+    $currentDirectoryItem = Get-Item -LiteralPath $currentDirectory -Force -ErrorAction Stop
+    if (($currentDirectoryItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+      throw 'Refusing to copy: source directory is a reparse point.'
+    }
+    $entries = @(Get-ChildItem -LiteralPath $currentDirectory -Force -ErrorAction Stop)
+    foreach ($entry in $entries) {
+      if (($entry.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw 'Refusing to copy: source tree contains a reparse point.'
+      }
+      if ($entry.PSIsContainer) {
+        $pendingDirectories.Push($entry.FullName)
+      }
+    }
+  }
 } catch {
   throw 'Refusing to copy: source tree could not be enumerated safely.'
-}
-foreach ($sourceItem in $sourceItems) {
-  if (($sourceItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
-    throw 'Refusing to copy: source tree contains a reparse point.'
-  }
 }
 & $robocopyExe $targetResolved $validatedDestination '/E' '/XJ' '/R:0' '/W:0' '/XD' (Join-Path $targetResolved '.sourcemesh')
 $robocopyExitCode = $LASTEXITCODE
@@ -292,19 +338,19 @@ try {
 ```
 
 The validation resolves the target and destination parent, then fails closed
-before creating anything if the destination is equal to or contained by the
-target, or if the destination already exists. Confirm that the destination is
-a new sibling or external disposable location before running the copy. The
-copy command only reads the target, excludes `.sourcemesh`, and never deletes
-or writes back to the original. Then analyze and serve that same copy,
-preserving the C# selector:
+before creating anything if the destination is equal to, contained by, or
+contains the target or SourceMesh checkout, or if the destination already
+exists. Confirm that the destination is a new sibling or external disposable
+location before running the copy. The copy command only reads the target,
+excludes `.sourcemesh`, and never deletes or writes back to the original. Then
+analyze and serve that same copy, preserving the C# selector:
 
 ```powershell
-& $nodeExe $cliPath analyze --root $createdCanonical --language csharp --solution 'src/Velocy.API.sln'
+& $nodeExe --import $offlineGuard $cliPath analyze --root $createdCanonical --language csharp --solution 'src/Velocy.API.sln'
 if ($LASTEXITCODE -ne 0) {
   throw 'SourceMesh analyze failed; MCP was not started.'
 }
-& $nodeExe $cliPath mcp --root $createdCanonical
+& $nodeExe --import $offlineGuard $cliPath mcp --root $createdCanonical
 ```
 
 Do not use a copy command that deletes from the target or writes back to it.

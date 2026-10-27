@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- Operational beta validation runbook covering synthetic, offline helper,
+  packaged tarball, and opt-in real Velocy gates, safe create-only execution,
+  outcomes, and sanitized tester evidence (#73).
+
 - Windows x64 local-checkout beta guide covering offline helper setup,
   create-only analysis, local MCP stdio configuration, and privacy boundaries
   (#72).
