@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- Corrected the Windows beta disposable-copy fallback to use supported literal
+  path operations for path decomposition and destination creation while
+  preserving the fail-closed safety checks (#78).
+
 - Beta versioning and promotion policy covering the recommended
   `0.1.0-beta.1` SemVer, release metadata timing, required gates and reviews,
   evidence, rollback, and authorization limits (#74).
