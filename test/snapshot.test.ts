@@ -34,10 +34,7 @@ import {
   repositoryIdV2,
 } from '../src/graph.js';
 import { resolveSnapshotPath } from '../src/snapshot/path.js';
-import {
-  configureSnapshotWriterForTesting,
-  type SnapshotWriterFileSystem,
-} from '../src/snapshot/writer.js';
+import { createSnapshotWriterForTesting } from '../src/snapshot/writer.js';
 
 const roots: string[] = [];
 afterEach(async () => {
@@ -84,16 +81,11 @@ function graphPath(root: string): string {
   return path.join(root, '.sourcemesh', 'graph.json');
 }
 async function withWriterOverrides<T>(
-  overrides: Partial<SnapshotWriterFileSystem>,
+  overrides: Parameters<typeof createSnapshotWriterForTesting>[0],
   platform: NodeJS.Platform,
-  run: () => Promise<T>,
+  run: (writer: typeof writeSnapshot) => Promise<T>,
 ): Promise<T> {
-  const reset = configureSnapshotWriterForTesting(overrides, platform);
-  try {
-    return await run();
-  } finally {
-    reset();
-  }
+  return run(createSnapshotWriterForTesting(overrides, platform));
 }
 function failFinalHandleMethod(
   method: 'writeFile' | 'sync' | 'close' | 'chmod',
@@ -369,14 +361,13 @@ describe('schema-v1 snapshots', () => {
           },
         },
         'win32',
-        async () => {
-          const created = await writeSnapshot(root, snapshot(), {
+        async (writer) => {
+          const created = await writer(root, snapshot(), {
             mode: 'create-only',
           });
           const original = await readFile(created.path);
           await assert.rejects(
-            () =>
-              writeSnapshot(root, snapshot('other'), { mode: 'create-only' }),
+            () => writer(root, snapshot('other'), { mode: 'create-only' }),
             { code: 'snapshot_conflict' },
           );
           assert.deepEqual(await readFile(created.path), original);
@@ -397,9 +388,9 @@ describe('schema-v1 snapshots', () => {
       await withWriterOverrides(
         { link: async () => Promise.reject(error(code)) },
         platform,
-        async () => {
+        async (writer) => {
           await assert.rejects(
-            () => writeSnapshot(root, snapshot(), { mode: 'create-only' }),
+            () => writer(root, snapshot(), { mode: 'create-only' }),
             { code: 'snapshot_io' },
           );
         },
@@ -409,7 +400,7 @@ describe('schema-v1 snapshots', () => {
     }
   });
 
-  it('cleans up a failed Windows fallback so a retry can succeed', async () => {
+  it('preserves a failed Windows fallback for explicit overwrite recovery', async () => {
     for (const method of ['writeFile', 'sync', 'close', 'chmod'] as const) {
       const root = await mkdtemp(
         path.join(process.cwd(), '.snapshot-fallback-'),
@@ -421,16 +412,24 @@ describe('schema-v1 snapshots', () => {
           open: failFinalHandleMethod(method),
         },
         'win32',
-        async () => {
+        async (writer) => {
           await assert.rejects(
-            () => writeSnapshot(root, snapshot(), { mode: 'create-only' }),
+            () => writer(root, snapshot(), { mode: 'create-only' }),
             { code: 'snapshot_io' },
           );
         },
       );
-      await assert.rejects(() => lstat(graphPath(root)), { code: 'ENOENT' });
-      assert.equal((await readdir(path.join(root, '.sourcemesh'))).length, 0);
-      await writeSnapshot(root, snapshot(), { mode: 'create-only' });
+      assert.equal((await lstat(graphPath(root))).isFile(), true);
+      assert.equal((await readdir(path.join(root, '.sourcemesh'))).length, 1);
+      await assert.rejects(
+        () => writeSnapshot(root, snapshot(), { mode: 'create-only' }),
+        { code: 'snapshot_conflict' },
+      );
+      await writeSnapshot(root, snapshot('recovered'), { mode: 'replace' });
+      assert.equal(
+        (await openValidatedSnapshot(root)).repository.name,
+        'recovered',
+      );
     }
   });
 
@@ -457,9 +456,9 @@ describe('schema-v1 snapshots', () => {
         },
       },
       'win32',
-      async () => {
+      async (writer) => {
         await assert.rejects(
-          () => writeSnapshot(root, snapshot(), { mode: 'create-only' }),
+          () => writer(root, snapshot(), { mode: 'create-only' }),
           { code: 'snapshot_io' },
         );
       },
