@@ -215,6 +215,9 @@ export function createSnapshotWriterForTesting(
             fallbackPublished = true;
           } catch (fallbackError) {
             if (destination) await destination.close().catch(() => undefined);
+            // The exclusively claimed pathname may be partial. Retain it for
+            // explicit --overwrite recovery: deleting by pathname could erase
+            // a replacement made by another process.
             if ((fallbackError as NodeJS.ErrnoException).code === 'EEXIST')
               throw conflict();
             throw io();

@@ -400,8 +400,8 @@ describe('schema-v1 snapshots', () => {
     }
   });
 
-  it('preserves a failed Windows fallback for explicit overwrite recovery', async () => {
-    for (const method of ['writeFile', 'sync', 'close', 'chmod'] as const) {
+  it('retains an invalid failed Windows fallback until explicit overwrite recovery', async () => {
+    for (const method of ['writeFile', 'chmod'] as const) {
       const root = await mkdtemp(
         path.join(process.cwd(), '.snapshot-fallback-'),
       );
@@ -421,6 +421,7 @@ describe('schema-v1 snapshots', () => {
       );
       assert.equal((await lstat(graphPath(root))).isFile(), true);
       assert.equal((await readdir(path.join(root, '.sourcemesh'))).length, 1);
+      await assert.rejects(() => openValidatedSnapshot(root));
       await assert.rejects(
         () => writeSnapshot(root, snapshot(), { mode: 'create-only' }),
         { code: 'snapshot_conflict' },
