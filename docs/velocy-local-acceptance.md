@@ -9,6 +9,10 @@ real C#/.NET target. It is intentionally excluded from CI, synthetic fixtures,
 - Windows with the repository-owned Roslyn helper already available at
   `tools/sourcemesh-roslyn/bin/Release/net10.0/sourcemesh-roslyn.dll`.
 - A local Velocy checkout containing `src/Velocy.API.sln`.
+- Before this standalone profile, complete the mandatory canonical-root,
+  reparse-point, and quiescence preflight in
+  [beta-validation-runbook.md](beta-validation-runbook.md). If that preflight
+  is not provable, use the runbook's separate disposable or OS-snapshot root.
 - The helper may be prepared with the Windows-only instructions in
   [CONTRIBUTING.md](../CONTRIBUTING.md); the acceptance profile itself never
   runs restore, build, or run commands.
@@ -48,6 +52,9 @@ access from the Node.js profile and arbitrary subprocesses; its only permitted
 child is the fixed, repository-owned Roslyn helper, which receives staged local
 inputs through the bounded protocol. This guard is not an OS-level network
 sandbox for that helper, so do not substitute an untrusted helper or runtime.
+The profile runtime does not itself enforce SourceMesh/target root separation;
+the runbook's canonical-root, reparse-point, and quiescence preflight is the
+mandatory safety boundary for this standalone profile.
 
 ## Output and cleanup
 
