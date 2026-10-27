@@ -360,6 +360,13 @@ try {
     },
   );
   assert.deepEqual(await readFile(snapshot), snapshotBytes);
+  const replacement = await runCli(
+    cli,
+    [...analyzeArgs, '--overwrite'],
+    consumer,
+  );
+  assert.equal(replacement.schemaVersion, 2);
+  assert.equal(replacement.result?.snapshotPath, '.sourcemesh/graph.json');
   await verifyMcp(cli, fixture, consumer);
 } finally {
   await rm(temporaryRoot, { recursive: true, force: true });

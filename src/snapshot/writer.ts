@@ -28,6 +28,13 @@ function io(): SnapshotError {
 function conflict(): SnapshotError {
   return new SnapshotError('snapshot_conflict', 'The snapshot already exists.');
 }
+function unsupportedCreateOnlyLink(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException).code;
+  return (
+    process.platform === 'win32' &&
+    (code === 'EPERM' || code === 'EOPNOTSUPP' || code === 'ENOSYS')
+  );
+}
 async function ensurePrivate(file: string, directory: boolean): Promise<void> {
   const verifiesPosixMode = process.platform !== 'win32';
   const initial = await lstat(file).catch(() => {
@@ -144,7 +151,40 @@ export async function writeSnapshot(
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code === 'EEXIST')
           throw conflict();
-        throw io();
+        if (!unsupportedCreateOnlyLink(error)) throw io();
+        const fallbackCheck = await revalidateSnapshotPath(resolved);
+        if (
+          resolved.destinationIdentity !== undefined &&
+          (fallbackCheck === undefined ||
+            !sameIdentity(resolved.destinationIdentity, fallbackCheck))
+        )
+          throw io();
+        if (fallbackCheck !== undefined) throw conflict();
+        let destination: Awaited<ReturnType<typeof open>> | undefined;
+        try {
+          destination = await open(resolved.path, 'wx', 0o600);
+          let destinationStat = await destination.stat();
+          if (
+            process.platform === 'win32' ||
+            (destinationStat.mode & 0o077) !== 0
+          ) {
+            await destination.chmod(0o600).catch(() => {
+              throw io();
+            });
+            destinationStat = await destination.stat();
+          }
+          if (!destinationStat.isFile()) throw io();
+          await destination.writeFile(bytes);
+          await destination.sync();
+          await destination.close();
+          destination = undefined;
+          await unlink(temporary);
+        } catch (fallbackError) {
+          if (destination) await destination.close().catch(() => undefined);
+          if ((fallbackError as NodeJS.ErrnoException).code === 'EEXIST')
+            throw conflict();
+          throw io();
+        }
       }
     } else await rename(temporary, resolved.path);
     await ensurePrivate(resolved.path, false);

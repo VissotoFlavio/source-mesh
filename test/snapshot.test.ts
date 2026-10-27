@@ -192,24 +192,27 @@ describe('schema-v1 snapshots', () => {
       path.join(process.cwd(), '.snapshot-create-only-'),
     );
     roots.push(emptyRoot);
-    try {
-      const created = await writeSnapshot(emptyRoot, snapshot(), {
-        mode: 'create-only',
-      });
-      assert.equal((await openValidatedSnapshot(emptyRoot)).schemaVersion, 1);
-      assert.equal(
-        created.path.endsWith(path.join('.sourcemesh', 'graph.json')),
-        true,
-      );
-    } catch (error) {
-      assert.equal((error as { code: string }).code, 'snapshot_io');
-      assert.equal(
-        (await readdir(path.join(emptyRoot, '.sourcemesh'))).some((item) =>
-          item.endsWith('.tmp'),
-        ),
-        false,
-      );
-    }
+    const created = await writeSnapshot(emptyRoot, snapshot(), {
+      mode: 'create-only',
+    });
+    assert.equal((await openValidatedSnapshot(emptyRoot)).schemaVersion, 1);
+    assert.equal(
+      created.path.endsWith(path.join('.sourcemesh', 'graph.json')),
+      true,
+    );
+    const createOnlyBytes = await readFile(created.path);
+    await assert.rejects(
+      () =>
+        writeSnapshot(emptyRoot, snapshot('other'), { mode: 'create-only' }),
+      { code: 'snapshot_conflict' },
+    );
+    assert.deepEqual(await readFile(created.path), createOnlyBytes);
+    assert.equal(
+      (await readdir(path.join(emptyRoot, '.sourcemesh'))).some((item) =>
+        item.endsWith('.tmp'),
+      ),
+      false,
+    );
     const customRoot = await mkdtemp(
       path.join(process.cwd(), '.snapshot-custom-path-'),
     );
