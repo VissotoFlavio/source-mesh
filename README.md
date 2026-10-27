@@ -73,6 +73,9 @@ Third-party license and integrity inventory is in
 [docs/package-distribution.md](docs/package-distribution.md) for the supported
 contract and exclusions.
 
+For the authorized Windows x64 local-checkout beta flow, see
+[docs/beta-checkout.md](docs/beta-checkout.md).
+
 After a build, analyze and query a repository locally:
 
 ```sh
