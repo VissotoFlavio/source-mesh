@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- Beta versioning and promotion policy covering the recommended
+  `0.1.0-beta.1` SemVer, release metadata timing, required gates and reviews,
+  evidence, rollback, and authorization limits (#74).
+
 - Operational beta validation runbook covering synthetic, offline helper,
   packaged tarball, and opt-in real Velocy gates, safe create-only execution,
   outcomes, and sanitized tester evidence (#73).

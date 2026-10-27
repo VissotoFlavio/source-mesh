@@ -79,6 +79,10 @@ For the authorized Windows x64 local-checkout beta flow, see
 For the ordered beta gates, safe execution rules, outcomes, and tester evidence
 limits, see the [beta validation runbook](docs/beta-validation-runbook.md).
 
+For SemVer beta candidates, release metadata timing, promotion gates, evidence,
+rollback, and authorization limits, see the
+[beta versioning and promotion policy](docs/beta-version-promotion.md).
+
 After a build, analyze and query a repository locally:
 
 ```sh
