@@ -99,6 +99,10 @@ async function verifyFailureModes(root) {
           );
         }),
       );
+      await copyFile(
+        path.join(sourceHelper, manifest.helperIntegrityFile),
+        path.join(helper, manifest.helperIntegrityFile),
+      );
       return { helper, name };
     }),
   );
@@ -277,6 +281,28 @@ try {
     installed,
     '--installed',
   ]);
+  const helperProbe = path.join(
+    installed,
+    ...manifest.helperPath.split('/'),
+    'sourcemesh-roslyn.dll',
+  );
+  const helperBytes = await readFile(helperProbe);
+  try {
+    await writeFile(
+      helperProbe,
+      Buffer.concat([helperBytes, Buffer.from([0])]),
+    );
+    await assert.rejects(
+      command(process.execPath, [
+        path.join(repository, 'scripts', 'check-package.mjs'),
+        '--root',
+        installed,
+        '--installed',
+      ]),
+    );
+  } finally {
+    await writeFile(helperProbe, helperBytes);
+  }
   const dependencyProbe = path.join(
     installed,
     'node_modules',

@@ -65,8 +65,9 @@ retained in the committed `.nupkg` feed under
 `tools/sourcemesh-roslyn/packages`; this section preserves the attribution and
 license terms needed by the distributed object code. The helper payload is the
 Release `net10.0` output only: 17,092,239 uncompressed bytes, with each file
-checked against `scripts/package-manifest.json`. Its compressed npm tarball is
-bounded to 25 MiB by the package verification script.
+checked against the generated tarball integrity manifest and the reviewed
+dependencies also checked against `scripts/package-manifest.json`. Its
+compressed npm tarball is bounded to 25 MiB by the package verification script.
 
 SourceMesh does not bundle the .NET runtime, NuGet feed, helper sources, PDB,
 native executable, snapshots, or development Node dependencies. The supported

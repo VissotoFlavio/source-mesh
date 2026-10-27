@@ -51,6 +51,38 @@ async function hashFile(file) {
   };
 }
 
+async function readHelperIntegrity(helperRoot) {
+  const value = JSON.parse(
+    await readFile(
+      path.join(helperRoot, manifest.helperIntegrityFile),
+      'utf8',
+    ).catch(() => fail('package_integrity_manifest_missing')),
+  );
+  if (
+    value === null ||
+    typeof value !== 'object' ||
+    value.version !== 1 ||
+    !Array.isArray(value.files) ||
+    value.files.length !== manifest.helperFiles.length
+  )
+    fail('package_integrity_manifest_invalid');
+  const hashes = new Map();
+  for (const [index, item] of manifest.helperFiles.entries()) {
+    const entry = value.files[index];
+    if (
+      entry === null ||
+      typeof entry !== 'object' ||
+      entry.path !== item.path ||
+      entry.bytes !== item.bytes ||
+      typeof entry.sha256 !== 'string' ||
+      !/^[A-F0-9]{64}$/u.test(entry.sha256)
+    )
+      fail('package_integrity_manifest_invalid');
+    hashes.set(item.path, entry.sha256);
+  }
+  return hashes;
+}
+
 async function digestPackage(root) {
   const digest = createHash('sha256');
   for (const file of (await collectFiles(root)).sort()) {
@@ -115,6 +147,11 @@ async function verifyHelperPayload(
   const expected = new Map(
     manifest.helperFiles.map((item) => [item.path, item]),
   );
+  const integrity = await readHelperIntegrity(helperRoot);
+  const expectedPayloadFiles = new Set([
+    ...expected.keys(),
+    manifest.helperIntegrityFile,
+  ]);
   const actual = await collectFiles(helperRoot);
   const buildArtifacts = new Set([
     'sourcemesh-roslyn.exe',
@@ -122,11 +159,13 @@ async function verifyHelperPayload(
   ]);
   const unexpected = actual.filter(
     (file) =>
-      !expected.has(file) && !(allowBuildArtifacts && buildArtifacts.has(file)),
+      !expectedPayloadFiles.has(file) &&
+      !(allowBuildArtifacts && buildArtifacts.has(file)),
   );
   if (
     unexpected.length > 0 ||
-    actual.filter((file) => expected.has(file)).length !== expected.size
+    actual.filter((file) => expectedPayloadFiles.has(file)).length !==
+      expectedPayloadFiles.size
   )
     fail('package_helper_allowlist');
   const expectedDirectories = new Set(
@@ -148,7 +187,11 @@ async function verifyHelperPayload(
     const result = await hashFile(
       path.join(helperRoot, ...item.path.split('/')),
     );
-    if (result.bytes !== item.bytes || result.sha256 !== item.sha256)
+    if (
+      result.bytes !== item.bytes ||
+      result.sha256 !== integrity.get(item.path) ||
+      (item.sha256 !== undefined && result.sha256 !== item.sha256)
+    )
       fail(`package_artifact_integrity_${item.path}`);
     total += result.bytes;
   }
@@ -252,6 +295,7 @@ async function verifyPackageRoot(root, { installed = false } = {}) {
   const expectedFiles = [
     'THIRD-PARTY-NOTICES.md',
     'dist',
+    `${manifest.helperPath}/${manifest.helperIntegrityFile}`,
     ...manifest.helperFiles.map(
       (item) => `${manifest.helperPath}/${item.path}`,
     ),

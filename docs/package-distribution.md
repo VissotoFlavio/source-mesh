@@ -35,7 +35,10 @@ The package contains:
 
 The uncompressed helper payload is 17,092,239 bytes. The generated tarball is
 limited to 25 MiB. `scripts/check-package.mjs` rejects missing, extra,
-symlinked, malformed, or hash-mismatched helper artifacts before packing. It
+symlinked, malformed, or hash-mismatched helper artifacts before packing. The
+build writes the compiled helper DLL's SHA-256 to an integrity manifest carried
+in the tarball; fixed Roslyn artifacts continue to use the reviewed hashes in
+`scripts/package-manifest.json`. It
 also rejects install lifecycle scripts, undeclared bundled packages, incomplete
 license inventory, and absolute paths in helper metadata. The E2E check proves
 the missing, extra, and malformed cases fail closed.

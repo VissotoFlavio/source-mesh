@@ -25,7 +25,8 @@ resolved local outcomes become edges.
 The package feed and build output are repository-local, so neither is published
 by the private npm package as source material. The Windows x64 Release payload
 is copied into the local npm tarball only after `scripts/check-package.mjs`
-validates its closed allowlist and SHA-256 inventory. Build the committed feed
+validates its closed allowlist and SHA-256 inventory. Packaging writes the
+compiled helper's hash to the tarball's integrity manifest. Build the committed feed
 without network:
 
 ```powershell

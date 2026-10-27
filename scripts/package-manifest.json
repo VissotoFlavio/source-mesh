@@ -2,6 +2,7 @@
   "platform": "win32-x64",
   "dotnetFramework": "net10.0",
   "helperPath": "tools/sourcemesh-roslyn/bin/Release/net10.0",
+  "helperIntegrityFile": "sourcemesh-roslyn.integrity.json",
   "helperPayloadBytes": 17092239,
   "maxTarballBytes": 26214400,
   "bundledDependencies": ["@modelcontextprotocol/server", "typescript"],
@@ -53,8 +54,7 @@
     },
     {
       "path": "sourcemesh-roslyn.dll",
-      "bytes": 68096,
-      "sha256": "7B2D669E09F3933052E0B7FD6A4F0ECFE274BCC4E2C091FA5381A54A98DF6199"
+      "bytes": 68096
     },
     {
       "path": "sourcemesh-roslyn.runtimeconfig.json",
