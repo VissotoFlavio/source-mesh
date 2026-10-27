@@ -78,7 +78,7 @@ function Assert-NoReparseAncestors {
     if (($currentItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
       throw "Refusing to continue: $Label or one of its ancestors is a reparse point."
     }
-    $parentPath = Split-Path -LiteralPath $currentPath -Parent
+    $parentPath = [System.IO.Path]::GetDirectoryName($currentPath)
     if ([string]::IsNullOrEmpty($parentPath) -or
       [StringComparer]::OrdinalIgnoreCase.Equals($parentPath, $currentPath)) {
       break
@@ -87,12 +87,102 @@ function Assert-NoReparseAncestors {
   }
 }
 
+function Normalize-CanonicalPath {
+  param(
+    [Parameter(Mandatory)] [string]$Path
+  )
+
+  if ($Path.StartsWith('\\?\', [StringComparison]::Ordinal) -or
+    $Path.StartsWith('\\.\', [StringComparison]::Ordinal)) {
+    throw 'Refusing to continue: extended device namespace paths are not supported.'
+  }
+  $fullPath = [System.IO.Path]::GetFullPath($Path)
+  $root = [System.IO.Path]::GetPathRoot($fullPath)
+  if ([string]::IsNullOrEmpty($root)) {
+    throw 'Refusing to continue: path has no filesystem root.'
+  }
+  $rootWithoutTrailingSeparator = $root.TrimEnd('\')
+  if ([StringComparer]::OrdinalIgnoreCase.Equals($fullPath, $root) -or
+    [StringComparer]::OrdinalIgnoreCase.Equals($fullPath, $rootWithoutTrailingSeparator)) {
+    return $root
+  }
+  return $fullPath.TrimEnd('\')
+}
+
+function Get-CanonicalPathParts {
+  param(
+    [Parameter(Mandatory)] [string]$Path
+  )
+
+  $canonicalPath = Normalize-CanonicalPath -Path $Path
+  $root = [System.IO.Path]::GetPathRoot($canonicalPath)
+  $rootKey = $root.TrimEnd('\')
+  $remainder = ''
+  if (-not [StringComparer]::OrdinalIgnoreCase.Equals($canonicalPath, $root) -and
+    -not [StringComparer]::OrdinalIgnoreCase.Equals($canonicalPath, $rootKey)) {
+    $remainder = $canonicalPath.Substring($root.Length).Trim('\')
+  }
+  $segments = if ([string]::IsNullOrEmpty($remainder)) {
+    @()
+  } else {
+    $remainder.Split([char[]]('\'), [System.StringSplitOptions]::RemoveEmptyEntries)
+  }
+  [PSCustomObject]@{
+    Root     = $rootKey
+    Segments = [string[]]$segments
+  }
+}
+
+function Test-CanonicalPathSegmentPrefix {
+  param(
+    [AllowEmptyCollection()] [string[]]$BaseSegments,
+    [AllowEmptyCollection()] [string[]]$CandidateSegments
+  )
+
+  if ($BaseSegments.Count -gt $CandidateSegments.Count) {
+    return $false
+  }
+  for ($index = 0; $index -lt $BaseSegments.Count; $index++) {
+    if (-not [StringComparer]::OrdinalIgnoreCase.Equals($BaseSegments[$index], $CandidateSegments[$index])) {
+      return $false
+    }
+  }
+  return $true
+}
+
+function Get-CanonicalPathRelation {
+  param(
+    [Parameter(Mandatory)] [string]$Base,
+    [Parameter(Mandatory)] [string]$Candidate
+  )
+
+  $baseParts = Get-CanonicalPathParts -Path $Base
+  $candidateParts = Get-CanonicalPathParts -Path $Candidate
+  if (-not [StringComparer]::OrdinalIgnoreCase.Equals($baseParts.Root, $candidateParts.Root)) {
+    return 'Disjoint'
+  }
+  $baseCount = $baseParts.Segments.Count
+  $candidateCount = $candidateParts.Segments.Count
+  $baseContainsCandidate = Test-CanonicalPathSegmentPrefix -BaseSegments $baseParts.Segments -CandidateSegments $candidateParts.Segments
+  $candidateContainsBase = Test-CanonicalPathSegmentPrefix -BaseSegments $candidateParts.Segments -CandidateSegments $baseParts.Segments
+  if ($baseCount -eq $candidateCount -and $baseContainsCandidate) {
+    return 'Equal'
+  }
+  if ($baseCount -lt $candidateCount -and $baseContainsCandidate) {
+    return 'CandidateInsideBase'
+  }
+  if ($candidateCount -lt $baseCount -and $candidateContainsBase) {
+    return 'BaseInsideCandidate'
+  }
+  return 'Disjoint'
+}
+
 $sourceMeshInput = 'C:\path with spaces\source-mesh'
 $targetInput = 'C:\path with spaces\Velocy'
 Assert-NoReparseAncestors -Path $sourceMeshInput -Label 'SourceMesh root'
 Assert-NoReparseAncestors -Path $targetInput -Label 'target root'
-$sourceMeshRoot = (Resolve-Path -LiteralPath $sourceMeshInput -ErrorAction Stop).Path
-$targetRoot = (Resolve-Path -LiteralPath $targetInput -ErrorAction Stop).Path
+$sourceMeshRoot = Normalize-CanonicalPath -Path ((Resolve-Path -LiteralPath $sourceMeshInput -ErrorAction Stop).Path)
+$targetRoot = Normalize-CanonicalPath -Path ((Resolve-Path -LiteralPath $targetInput -ErrorAction Stop).Path)
 $sourceMeshItem = Get-Item -LiteralPath $sourceMeshRoot -Force -ErrorAction Stop
 $targetRootItem = Get-Item -LiteralPath $targetRoot -Force -ErrorAction Stop
 if (-not $sourceMeshItem.PSIsContainer -or -not $targetRootItem.PSIsContainer) {
@@ -102,11 +192,7 @@ if (($sourceMeshItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) 
   ($targetRootItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
   throw 'Refusing to run: SourceMesh or target root is a reparse point.'
 }
-$sourceMeshPrefix = "$sourceMeshRoot\"
-$targetPrefix = "$targetRoot\"
-if ([StringComparer]::OrdinalIgnoreCase.Equals($sourceMeshRoot, $targetRoot) -or
-  $sourceMeshRoot.StartsWith($targetPrefix, [StringComparison]::OrdinalIgnoreCase) -or
-  $targetRoot.StartsWith($sourceMeshPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+if ((Get-CanonicalPathRelation -Base $sourceMeshRoot -Candidate $targetRoot) -ne 'Disjoint') {
   throw 'Refusing to run: SourceMesh checkout and target must be distinct, non-containing roots.'
 }
 $nodeExe = (Get-Command node.exe -ErrorAction Stop).Source
@@ -245,34 +331,36 @@ workflow instead:
 ```powershell
 $disposableRoot = 'C:\path with spaces\Velocy-beta-copy'
 Assert-NoReparseAncestors -Path $targetRoot -Label 'target root input'
-$targetResolved = (Resolve-Path -LiteralPath $targetRoot -ErrorAction Stop).Path.TrimEnd('\')
+$targetResolved = Normalize-CanonicalPath -Path ((Resolve-Path -LiteralPath $targetRoot -ErrorAction Stop).Path)
 $targetItem = Get-Item -LiteralPath $targetResolved -Force -ErrorAction Stop
 if (-not $targetItem.PSIsContainer) {
   throw 'Refusing to copy: target root is not a directory.'
 }
 Assert-NoReparseAncestors -Path $targetResolved -Label 'target root'
-$disposableParent = Split-Path -LiteralPath $disposableRoot -Parent
+$disposableFullPath = Normalize-CanonicalPath -Path $disposableRoot
+$disposableParent = [System.IO.Path]::GetDirectoryName($disposableFullPath)
+$disposableName = [System.IO.Path]::GetFileName($disposableFullPath)
+if ([string]::IsNullOrEmpty($disposableParent) -or [string]::IsNullOrEmpty($disposableName)) {
+  throw 'Refusing to copy: disposable destination must name a child directory.'
+}
 Assert-NoReparseAncestors -Path $disposableParent -Label 'destination parent'
-$disposableParentResolved = (Resolve-Path -LiteralPath $disposableParent -ErrorAction Stop).Path.TrimEnd('\')
-$disposableResolved = Join-Path $disposableParentResolved (Split-Path -LiteralPath $disposableRoot -Leaf)
-$validatedDestination = [System.IO.Path]::GetFullPath($disposableResolved).TrimEnd('\')
-$targetPrefix = "$targetResolved\"
-if ([StringComparer]::OrdinalIgnoreCase.Equals($validatedDestination, $targetResolved) -or
-  $validatedDestination.StartsWith($targetPrefix, [StringComparison]::OrdinalIgnoreCase) -or
-  $targetResolved.StartsWith("$validatedDestination\", [StringComparison]::OrdinalIgnoreCase)) {
+$disposableParentResolved = Normalize-CanonicalPath -Path ((Resolve-Path -LiteralPath $disposableParent -ErrorAction Stop).Path)
+$disposableResolved = Join-Path $disposableParentResolved $disposableName
+$validatedDestination = Normalize-CanonicalPath -Path $disposableResolved
+if ((Get-CanonicalPathRelation -Base $targetResolved -Candidate $validatedDestination) -ne 'Disjoint') {
   throw 'Refusing to copy: disposable destination is equal to, contained by, or contains the target root.'
 }
-$sourceMeshPrefix = "$sourceMeshRoot\"
-if ([StringComparer]::OrdinalIgnoreCase.Equals($validatedDestination, $sourceMeshRoot) -or
-  $validatedDestination.StartsWith($sourceMeshPrefix, [StringComparison]::OrdinalIgnoreCase) -or
-  $sourceMeshRoot.StartsWith("$validatedDestination\", [StringComparison]::OrdinalIgnoreCase)) {
+if ((Get-CanonicalPathRelation -Base $sourceMeshRoot -Candidate $validatedDestination) -ne 'Disjoint') {
   throw 'Refusing to copy: disposable destination is equal to, contained by, or contains the SourceMesh root.'
 }
 if (Test-Path -LiteralPath $disposableResolved -ErrorAction Stop) {
   throw 'Refusing to copy: disposable destination already exists.'
 }
 $robocopyExe = (Get-Command robocopy.exe -ErrorAction Stop).Source
-New-Item -ItemType Directory -LiteralPath $validatedDestination -ErrorAction Stop | Out-Null
+# Directory.CreateDirectory accepts the validated full path literally. Do not
+# replace this with New-Item -LiteralPath; that parameter is not supported by
+# New-Item in the supported Windows PowerShell environment.
+[System.IO.Directory]::CreateDirectory($validatedDestination) | Out-Null
 $createdDestination = Get-Item -LiteralPath $validatedDestination -Force -ErrorAction Stop
 if (-not $createdDestination.PSIsContainer) {
   throw 'Refusing to copy: disposable destination is not a directory.'
@@ -280,7 +368,7 @@ if (-not $createdDestination.PSIsContainer) {
 if (($createdDestination.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
   throw 'Refusing to copy: disposable destination is a reparse point.'
 }
-$createdCanonical = (Resolve-Path -LiteralPath $validatedDestination -ErrorAction Stop).Path.TrimEnd('\')
+$createdCanonical = Normalize-CanonicalPath -Path ((Resolve-Path -LiteralPath $validatedDestination -ErrorAction Stop).Path)
 Assert-NoReparseAncestors -Path $disposableRoot -Label 'destination'
 if (-not [StringComparer]::OrdinalIgnoreCase.Equals($createdCanonical, $validatedDestination)) {
   throw 'Refusing to copy: created destination does not match the validated path.'
@@ -315,8 +403,8 @@ if ($null -eq $robocopyExitCode -or $robocopyExitCode -lt 0 -or $robocopyExitCod
   throw "Refusing to continue: robocopy failed with exit code $robocopyExitCode."
 }
 try {
-  $sourceAfterCanonical = (Resolve-Path -LiteralPath $targetResolved -ErrorAction Stop).Path.TrimEnd('\')
-  $destinationAfterCanonical = (Resolve-Path -LiteralPath $validatedDestination -ErrorAction Stop).Path.TrimEnd('\')
+  $sourceAfterCanonical = Normalize-CanonicalPath -Path ((Resolve-Path -LiteralPath $targetResolved -ErrorAction Stop).Path)
+  $destinationAfterCanonical = Normalize-CanonicalPath -Path ((Resolve-Path -LiteralPath $validatedDestination -ErrorAction Stop).Path)
   if (-not [StringComparer]::OrdinalIgnoreCase.Equals($sourceAfterCanonical, $targetResolved) -or
     -not [StringComparer]::OrdinalIgnoreCase.Equals($destinationAfterCanonical, $createdCanonical)) {
     throw 'Root canonical path changed.'

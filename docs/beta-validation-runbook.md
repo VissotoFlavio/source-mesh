@@ -78,14 +78,20 @@ checkout.
    remove the other profile's snapshot. For the direct CLI + MCP profile, follow
    the path, reparse-point,
    and absolute-path safeguards in [beta-checkout.md](beta-checkout.md).
-   Before running it, perform this canonical-root separation check using the
-   `Assert-NoReparseAncestors` helper from [beta-checkout.md](beta-checkout.md):
+   Before running the following non-standalone snippet, execute the complete
+   helper-definition block in [beta-checkout.md](beta-checkout.md), from
+   `function Assert-NoReparseAncestors` through
+   `function Get-CanonicalPathRelation`, in this same PowerShell session. The
+   definitions of `Assert-NoReparseAncestors`, `Normalize-CanonicalPath`, and
+   `Get-CanonicalPathRelation` are required; this snippet does not load them.
 
    ```powershell
+   $sourceMeshInput = 'C:\path with spaces\source-mesh'
+   $targetInput = 'C:\path with spaces\Velocy'
    Assert-NoReparseAncestors -Path $sourceMeshInput -Label 'SourceMesh input'
    Assert-NoReparseAncestors -Path $targetInput -Label 'target input'
-   $sourceMeshRoot = (Resolve-Path -LiteralPath $sourceMeshInput -ErrorAction Stop).Path.TrimEnd('\')
-   $targetRoot = (Resolve-Path -LiteralPath $targetInput -ErrorAction Stop).Path.TrimEnd('\')
+   $sourceMeshRoot = Normalize-CanonicalPath -Path ((Resolve-Path -LiteralPath $sourceMeshInput -ErrorAction Stop).Path)
+   $targetRoot = Normalize-CanonicalPath -Path ((Resolve-Path -LiteralPath $targetInput -ErrorAction Stop).Path)
    Assert-NoReparseAncestors -Path $sourceMeshRoot -Label 'SourceMesh root'
    Assert-NoReparseAncestors -Path $targetRoot -Label 'target root'
    $sourceMeshItem = Get-Item -LiteralPath $sourceMeshRoot -Force -ErrorAction Stop
@@ -95,11 +101,7 @@ checkout.
      ($targetItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
      throw 'Refusing to continue: SourceMesh and target roots must be regular directories.'
    }
-   $sourceMeshPrefix = "$sourceMeshRoot\"
-   $targetPrefix = "$targetRoot\"
-   if ([StringComparer]::OrdinalIgnoreCase.Equals($sourceMeshRoot, $targetRoot) -or
-     $sourceMeshRoot.StartsWith($targetPrefix, [StringComparison]::OrdinalIgnoreCase) -or
-     $targetRoot.StartsWith($sourceMeshPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+   if ((Get-CanonicalPathRelation -Base $sourceMeshRoot -Candidate $targetRoot) -ne 'Disjoint') {
      throw 'Refusing to continue: SourceMesh checkout and target must be distinct, non-containing roots.'
    }
    ```
@@ -162,16 +164,21 @@ checkout.
    authorized, run the opt-in profile from
    [velocy-local-acceptance.md](velocy-local-acceptance.md):
 
-   Before setting `SM_VELOCY_ROOT`, run this self-contained preflight using the
-   `Assert-NoReparseAncestors` helper from [beta-checkout.md](beta-checkout.md):
+   Before setting `SM_VELOCY_ROOT`, execute the complete helper-definition
+   block in [beta-checkout.md](beta-checkout.md), from
+   `function Assert-NoReparseAncestors` through
+   `function Get-CanonicalPathRelation`, in this same PowerShell session. Then
+   run the following non-standalone preflight snippet; it requires the
+   `Assert-NoReparseAncestors`, `Normalize-CanonicalPath`, and
+   `Get-CanonicalPathRelation` definitions and does not load them.
 
    ```powershell
    $sourceMeshInput = 'C:\path with spaces\source-mesh'
    $velocyInput = 'C:\path\to\Velocy'
    Assert-NoReparseAncestors -Path $sourceMeshInput -Label 'SourceMesh input'
    Assert-NoReparseAncestors -Path $velocyInput -Label 'Velocy input'
-   $sourceMeshRoot = (Resolve-Path -LiteralPath $sourceMeshInput -ErrorAction Stop).Path.TrimEnd('\')
-   $velocyRoot = (Resolve-Path -LiteralPath $velocyInput -ErrorAction Stop).Path.TrimEnd('\')
+   $sourceMeshRoot = Normalize-CanonicalPath -Path ((Resolve-Path -LiteralPath $sourceMeshInput -ErrorAction Stop).Path)
+   $velocyRoot = Normalize-CanonicalPath -Path ((Resolve-Path -LiteralPath $velocyInput -ErrorAction Stop).Path)
    Assert-NoReparseAncestors -Path $sourceMeshRoot -Label 'SourceMesh root'
    Assert-NoReparseAncestors -Path $velocyRoot -Label 'Velocy root'
    $sourceMeshItem = Get-Item -LiteralPath $sourceMeshRoot -Force -ErrorAction Stop
@@ -181,11 +188,7 @@ checkout.
      ($velocyItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
      throw 'Refusing to continue: SourceMesh and Velocy roots must be regular directories.'
    }
-   $sourceMeshPrefix = "$sourceMeshRoot\"
-   $velocyPrefix = "$velocyRoot\"
-   if ([StringComparer]::OrdinalIgnoreCase.Equals($sourceMeshRoot, $velocyRoot) -or
-     $sourceMeshRoot.StartsWith($velocyPrefix, [StringComparison]::OrdinalIgnoreCase) -or
-     $velocyRoot.StartsWith($sourceMeshPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+   if ((Get-CanonicalPathRelation -Base $sourceMeshRoot -Candidate $velocyRoot) -ne 'Disjoint') {
      throw 'Refusing to continue: SourceMesh checkout and Velocy root must be distinct, non-containing roots.'
    }
 
