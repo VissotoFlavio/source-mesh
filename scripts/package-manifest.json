@@ -54,7 +54,7 @@
     {
       "path": "sourcemesh-roslyn.dll",
       "bytes": 68096,
-      "sha256": "F3230F365AE7C471D5F70FE36C8643060D17732C318156E7E3F0E550549BBADC"
+      "sha256": "7B2D669E09F3933052E0B7FD6A4F0ECFE274BCC4E2C091FA5381A54A98DF6199"
     },
     {
       "path": "sourcemesh-roslyn.runtimeconfig.json",
