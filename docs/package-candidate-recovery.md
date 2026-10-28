@@ -38,10 +38,11 @@ credentials, absolute private paths, or raw command output.
 ## Recovery
 
 Re-running the command for the same SHA is successful only when the existing
-pre-release and both assets already match the expected tag, SHA, and checksum.
-The workflow never overwrites an asset. A tag, release, or asset for a different
-SHA or digest fails closed; choose a new beta version for changed candidate
-content, as required by the beta promotion policy.
+pre-release contains exactly the expected tarball and checksum assets, both with
+the expected digests and tag/SHA. The workflow never overwrites an asset. A tag,
+release, missing asset, extra asset, or digest for a different candidate fails
+closed; choose a new beta version for changed candidate content, as required by
+the beta promotion policy.
 
 If publication stops after creating a draft release, investigate the recorded
 SHA and uploaded asset names. Do not delete or replace it automatically. An

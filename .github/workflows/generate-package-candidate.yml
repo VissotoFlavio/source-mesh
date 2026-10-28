@@ -231,13 +231,14 @@ jobs:
               echo '::error::An existing release does not match the validated candidate.'
               exit 1
             fi
-            tarball_digest="$(jq -r --arg name "$tarball_name" '.assets[] | select(.name == $name) | .digest // empty' <<<"$release_json")"
             checksum_digest="$(sha256sum "$checksum" | awk '{print $1}')"
-            published_checksum_digest="$(jq -r --arg name "$checksum_name" '.assets[] | select(.name == $name) | .digest // empty' <<<"$release_json")"
-            if [[ "$tarball_digest" != "sha256:$digest" || "$published_checksum_digest" != "sha256:$checksum_digest" ]]; then
-              echo '::error::Existing release assets do not match the candidate checksum.'
-              exit 1
-            fi
+            printf '%s' "$release_json" > "$RUNNER_TEMP/existing-release.json"
+            node scripts/validate-release-assets.mjs \
+              --release-json "$RUNNER_TEMP/existing-release.json" \
+              --tarball-name "$tarball_name" \
+              --tarball-digest "sha256:$digest" \
+              --checksum-name "$checksum_name" \
+              --checksum-digest "sha256:$checksum_digest"
             release_url="$(jq -r '.url' <<<"$release_json")"
           else
             if ! grep -q 'HTTP 404' "$release_error"; then
