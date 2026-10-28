@@ -84,6 +84,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Automated reconciliation of merged release and hotfix pull requests from `master` into `develop`.
 - Documentation of the first protected, governed delivery-path validation.
 
+### Fixed
+
+- Windows create-only snapshots now fall back to exclusive creation when
+  hard-link publication is unavailable; a rare failed first write is retained
+  for explicit `--overwrite` recovery (#80).
+
 ### Changed
 
 - C# Roslyn analysis now persists bounded project chunks in the private staging
