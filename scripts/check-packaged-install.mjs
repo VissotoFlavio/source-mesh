@@ -46,6 +46,7 @@ const csharpFixture = path.join(
   'fixtures',
   'csharp-project',
 );
+const csharpMcpSnapshotGuide = 'docs/csharp-mcp-snapshot-package-guide.md';
 
 function cleanEnvironment(overrides = {}) {
   return {
@@ -196,6 +197,10 @@ async function verifyMcp(cli, root, cwd) {
       assert.equal(tool.annotations?.destructiveHint, false);
       assert.equal(tool.annotations?.openWorldHint, false);
     }
+    assert.equal(
+      client.getInstructions()?.includes(csharpMcpSnapshotGuide),
+      true,
+    );
     const result = await client.callTool({
       name: 'searchSymbols',
       arguments: { query: 'Entry' },
@@ -275,6 +280,16 @@ try {
     '@vissotoflavio',
     'source-mesh',
   );
+  const installedGuide = await readFile(
+    path.join(installed, ...csharpMcpSnapshotGuide.split('/')),
+    'utf8',
+  );
+  assert.match(
+    installedGuide,
+    /Generate the snapshot before configuring or starting\s+MCP\./u,
+  );
+  assert.equal(installedGuide.includes('Velocy'), false);
+  assert.equal(/[A-Za-z]:[\\/]/u.test(installedGuide), false);
   await command(process.execPath, [
     path.join(repository, 'scripts', 'check-package.mjs'),
     '--root',

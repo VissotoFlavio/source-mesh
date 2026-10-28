@@ -8,6 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Changed
 
+- Included generic C# MCP snapshot guidance in the offline package tarball and
+  validate its installed link from README and MCP initialization (#94).
+
 - Made the local C# snapshot prerequisite discoverable from MCP initialization
   and the MCP setup documentation, with a generic runbook for selection,
   encoding, and diagnostic budgets (#92).

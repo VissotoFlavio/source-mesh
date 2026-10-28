@@ -13,6 +13,7 @@
   },
   "files": [
     "dist",
+    "docs/csharp-mcp-snapshot-package-guide.md",
     "tools/sourcemesh-roslyn/bin/Release/net10.0/Microsoft.CodeAnalysis.CSharp.dll",
     "tools/sourcemesh-roslyn/bin/Release/net10.0/Microsoft.CodeAnalysis.dll",
     "tools/sourcemesh-roslyn/bin/Release/net10.0/sourcemesh-roslyn.deps.json",
