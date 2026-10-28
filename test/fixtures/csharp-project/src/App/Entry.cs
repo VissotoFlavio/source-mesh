@@ -15,5 +15,15 @@ namespace Synthetic.App
         {
             return ExplicitFeature.Execute(Process(input));
         }
+
+        public int FormatValue(int value)
+        {
+            return value;
+        }
+
+        public string FormatValue(string value)
+        {
+            return value;
+        }
     }
 }

@@ -4,8 +4,8 @@ import {
   encodeSnapshot,
   extractCSharpDeclarationGraph,
   type CSharpManifest,
-  type CSharpWorkerProjectResult,
   type CSharpWorkerRelationship,
+  type CSharpWorkerResult,
   type CSharpWorkerSymbol,
 } from '../src/index.js';
 
@@ -58,10 +58,10 @@ const declaration = (
   ],
 });
 
-function worker(relationships: readonly CSharpWorkerRelationship[] = []): {
-  readonly projects: readonly CSharpWorkerProjectResult[];
-  readonly diagnostics: readonly [];
-} {
+function worker(
+  relationships: readonly CSharpWorkerRelationship[] = [],
+  diagnostics: CSharpWorkerResult['diagnostics'] = [],
+): CSharpWorkerResult {
   return {
     projects: [
       {
@@ -78,7 +78,7 @@ function worker(relationships: readonly CSharpWorkerRelationship[] = []): {
         relationships,
       },
     ],
-    diagnostics: [],
+    diagnostics,
   };
 }
 
@@ -140,4 +140,67 @@ test('C# extraction is independent of repository roots and worker order', () => 
     worker: worker(),
   });
   assert.deepEqual(encodeSnapshot(first), encodeSnapshot(second));
+});
+
+test('C# compiler diagnostics remain visible to analysis callers without making a structurally complete graph partial', () => {
+  const snapshot = extractCSharpDeclarationGraph({
+    repositoryRoot: 'C:/one',
+    manifest,
+    worker: worker(
+      [],
+      [
+        {
+          project: 'App.csproj',
+          code: 'compiler_error',
+          severity: 'error',
+          path: 'src/App.cs',
+          line: 1,
+          column: 1,
+        },
+      ],
+    ),
+  });
+
+  assert.equal(snapshot.completeness, 'complete');
+});
+
+test('C# structural identity collisions keep the graph partial', () => {
+  const firstFunction = symbol('function', 'Run', 'App.App.Run(System.Int32)');
+  const secondFunction = symbol(
+    'function',
+    'Run',
+    'App.App.Run(System.String)',
+  );
+  const firstParameter = symbol('parameter', 'value', 'App.App.Run.value');
+  const secondParameter = symbol('parameter', 'value', 'App.App.Run.value');
+  const collisionWorker: CSharpWorkerResult = {
+    projects: [
+      {
+        path: 'App.csproj',
+        sourceCount: 1,
+        syntaxTreeCount: 1,
+        diagnosticCount: 0,
+        declarations: [
+          declaration(firstFunction, app, 3),
+          declaration(secondFunction, app, 4),
+          declaration(firstParameter, firstFunction, 5),
+          declaration(secondParameter, secondFunction, 6),
+        ],
+      },
+    ],
+    diagnostics: [],
+  };
+
+  const snapshot = extractCSharpDeclarationGraph({
+    repositoryRoot: 'C:/one',
+    manifest,
+    worker: collisionWorker,
+  });
+
+  assert.equal(snapshot.completeness, 'partial');
+  assert.ok(
+    snapshot.diagnostics.some(
+      (diagnostic) => diagnostic.code === 'graph.node_id_collision',
+    ),
+  );
 });

@@ -500,8 +500,11 @@ export function extractCSharpDeclarationGraph(
   const diagnostics = [...pendingDiagnostics.values()]
     .map((item) => ({ ...item, id: diagnosticId(item) }) as DiagnosticV2)
     .sort((left, right) => ordinal(left.id, right.id));
-  const completeness =
-    request.worker.diagnostics.length === 0 ? 'complete' : 'partial';
+  const completeness = diagnostics.some(
+    (diagnostic) => diagnostic.severity === 'error',
+  )
+    ? 'partial'
+    : 'complete';
   return {
     schemaVersion: 2,
     completeness,
