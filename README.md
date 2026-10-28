@@ -83,6 +83,10 @@ For SemVer beta candidates, release metadata timing, promotion gates, evidence,
 rollback, and authorization limits, see the
 [beta versioning and promotion policy](docs/beta-version-promotion.md).
 
+For the authorized GitHub workflow that turns an eligible release pull request
+into an immutable private package candidate, see
+[immutable package candidates](docs/package-candidate-recovery.md).
+
 After a build, analyze and query a repository locally:
 
 ```sh

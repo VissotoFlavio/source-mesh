@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Changed
 
+- Added the guarded GitHub workflow for immutable private package candidates,
+  with exact-SHA validation, package checks, checksums, and recovery guidance
+  (#84).
+
 - Included generic C# MCP snapshot guidance in the offline package tarball and
   validate its installed link from README and MCP initialization (#94).
 

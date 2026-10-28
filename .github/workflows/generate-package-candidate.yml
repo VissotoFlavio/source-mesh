@@ -1,0 +1,278 @@
+name: Generate immutable package candidate
+
+on:
+  issue_comment:
+    types:
+      - created
+
+concurrency:
+  group: package-candidate-${{ github.repository }}-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    if: >-
+      github.event.issue.pull_request != null &&
+      github.event.comment.body == '/generate-candidate' &&
+      github.event.comment.author_association == 'OWNER'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      checks: read
+      contents: read
+      issues: read
+      pull-requests: read
+    outputs:
+      head_branch: ${{ steps.guard.outputs.head_branch }}
+      head_sha: ${{ steps.guard.outputs.head_sha }}
+      version: ${{ steps.metadata.outputs.version }}
+      tag: ${{ steps.metadata.outputs.tag }}
+    steps:
+      - name: Check out trusted default branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+
+      - name: Verify authorized pull request and CI
+        id: guard
+        env:
+          COMMENT_AUTHOR: ${{ github.event.comment.user.login }}
+          GH_TOKEN: ${{ github.token }}
+          PULL_REQUEST_NUMBER: ${{ github.event.issue.number }}
+          REPOSITORY: ${{ github.repository }}
+          REPOSITORY_OWNER: ${{ github.repository_owner }}
+        shell: bash
+        run: bash scripts/verify-release-candidate-pr.sh
+
+      - name: Read candidate release metadata without executing it
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ steps.guard.outputs.head_sha }}
+          REPOSITORY: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          candidate_root="$RUNNER_TEMP/candidate-metadata"
+          mkdir -p "$candidate_root"
+          for file in package.json package-lock.json CHANGELOG.md; do
+            gh api -H 'Accept: application/vnd.github.raw+json' \
+              "repos/${REPOSITORY}/contents/${file}?ref=${HEAD_SHA}" > "$candidate_root/$file"
+          done
+
+      - name: Validate candidate version and privacy metadata
+        id: metadata
+        env:
+          HEAD_BRANCH: ${{ steps.guard.outputs.head_branch }}
+          RUNNER_TEMP: ${{ runner.temp }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/validate-release-candidate.mjs \
+            --root "$RUNNER_TEMP/candidate-metadata" \
+            --branch "$HEAD_BRANCH" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: validate
+    runs-on: windows-latest
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Check out the validated candidate SHA
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.validate.outputs.head_sha }}
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22.x
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          dotnet-version: 10.0.401
+
+      - name: Build and verify the offline package candidate
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          npm ci --ignore-scripts
+          dotnet restore tools/sourcemesh-roslyn/sourcemesh-roslyn.csproj --locked-mode --configfile tools/sourcemesh-roslyn/NuGet.offline.config
+          npm run csharp:offline:check
+          npm run package:check
+
+          $pack = npm pack --json | ConvertFrom-Json
+          if ($pack.Count -ne 1 -or [string]::IsNullOrWhiteSpace($pack[0].filename)) {
+            throw 'npm pack did not return exactly one tarball.'
+          }
+          $tarballName = [string]$pack[0].filename
+          $tarballPath = Join-Path (Get-Location) $tarballName
+          if (-not (Test-Path -LiteralPath $tarballPath -PathType Leaf)) {
+            throw 'npm pack did not create the reported tarball.'
+          }
+
+          $artifactDirectory = Join-Path $env:RUNNER_TEMP 'package-candidate'
+          New-Item -ItemType Directory -Force -Path $artifactDirectory | Out-Null
+          $digest = (Get-FileHash -LiteralPath $tarballPath -Algorithm SHA256).Hash.ToLowerInvariant()
+          $checksumName = "$tarballName.sha256"
+          [System.IO.File]::WriteAllText(
+            (Join-Path $artifactDirectory $checksumName),
+            "$digest *$tarballName`n",
+            [System.Text.UTF8Encoding]::new($false)
+          )
+          Copy-Item -LiteralPath $tarballPath -Destination (Join-Path $artifactDirectory $tarballName)
+
+      - name: Upload verified package candidate
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4
+        with:
+          name: package-candidate-${{ needs.validate.outputs.head_sha }}
+          path: ${{ runner.temp }}/package-candidate
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    needs:
+      - validate
+      - build
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      checks: read
+      contents: write
+      issues: read
+      pull-requests: read
+    steps:
+      - name: Check out trusted default branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+
+      - name: Revalidate the current pull request state
+        env:
+          COMMENT_AUTHOR: ${{ github.event.comment.user.login }}
+          EXPECTED_HEAD_SHA: ${{ needs.validate.outputs.head_sha }}
+          GH_TOKEN: ${{ github.token }}
+          PULL_REQUEST_NUMBER: ${{ github.event.issue.number }}
+          REPOSITORY: ${{ github.repository }}
+          REPOSITORY_OWNER: ${{ github.repository_owner }}
+        shell: bash
+        run: bash scripts/verify-release-candidate-pr.sh
+
+      - name: Revalidate release metadata from the candidate SHA
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_BRANCH: ${{ needs.validate.outputs.head_branch }}
+          HEAD_SHA: ${{ needs.validate.outputs.head_sha }}
+          REPOSITORY: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          candidate_root="$RUNNER_TEMP/candidate-metadata"
+          mkdir -p "$candidate_root"
+          for file in package.json package-lock.json CHANGELOG.md; do
+            gh api -H 'Accept: application/vnd.github.raw+json' \
+              "repos/${REPOSITORY}/contents/${file}?ref=${HEAD_SHA}" > "$candidate_root/$file"
+          done
+          node scripts/validate-release-candidate.mjs \
+            --root "$candidate_root" \
+            --branch "$HEAD_BRANCH" > "$RUNNER_TEMP/candidate-metadata-output"
+          diff -u <(printf 'version=%s\ntag=%s\n' '${{ needs.validate.outputs.version }}' '${{ needs.validate.outputs.tag }}') \
+            "$RUNNER_TEMP/candidate-metadata-output"
+
+      - name: Download verified package candidate
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4
+        with:
+          name: package-candidate-${{ needs.validate.outputs.head_sha }}
+          path: ${{ runner.temp }}/package-candidate
+
+      - name: Publish immutable pre-release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ needs.validate.outputs.head_sha }}
+          REPOSITORY: ${{ github.repository }}
+          TAG: ${{ needs.validate.outputs.tag }}
+          VERSION: ${{ needs.validate.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          candidate_root="$RUNNER_TEMP/package-candidate"
+          mapfile -t tarballs < <(find "$candidate_root" -maxdepth 1 -type f -name '*.tgz' -printf '%f\n')
+          if (( ${#tarballs[@]} != 1 )); then
+            echo '::error::The build artifact must contain exactly one tarball.'
+            exit 1
+          fi
+          tarball_name="${tarballs[0]}"
+          checksum_name="${tarball_name}.sha256"
+          tarball="$candidate_root/$tarball_name"
+          checksum="$candidate_root/$checksum_name"
+          if [[ ! -f "$checksum" ]]; then
+            echo '::error::The build artifact does not contain the tarball checksum.'
+            exit 1
+          fi
+          digest="$(sha256sum "$tarball" | awk '{print $1}')"
+          if [[ "$(tr -d '\r\n' < "$checksum")" != "$digest *$tarball_name" ]]; then
+            echo '::error::The uploaded checksum does not match the tarball.'
+            exit 1
+          fi
+
+          release_error="$(mktemp)"
+          release_json=''
+          if release_json="$(gh release view "$TAG" --repo "$REPOSITORY" --json tagName,targetCommitish,isDraft,isPrerelease,assets,url 2>"$release_error")"; then
+            if [[ "$(jq -r '.tagName' <<<"$release_json")" != "$TAG" ||
+              "$(jq -r '.targetCommitish' <<<"$release_json")" != "$HEAD_SHA" ||
+              "$(jq -r '.isDraft' <<<"$release_json")" != 'false' ||
+              "$(jq -r '.isPrerelease' <<<"$release_json")" != 'true' ]]; then
+              echo '::error::An existing release does not match the validated candidate.'
+              exit 1
+            fi
+            tarball_digest="$(jq -r --arg name "$tarball_name" '.assets[] | select(.name == $name) | .digest // empty' <<<"$release_json")"
+            checksum_digest="$(sha256sum "$checksum" | awk '{print $1}')"
+            published_checksum_digest="$(jq -r --arg name "$checksum_name" '.assets[] | select(.name == $name) | .digest // empty' <<<"$release_json")"
+            if [[ "$tarball_digest" != "sha256:$digest" || "$published_checksum_digest" != "sha256:$checksum_digest" ]]; then
+              echo '::error::Existing release assets do not match the candidate checksum.'
+              exit 1
+            fi
+            release_url="$(jq -r '.url' <<<"$release_json")"
+          else
+            if ! grep -q 'HTTP 404' "$release_error"; then
+              echo '::error::GitHub did not confirm whether the candidate release exists.'
+              exit 1
+            fi
+            tag_error="$(mktemp)"
+            if gh api "repos/${REPOSITORY}/git/ref/tags/${TAG}" >/dev/null 2>"$tag_error"; then
+              echo '::error::The candidate tag already exists without a matching release.'
+              exit 1
+            fi
+            if ! grep -q 'HTTP 404' "$tag_error"; then
+              echo '::error::GitHub did not confirm whether the candidate tag exists.'
+              exit 1
+            fi
+            release_json="$(gh api --method POST "repos/${REPOSITORY}/releases" \
+              -f tag_name="$TAG" -f target_commitish="$HEAD_SHA" \
+              -F draft=true -F prerelease=true \
+              -f name="SourceMesh ${VERSION}" \
+              -f body="Private package candidate for ${HEAD_SHA}.")"
+            release_id="$(jq -r '.id // empty' <<<"$release_json")"
+            if [[ -z "$release_id" ]]; then
+              echo '::error::GitHub did not return a release identifier.'
+              exit 1
+            fi
+            gh release upload "$TAG" "$tarball#$tarball_name" "$checksum#$checksum_name"
+            gh api --method PATCH "repos/${REPOSITORY}/releases/${release_id}" -F draft=false >/dev/null
+            release_url="$(gh release view "$TAG" --repo "$REPOSITORY" --json url --jq .url)"
+          fi
+
+          {
+            echo '### Immutable package candidate'
+            echo "- Version: \`${VERSION}\`"
+            echo "- Candidate SHA: \`${HEAD_SHA}\`"
+            echo "- SHA-256: \`${digest}\`"
+            echo "- Release: ${release_url}"
+            echo "- Assets: https://github.com/${REPOSITORY}/releases/download/${TAG}/${tarball_name} and https://github.com/${REPOSITORY}/releases/download/${TAG}/${checksum_name}"
+          } >> "$GITHUB_STEP_SUMMARY"
