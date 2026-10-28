@@ -1,6 +1,6 @@
 {
   "name": "@vissotoflavio/source-mesh",
-  "version": "0.0.0",
+  "version": "0.1.0-beta.2",
   "description": "Local-first structural graph tooling for source code",
   "private": true,
   "type": "module",
