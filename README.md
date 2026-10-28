@@ -121,7 +121,7 @@ node dist/cli.js mcp --root /path/to/repository --snapshot .sourcemesh/graph.jso
 Generate the snapshot before configuring or starting MCP. The server only
 queries an existing validated snapshot; it does not analyze the repository or
 write a snapshot. The C# selection, encoding, diagnostic-budget, create-only,
-and same-root flow is in the [local C# snapshot runbook](docs/csharp-mcp-snapshot-runbook.md).
+and same-root flow is in the [installed C# snapshot guide](docs/csharp-mcp-snapshot-package-guide.md).
 
 The server loads one validated snapshot before opening `stdio`, constructs one
 immutable query service, and registers exactly these bounded tools:

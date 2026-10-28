@@ -31,7 +31,7 @@ export const MCP_INITIALIZATION_INSTRUCTIONS = [
   'Generate the snapshot before starting this MCP server; the server never analyzes repositories or writes snapshots.',
   'For C#, run analyze with --language csharp and exactly one relative --solution or --project selector.',
   'Snapshot creation is create-only, snapshot paths are relative, and MCP must use the same repository root and snapshot.',
-  'See the local C# snapshot runbook for source-encoding and diagnostic-budget guidance.',
+  'See docs/csharp-mcp-snapshot-package-guide.md in this installed package for source-encoding and diagnostic-budget guidance.',
 ].join(' ');
 
 export const MCP_TOOL_NAMES = [
