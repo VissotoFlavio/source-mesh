@@ -168,6 +168,53 @@ test('unknown option diagnostics never echo untrusted option values', async () =
   }
 });
 
+test('read commands require an explicit restricted snapshot selection', async () => {
+  for (const args of [
+    ['symbol', '--root', '/repo', '--query', 'value'],
+    [
+      'symbol',
+      '--root',
+      '/repo',
+      '--snapshot',
+      '.sourcemesh/other.json',
+      '--query',
+      'value',
+    ],
+    [
+      'symbol',
+      '--root',
+      '/repo',
+      '--snapshot',
+      '.sourcemesh/snapshots/not/valid.json',
+      '--query',
+      'value',
+    ],
+  ]) {
+    const io = capture();
+    assert.equal(await main(args, injectedServices(), io), 2);
+    assert.equal(io.stdoutValue, '');
+    assert.match(io.stderrValue, /arguments are invalid/u);
+  }
+
+  const legacy = capture();
+  assert.equal(
+    await main(
+      [
+        'symbol',
+        '--root',
+        '/repo',
+        '--snapshot',
+        '.sourcemesh/graph.json',
+        '--query',
+        'value',
+      ],
+      injectedServices(),
+      legacy,
+    ),
+    0,
+  );
+});
+
 test(
   'linked POSIX bin invocation executes the CLI entrypoint',
   { skip: process.platform === 'win32' },
@@ -190,11 +237,11 @@ test(
   },
 );
 
-test('analyze maps create-only and replace modes and emits a stable JSON result', async () => {
+test('analyze derives a versioned create-only path and rejects overwrite', async () => {
   const writes: string[] = [];
   const services = injectedServices({
     writeSnapshot: async (_root, _snapshot, options) => {
-      writes.push(options.mode);
+      writes.push(options.path);
       return {
         path: '/selected/root/.sourcemesh/result.json',
         digest: 'b'.repeat(64),
@@ -209,8 +256,8 @@ test('analyze maps create-only and replace modes and emits a stable JSON result'
         'analyze',
         '--root',
         '/repo',
-        '--snapshot',
-        '.sourcemesh/result.json',
+        '--snapshot-id',
+        'result-1',
         '--output',
         'json',
       ],
@@ -219,16 +266,18 @@ test('analyze maps create-only and replace modes and emits a stable JSON result'
     ),
     0,
   );
-  assert.deepEqual(writes, ['create-only']);
+  assert.deepEqual(writes, ['.sourcemesh/snapshots/result-1.json']);
   assert.equal(firstIO.stderrValue, '');
   assert.deepEqual(JSON.parse(firstIO.stdoutValue), {
     schemaVersion: 1,
     command: 'analyze',
     result: {
-      snapshotPath: '.sourcemesh/result.json',
+      snapshotPath: '.sourcemesh/snapshots/result-1.json',
       completeness: 'complete',
       digest: 'b'.repeat(64),
       bytes: 42,
+      handover:
+        'Start a new MCP process with --snapshot .sourcemesh/snapshots/result-1.json; existing MCP processes remain pinned to their original snapshot.',
     },
   });
 
@@ -239,8 +288,8 @@ test('analyze maps create-only and replace modes and emits a stable JSON result'
         'analyze',
         '--root',
         '/repo',
-        '--snapshot',
-        '.sourcemesh/result.json',
+        '--snapshot-id',
+        'result-1',
         '--overwrite',
         '--output',
         'json',
@@ -248,9 +297,32 @@ test('analyze maps create-only and replace modes and emits a stable JSON result'
       services,
       overwriteIO,
     ),
-    0,
+    2,
   );
-  assert.deepEqual(writes, ['create-only', 'replace']);
+  assert.deepEqual(writes, ['.sourcemesh/snapshots/result-1.json']);
+});
+
+test('analyze rejects unsafe snapshot IDs before invoking services', async () => {
+  for (const snapshotId of [
+    '../escape',
+    'with/slash',
+    'UPPER',
+    'é',
+    'con',
+    'a'.repeat(65),
+  ]) {
+    const io = capture();
+    assert.equal(
+      await main(
+        ['analyze', '--root', '/repo', '--snapshot-id', snapshotId],
+        injectedServices(),
+        io,
+      ),
+      2,
+    );
+    assert.equal(io.stdoutValue, '');
+    assert.equal(io.stderrValue.includes(snapshotId), false);
+  }
 });
 
 test('csharp analyze uses the injected manifest discovery service', async () => {
@@ -273,6 +345,8 @@ test('csharp analyze uses the injected manifest discovery service', async () => 
         'analyze',
         '--root',
         '/repo',
+        '--snapshot-id',
+        'csharp-manifest',
         '--language',
         'csharp',
         '--project',
@@ -305,6 +379,8 @@ test('csharp analyze uses the injected manifest discovery service', async () => 
         'analyze',
         '--root',
         '/repo',
+        '--snapshot-id',
+        'csharp-manifest-failure',
         '--language',
         'csharp',
         '--project',
@@ -331,7 +407,7 @@ test('csharp analyze uses the injected manifest discovery service', async () => 
   assert.equal(JSON.parse(failureIO.stderrValue).error.code, 'analysis_failed');
 });
 
-test('csharp analyze writes a v2 snapshot and accepts persistence options', async () => {
+test('csharp analyze writes a v2 versioned create-only snapshot', async () => {
   const manifest = {
     language: 'csharp' as const,
     selection: { kind: 'project' as const, path: 'App.csproj' },
@@ -352,10 +428,7 @@ test('csharp analyze writes a v2 snapshot and accepts persistence options', asyn
     edges: [],
     diagnostics: [],
   };
-  for (const option of [
-    ['--snapshot', '.sourcemesh/ignored.json'],
-    ['--overwrite'],
-  ]) {
+  for (const snapshotId of ['csharp-v2']) {
     let writes = 0;
     const io = capture();
     assert.equal(
@@ -364,13 +437,14 @@ test('csharp analyze writes a v2 snapshot and accepts persistence options', asyn
           'analyze',
           '--root',
           '/repo',
+          '--snapshot-id',
+          snapshotId,
           '--language',
           'csharp',
           '--project',
           'App.csproj',
           '--output',
           'json',
-          ...option,
         ],
         injectedServices({
           discoverCSharpManifest: async () => ({ manifest, diagnostics: [] }),
@@ -382,10 +456,7 @@ test('csharp analyze writes a v2 snapshot and accepts persistence options', asyn
           writeSnapshot: async (_root, value, options) => {
             writes += 1;
             assert.equal(value.schemaVersion, 2);
-            assert.equal(
-              options.mode,
-              option[0] === '--overwrite' ? 'replace' : 'create-only',
-            );
+            assert.equal(options.path, '.sourcemesh/snapshots/csharp-v2.json');
             return {
               path: '/repo/.sourcemesh/result.json',
               digest: 'b'.repeat(64),
@@ -432,6 +503,8 @@ test('csharp analyze forwards public compiler options and reports compiler diagn
         'analyze',
         '--root',
         '/repo',
+        '--snapshot-id',
+        'csharp-options',
         '--language',
         'csharp',
         '--project',
@@ -474,10 +547,12 @@ test('csharp analyze forwards public compiler options and reports compiler diagn
     maxDiagnostics: 100_000,
   });
   assert.deepEqual(JSON.parse(io.stdoutValue).result, {
-    snapshotPath: '.sourcemesh/graph.json',
+    snapshotPath: '.sourcemesh/snapshots/csharp-options.json',
     completeness: 'complete',
     digest: 'a'.repeat(64),
     bytes: 12,
+    handover:
+      'Start a new MCP process with --snapshot .sourcemesh/snapshots/csharp-options.json; existing MCP processes remain pinned to their original snapshot.',
     compilerDiagnostics: { total: 2, errors: 1, warnings: 1 },
   });
 });
@@ -496,7 +571,17 @@ test('query errors use exit code 3 and sanitized JSON envelopes', async () => {
   const io = capture();
   assert.equal(
     await main(
-      ['symbol', '--root', '/repo', '--query', 'missing', '--output', 'json'],
+      [
+        'symbol',
+        '--root',
+        '/repo',
+        '--snapshot',
+        '.sourcemesh/snapshots/query.json',
+        '--query',
+        'missing',
+        '--output',
+        'json',
+      ],
       services,
       io,
     ),
@@ -540,7 +625,17 @@ test('schema-v2 CLI query envelopes preserve the loaded version', async () => {
   const successIO = capture();
   assert.equal(
     await main(
-      ['symbol', '--root', '/repo', '--query', 'App', '--output', 'json'],
+      [
+        'symbol',
+        '--root',
+        '/repo',
+        '--snapshot',
+        '.sourcemesh/snapshots/query.json',
+        '--query',
+        'App',
+        '--output',
+        'json',
+      ],
       services,
       successIO,
     ),
@@ -570,7 +665,15 @@ test('real local analysis is queryable through all six operations and is determi
     const analyzeIO = capture();
     assert.equal(
       await main(
-        ['analyze', '--root', root, '--overwrite', '--output', 'json'],
+        [
+          'analyze',
+          '--root',
+          root,
+          '--snapshot-id',
+          'first',
+          '--output',
+          'json',
+        ],
         undefined,
         analyzeIO,
       ),
@@ -579,13 +682,24 @@ test('real local analysis is queryable through all six operations and is determi
     const analyze = JSON.parse(analyzeIO.stdoutValue) as {
       result: { readonly snapshotPath: string };
     };
-    assert.equal(analyze.result.snapshotPath, '.sourcemesh/graph.json');
+    assert.equal(
+      analyze.result.snapshotPath,
+      '.sourcemesh/snapshots/first.json',
+    );
     assert.equal(analyzeIO.stdoutValue.includes(root), false);
 
     const duplicateIO = capture();
     assert.equal(
       await main(
-        ['analyze', '--root', root, '--output', 'json'],
+        [
+          'analyze',
+          '--root',
+          root,
+          '--snapshot-id',
+          'first',
+          '--output',
+          'json',
+        ],
         undefined,
         duplicateIO,
       ),
@@ -597,7 +711,10 @@ test('real local analysis is queryable through all six operations and is determi
       'snapshot_conflict',
     );
 
-    const snapshot = await openValidatedSnapshot(root);
+    const snapshot = await openValidatedSnapshot(
+      root,
+      analyze.result.snapshotPath,
+    );
     const caller = snapshot.nodes.find(
       (node) => node.kind === 'function' && node.name === 'caller',
     );
@@ -610,7 +727,14 @@ test('real local analysis is queryable through all six operations and is determi
       const io = capture();
       assert.equal(
         await main(
-          [...args, '--allow-partial', '--output', 'json'],
+          [
+            ...args,
+            '--snapshot',
+            analyze.result.snapshotPath,
+            '--allow-partial',
+            '--output',
+            'json',
+          ],
           undefined,
           io,
         ),
@@ -697,7 +821,15 @@ test('real local analysis is queryable through all six operations and is determi
     const overwriteIO = capture();
     assert.equal(
       await main(
-        ['analyze', '--root', root, '--overwrite', '--output', 'json'],
+        [
+          'analyze',
+          '--root',
+          root,
+          '--snapshot-id',
+          'replacement',
+          '--output',
+          'json',
+        ],
         undefined,
         overwriteIO,
       ),

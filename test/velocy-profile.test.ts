@@ -117,7 +117,7 @@ test('Velocy profile reports sanitized preflight codes', async () => {
 
 test('Velocy profile writes only its contained create-only snapshot and summarizes aggregates', async () => {
   const root = await rootFixture();
-  const writes: { root: string; path: string | undefined; mode: string }[] = [];
+  const writes: { root: string; path: string }[] = [];
   try {
     const result = await runVelocyLocalAcceptance(root, true, {
       discoverCSharpManifest: async (selectedRoot, selection) => {
@@ -149,7 +149,6 @@ test('Velocy profile writes only its contained create-only snapshot and summariz
         writes.push({
           root: selectedRoot,
           path: options.path,
-          mode: options.mode,
         });
         return { path: VELOCY_SNAPSHOT_PATH, digest: 'ignored', bytes: 12 };
       },
@@ -166,9 +165,7 @@ test('Velocy profile writes only its contained create-only snapshot and summariz
       diagnostics: 0,
       diagnosticCodes: [],
     });
-    assert.deepEqual(writes, [
-      { root, path: VELOCY_SNAPSHOT_PATH, mode: 'create-only' },
-    ]);
+    assert.deepEqual(writes, [{ root, path: VELOCY_SNAPSHOT_PATH }]);
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }

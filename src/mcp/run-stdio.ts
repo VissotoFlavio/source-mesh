@@ -2,7 +2,6 @@ import {
   serveStdio,
   StdioServerTransport,
 } from '@modelcontextprotocol/server/stdio';
-import { DEFAULT_SNAPSHOT_PATH } from '../snapshot/path.js';
 import { openValidatedSnapshot } from '../snapshot/bootstrap.js';
 import { createGraphQueryService } from '../query.js';
 import { MCP_MAX_REQUEST_BYTES } from './contracts.js';
@@ -18,7 +17,7 @@ function stderrDiagnostic(code: string): void {
 
 export async function runMcpStdio(
   root: string,
-  snapshotPath = DEFAULT_SNAPSHOT_PATH,
+  snapshotPath: string,
   diagnostics: McpDiagnosticSink = stderrDiagnostic,
 ): Promise<McpStdioHandle> {
   const snapshot = await openValidatedSnapshot(root, snapshotPath);
