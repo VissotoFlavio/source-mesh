@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- C# analysis now accepts the explicit legacy source-encoding and diagnostic
+  bound options, retains compiler-diagnostic summaries without marking a
+  structurally valid graph partial, and gives overloaded methods distinct
+  canonical identities (#86).
+
 ## [0.1.0-beta.2] - 2026-10-27
 
 ### Added

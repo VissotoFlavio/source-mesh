@@ -403,6 +403,85 @@ test('csharp analyze writes a v2 snapshot and accepts persistence options', asyn
   }
 });
 
+test('csharp analyze forwards public compiler options and reports compiler diagnostics', async () => {
+  const manifest = {
+    language: 'csharp' as const,
+    selection: { kind: 'project' as const, path: 'App.csproj' },
+    projects: [{ path: 'App.csproj', references: [], files: ['App.cs'] }],
+  };
+  const snapshot: SnapshotV2 = {
+    schemaVersion: 2,
+    completeness: 'complete',
+    repository: { root: '.', name: 'repository' },
+    nodes: [
+      {
+        id: repositoryIdV2(),
+        kind: 'repository',
+        root: '.',
+        name: 'repository',
+      },
+    ],
+    edges: [],
+    diagnostics: [],
+  };
+  let receivedOptions: unknown;
+  const io = capture();
+  assert.equal(
+    await main(
+      [
+        'analyze',
+        '--root',
+        '/repo',
+        '--language',
+        'csharp',
+        '--project',
+        'App.csproj',
+        '--source-encoding',
+        'windows-1252',
+        '--max-diagnostics',
+        '100000',
+        '--output',
+        'json',
+      ],
+      injectedServices({
+        discoverCSharpManifest: async () => ({ manifest, diagnostics: [] }),
+        analyzeCSharpManifest: async (_root, _manifest, options) => {
+          receivedOptions = options;
+          return {
+            projects: [],
+            diagnostics: [
+              {
+                project: 'App.csproj',
+                code: 'compiler_error',
+                severity: 'error',
+              },
+              {
+                project: 'App.csproj',
+                code: 'compiler_warning',
+                severity: 'warning',
+              },
+            ],
+          };
+        },
+        extractCSharpDeclarationGraph: () => snapshot,
+      }),
+      io,
+    ),
+    0,
+  );
+  assert.deepEqual(receivedOptions, {
+    sourceEncoding: 'windows-1252',
+    maxDiagnostics: 100_000,
+  });
+  assert.deepEqual(JSON.parse(io.stdoutValue).result, {
+    snapshotPath: '.sourcemesh/graph.json',
+    completeness: 'complete',
+    digest: 'a'.repeat(64),
+    bytes: 12,
+    compilerDiagnostics: { total: 2, errors: 1, warnings: 1 },
+  });
+});
+
 test('query errors use exit code 3 and sanitized JSON envelopes', async () => {
   const services = injectedServices({
     createGraphQueryService: () =>

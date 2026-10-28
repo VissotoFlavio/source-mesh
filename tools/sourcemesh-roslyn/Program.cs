@@ -256,6 +256,17 @@ internal static class Program
 
     static string MemberRole(ISymbol? symbol) => symbol?.IsStatic == true ? "static" : "instance";
 
+    static string FunctionQualifiedName(SymbolResult parent, string name, IMethodSymbol? symbol, ParameterListSyntax parameters, TypeParameterListSyntax? typeParameters)
+    {
+        var prefix = parent.QualifiedName;
+        if (prefix == parent.Path) prefix = "";
+        var arity = symbol?.Arity ?? typeParameters?.Parameters.Count ?? 0;
+        var parameterTypes = symbol is not null
+            ? string.Join(",", symbol.Parameters.Select(parameter => Display(parameter.Type)))
+            : string.Join(",", parameters.Parameters.Select(parameter => parameter.Type?.ToString() ?? "?"));
+        return JoinName(prefix, $"{name}{(arity == 0 ? "" : $"`{arity}")}({parameterTypes})");
+    }
+
     static void AddLocalSymbol(ProjectAnalysis analysis, ISymbol? symbol, SymbolResult result)
     {
         if (symbol is null) return;
@@ -366,7 +377,7 @@ internal static class Program
                 return;
             }
             var methodSymbol = model.GetDeclaredSymbol(method);
-            var result = new SymbolResult("function", node.SyntaxTree.FilePath, name, JoinName(parent.QualifiedName == module.QualifiedName ? "" : parent.QualifiedName, name), MemberRole(methodSymbol));
+            var result = new SymbolResult("function", node.SyntaxTree.FilePath, name, FunctionQualifiedName(parent, name, methodSymbol, method.ParameterList, method.TypeParameterList), MemberRole(methodSymbol));
             AddDeclaration(analysis, method, methodSymbol, result, parent);
             AddParameters(analysis, method, method.ParameterList, result);
             CollectFunctionBody(analysis, method.Body, method.ExpressionBody?.Expression, module, namespaceSymbol, typeSymbol, result);
@@ -383,7 +394,7 @@ internal static class Program
                 return;
             }
             var localSymbol = model.GetDeclaredSymbol(localFunction);
-            var result = new SymbolResult("function", node.SyntaxTree.FilePath, name, JoinName(parent.QualifiedName == module.QualifiedName ? "" : parent.QualifiedName, name), MemberRole(localSymbol));
+            var result = new SymbolResult("function", node.SyntaxTree.FilePath, name, FunctionQualifiedName(parent, name, localSymbol, localFunction.ParameterList, localFunction.TypeParameterList), MemberRole(localSymbol));
             AddDeclaration(analysis, localFunction, localSymbol, result, parent);
             AddParameters(analysis, localFunction, localFunction.ParameterList, result);
             CollectFunctionBody(analysis, localFunction.Body, null, module, namespaceSymbol, typeSymbol, result);
