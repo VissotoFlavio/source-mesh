@@ -573,17 +573,17 @@ test(
     const process = findQualifiedNode(
       snapshot,
       'function',
-      'Synthetic.App.Application.Process',
+      'Synthetic.App.Application.Process(int)',
     );
     const run = findQualifiedNode(
       snapshot,
       'function',
-      'Synthetic.App.Application.Run',
+      'Synthetic.App.Application.Run(int)',
     );
     const format = findQualifiedNode(
       snapshot,
       'function',
-      'Synthetic.Library.BaseProcessor.Format',
+      'Synthetic.Library.BaseProcessor.Format(int)',
     );
     const explicitFeature = findQualifiedNode(
       snapshot,
@@ -593,13 +593,13 @@ test(
     const execute = findQualifiedNode(
       snapshot,
       'function',
-      'Synthetic.App.ExplicitFeature.Execute',
+      'Synthetic.App.ExplicitFeature.Execute(int)',
     );
     const name = findNode(snapshot, 'variable', 'Name');
     const processValue = findQualifiedNode(
       snapshot,
       'parameter',
-      'Synthetic.App.Application.Process.value',
+      'Synthetic.App.Application.Process(int).value',
     );
     const runInput = findNode(snapshot, 'parameter', 'input');
     assert.ok(findNode(snapshot, 'class', 'SharedType'));
@@ -658,7 +658,7 @@ test(
           '--name',
           'Process',
           '--qualified-name',
-          'Synthetic.App.Application.Process',
+          'Synthetic.App.Application.Process(int)',
           '--limit',
           '10',
         ],
@@ -666,7 +666,7 @@ test(
         input: {
           function: {
             name: 'Process',
-            qualifiedName: 'Synthetic.App.Application.Process',
+            qualifiedName: 'Synthetic.App.Application.Process(int)',
           },
           limit: 10,
           allowPartial: true,

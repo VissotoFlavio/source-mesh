@@ -70,6 +70,8 @@ interface AnalyzeCommand {
   readonly language?: 'csharp';
   readonly solution?: string;
   readonly project?: string;
+  readonly sourceEncoding?: 'windows-1252';
+  readonly maxDiagnostics?: number;
   readonly output: OutputFormat;
   readonly overwrite: boolean;
 }
@@ -122,6 +124,11 @@ interface SnapshotAnalyzeResult {
   readonly completeness: SnapshotV1['completeness'];
   readonly digest: string;
   readonly bytes: number;
+  readonly compilerDiagnostics?: {
+    readonly total: number;
+    readonly errors: number;
+    readonly warnings: number;
+  };
 }
 
 interface CSharpManifestAnalyzeResult {
@@ -317,7 +324,7 @@ function helpText(command?: CommandName): string {
     ].join('\n');
   const usage: Record<CommandName, string> = {
     analyze:
-      'sourcemesh analyze --root <path> [--snapshot <relative>] [--tsconfig <relative>] [--language csharp --solution <relative>|--project <relative>] [--output human|json] [--overwrite]',
+      'sourcemesh analyze --root <path> [--snapshot <relative>] [--tsconfig <relative>] [--language csharp --solution <relative>|--project <relative> [--source-encoding windows-1252] [--max-diagnostics <1..100000>]] [--output human|json] [--overwrite]',
     mcp: 'sourcemesh mcp --root <path> [--snapshot <relative>]',
     symbol:
       'sourcemesh symbol --root <path> [--snapshot <relative>] --query <text> [--kind <kind>] [--path <relative>] [--container-id <node-id>] [--limit <1..100>] [--cursor <token>] [--allow-partial] [--output human|json]',
@@ -355,6 +362,8 @@ function optionKinds(command: CommandName): ReadonlyMap<string, OptionKind> {
       ['--language', 'value'],
       ['--solution', 'value'],
       ['--project', 'value'],
+      ['--source-encoding', 'value'],
+      ['--max-diagnostics', 'value'],
       ['--overwrite', 'flag'],
     ]);
   const query: [string, OptionKind][] = [
@@ -493,14 +502,38 @@ function parseArguments(argv: readonly string[]): ParsedCommand {
     const languageValue = valueOf(values, '--language');
     const solutionValue = valueOf(values, '--solution');
     const projectValue = valueOf(values, '--project');
+    const sourceEncodingValue = valueOf(values, '--source-encoding');
+    const maxDiagnosticsValue = valueOf(values, '--max-diagnostics');
     if (languageValue === undefined) {
-      if (solutionValue !== undefined || projectValue !== undefined)
+      if (
+        solutionValue !== undefined ||
+        projectValue !== undefined ||
+        sourceEncodingValue !== undefined ||
+        maxDiagnosticsValue !== undefined
+      )
         throw invalid('language');
     } else {
       if (languageValue !== 'csharp') throw invalid('language');
       if ((solutionValue === undefined) === (projectValue === undefined))
         throw invalid('selection');
       if (tsconfig !== undefined) throw invalid('tsconfig');
+    }
+    if (
+      sourceEncodingValue !== undefined &&
+      sourceEncodingValue !== 'windows-1252'
+    )
+      throw invalid('source-encoding');
+    let maxDiagnostics: number | undefined;
+    if (maxDiagnosticsValue !== undefined) {
+      if (!/^[0-9]+$/u.test(maxDiagnosticsValue))
+        throw invalid('max-diagnostics');
+      maxDiagnostics = Number(maxDiagnosticsValue);
+      if (
+        !Number.isSafeInteger(maxDiagnostics) ||
+        maxDiagnostics < 1 ||
+        maxDiagnostics > 100_000
+      )
+        throw invalid('max-diagnostics');
     }
     const solution =
       solutionValue === undefined
@@ -518,6 +551,10 @@ function parseArguments(argv: readonly string[]): ParsedCommand {
       ...(languageValue === undefined ? {} : { language: 'csharp' as const }),
       ...(solution === undefined ? {} : { solution }),
       ...(project === undefined ? {} : { project }),
+      ...(sourceEncodingValue === undefined
+        ? {}
+        : { sourceEncoding: sourceEncodingValue }),
+      ...(maxDiagnostics === undefined ? {} : { maxDiagnostics }),
       output: outputValue,
       overwrite: values.has('--overwrite'),
     };
@@ -702,6 +739,14 @@ async function executeAnalyze(
       const worker = await services.analyzeCSharpManifest(
         command.root,
         manifest.manifest,
+        {
+          ...(command.sourceEncoding === undefined
+            ? {}
+            : { sourceEncoding: command.sourceEncoding }),
+          ...(command.maxDiagnostics === undefined
+            ? {}
+            : { maxDiagnostics: command.maxDiagnostics }),
+        },
       );
       const snapshot = services.extractCSharpDeclarationGraph({
         repositoryRoot: command.root,
@@ -725,6 +770,15 @@ async function executeAnalyze(
         completeness: snapshot.completeness,
         digest: result.digest,
         bytes: result.bytes,
+        compilerDiagnostics: {
+          total: worker.diagnostics.length,
+          errors: worker.diagnostics.filter(
+            (diagnostic) => diagnostic.severity === 'error',
+          ).length,
+          warnings: worker.diagnostics.filter(
+            (diagnostic) => diagnostic.severity === 'warning',
+          ).length,
+        },
       };
     }
     const discovery = await services.discoverSourceFiles(command.root);
@@ -903,6 +957,9 @@ function emitSuccess(
             completeness: analysis.completeness,
             digest: analysis.digest,
             bytes: analysis.bytes,
+            ...(analysis.compilerDiagnostics === undefined
+              ? {}
+              : { compilerDiagnostics: analysis.compilerDiagnostics }),
           }
         : result;
     const schemaVersion =
@@ -928,8 +985,13 @@ function emitSuccess(
       );
       return;
     }
+    const compilerDiagnostics = analysis.compilerDiagnostics;
     io.stdout(
-      `Snapshot written to ${analysis.snapshotPath} (${analysis.completeness}; ${analysis.bytes} bytes; ${analysis.digest})\n`,
+      `Snapshot written to ${analysis.snapshotPath} (${analysis.completeness}; ${analysis.bytes} bytes; ${analysis.digest})${
+        compilerDiagnostics === undefined
+          ? ''
+          : `; compiler diagnostics: ${compilerDiagnostics.total} (${compilerDiagnostics.errors} errors, ${compilerDiagnostics.warnings} warnings)`
+      }\n`,
     );
   } else {
     io.stdout(`${humanQuery(command.command, result as QueryResponse)}\n`);
