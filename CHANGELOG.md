@@ -8,6 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- Made the Windows create-only snapshot cleanup regression deterministic by
+  simulating successful hard-link publication at the writer boundary (#88).
+
 - C# analysis now accepts the explicit legacy source-encoding and diagnostic
   bound options, retains compiler-diagnostic summaries without marking a
   structurally valid graph partial, and gives overloaded methods distinct
