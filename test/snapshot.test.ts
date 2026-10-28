@@ -1,5 +1,4 @@
 import {
-  link,
   lstat,
   mkdtemp,
   mkdir,
@@ -444,7 +443,11 @@ describe('schema-v1 snapshots', () => {
       {
         link: async (existingPath, newPath) => {
           links += 1;
-          return link(existingPath, newPath);
+          // Model successful exclusive publication without volume hard-link support.
+          await writeFile(newPath, await readFile(existingPath), {
+            flag: 'wx',
+            mode: 0o600,
+          });
         },
         open: async (file, flags, mode) => {
           if (String(file) === graphPath(root)) finalOpens += 1;
