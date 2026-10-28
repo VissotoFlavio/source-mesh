@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Changed
+
+- Made the local C# snapshot prerequisite discoverable from MCP initialization
+  and the MCP setup documentation, with a generic runbook for selection,
+  encoding, and diagnostic budgets (#92).
+
 ## [0.1.0-beta.3] - 2026-10-28
 
 ### Fixed

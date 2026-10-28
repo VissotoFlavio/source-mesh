@@ -12,6 +12,7 @@ import {
   fileRelationRequest,
   getSymbolRequest,
   MCP_FRAME_OVERHEAD_BYTES,
+  MCP_INITIALIZATION_INSTRUCTIONS,
   MCP_MAX_MESSAGE_BYTES,
   MCP_SERVER_NAME,
   MCP_SERVER_VERSION,
@@ -134,6 +135,7 @@ export function createMcpServer(
     { name: MCP_SERVER_NAME, version: MCP_SERVER_VERSION },
     {
       capabilities: { tools: {} },
+      instructions: MCP_INITIALIZATION_INSTRUCTIONS,
       maxToolInputElements: 64,
     },
   );

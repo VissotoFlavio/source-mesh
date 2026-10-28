@@ -17,6 +17,7 @@ import {
 } from '../src/index.js';
 import { main } from '../src/cli.js';
 import {
+  MCP_INITIALIZATION_INSTRUCTIONS,
   MCP_MAX_MESSAGE_BYTES,
   MCP_TOOL_NAMES,
   validateToolInput,
@@ -275,6 +276,19 @@ processTest(
         name: 'SourceMesh',
         version: '0.0.0',
       });
+      assert.equal(
+        connection.client.getInstructions(),
+        MCP_INITIALIZATION_INSTRUCTIONS,
+      );
+      assert.match(
+        MCP_INITIALIZATION_INSTRUCTIONS,
+        /Generate the snapshot before starting this MCP server/u,
+      );
+      assert.equal(MCP_INITIALIZATION_INSTRUCTIONS.includes('Velocy'), false);
+      assert.equal(
+        /[A-Za-z]:[\\/]/u.test(MCP_INITIALIZATION_INSTRUCTIONS),
+        false,
+      );
 
       await assertToolCall(
         connection.client,
