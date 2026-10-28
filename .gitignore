@@ -1,0 +1,29 @@
+# Dependencies and generated output
+node_modules/
+dist/
+coverage/
+.sourcemesh/
+tools/sourcemesh-roslyn/bin/
+tools/sourcemesh-roslyn/obj/
+
+# Tool caches
+.eslintcache
+*.tsbuildinfo
+.npm/
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+
+# Logs
+*.log
+npm-debug.log*
+
+# Editors and operating systems
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

@@ -1,0 +1,56 @@
+# SourceMesh Roslyn helper
+
+This is a local, offline `net10.0` helper. Restore is intentionally not part of
+runtime operation. A build operator must use the committed `packages.lock.json`
+with locked restore against the committed `packages/` feed. The versioned
+`NuGet.offline.config` clears every external source; `NuGet.Config` preserves the
+same local-only behavior for default tooling. Runtime only executes the
+repository-built `bin/Release/net10.0/sourcemesh-roslyn.dll` through the fixed
+Windows `dotnet.exe` host.
+
+The committed feed contains the vetted `Microsoft.CodeAnalysis.CSharp` 5.9.0 package
+and its exact Roslyn dependencies: `Microsoft.CodeAnalysis.Common` 5.9.0 and
+`Microsoft.CodeAnalysis.Analyzers` 5.9.0-1.26328.17. The reviewed lockfile
+records their vetted hashes.
+
+Protocol v1 accepts exactly one bounded UTF-8 JSONL request on stdin. The helper
+emits a small v2 UTF-8 JSONL response on stdout that points to a private chunk
+manifest in its working directory. Project declarations, relationships, and
+diagnostics are written to bounded chunks instead of one monolithic response.
+Any malformed, oversized, or invalid request exits nonzero without diagnostic
+text; normal operation emits no stderr output. The parent Node process validates
+and merges the chunks, recalculates schema-v2 graph identities, and decides which
+resolved local outcomes become edges.
+
+The package feed and build output are repository-local, so neither is published
+by the private npm package as source material. The Windows x64 Release payload
+is copied into the local npm tarball only after `scripts/check-package.mjs`
+validates its closed allowlist and SHA-256 inventory. Packaging writes the
+compiled helper's hash to the tarball's integrity manifest. Build the committed feed
+without network:
+
+```powershell
+dotnet restore tools/sourcemesh-roslyn/sourcemesh-roslyn.csproj --locked-mode --configfile tools/sourcemesh-roslyn/NuGet.offline.config
+dotnet build tools/sourcemesh-roslyn/sourcemesh-roslyn.csproj --no-restore --configuration Release
+npm run csharp:offline:check
+npm run package:check
+```
+
+`npm run csharp:offline:check` first rebuilds the repository-owned Release helper
+from the current sources, then executes it beneath the repository offline guard.
+It verifies platform references such as `Console` and `List<T>`, and proves that
+a diagnostic stream exceeding the bounded protocol limit fails closed.
+
+Local analysis has no implicit wall-clock deadline: elapsed time depends on the
+repository and the host machine. Source and protocol byte limits, read-operation
+limits, diagnostic budgets, and validation remain enforced. An integrating
+automation may explicitly pass a positive `timeoutMs` within Node's timer range;
+users can cancel a local command normally instead of being failed by an arbitrary
+default timeout.
+
+The package remains framework-dependent: a consumer must have .NET 10 installed
+at `C:\Program Files\dotnet\dotnet.exe`. Consumer installation uses
+`npm install --offline --ignore-scripts`; it never restores, compiles, downloads,
+or runs a lifecycle install script. The package distribution contract, bundled
+Node dependency inventory, payload sizes, and exclusions are documented in
+`docs/package-distribution.md` and `THIRD-PARTY-NOTICES.md`.
