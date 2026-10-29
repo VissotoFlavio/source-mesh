@@ -153,7 +153,7 @@ async function runCli(cli, args, cwd) {
   return JSON.parse(result.stdout);
 }
 
-async function verifyMcp(cli, root, cwd) {
+async function verifyMcp(cli, root, cwd, snapshot) {
   let stderr = '';
   const env = cleanEnvironment();
   const transport = new StdioClientTransport({
@@ -165,6 +165,8 @@ async function verifyMcp(cli, root, cwd) {
       'mcp',
       '--root',
       root,
+      '--snapshot',
+      snapshot,
     ],
     cwd,
     env,
@@ -344,10 +346,14 @@ try {
   const fixture = path.join(temporaryRoot, 'fixture');
   await cp(csharpFixture, fixture, { recursive: true });
   const cli = path.join(installed, 'dist', 'cli.js');
-  const analyzeArgs = [
+  const initialSnapshotId = 'package-initial';
+  const initialSnapshotPath = `.sourcemesh/snapshots/${initialSnapshotId}.json`;
+  const analyzeArgs = (snapshotId) => [
     'analyze',
     '--root',
     fixture,
+    '--snapshot-id',
+    snapshotId,
     '--language',
     'csharp',
     '--solution',
@@ -355,15 +361,20 @@ try {
     '--output',
     'json',
   ];
-  const analysis = await runCli(cli, analyzeArgs, consumer);
+  const analysis = await runCli(cli, analyzeArgs(initialSnapshotId), consumer);
   assert.equal(analysis.schemaVersion, 2);
-  assert.equal(analysis.result?.snapshotPath, '.sourcemesh/graph.json');
-  const snapshot = path.join(fixture, '.sourcemesh', 'graph.json');
+  assert.equal(analysis.result?.snapshotPath, initialSnapshotPath);
+  const snapshot = path.join(fixture, ...initialSnapshotPath.split('/'));
   const snapshotBytes = await readFile(snapshot);
   await assert.rejects(
     command(
       process.execPath,
-      ['--import', pathToFileURL(denyNetwork).href, cli, ...analyzeArgs],
+      [
+        '--import',
+        pathToFileURL(denyNetwork).href,
+        cli,
+        ...analyzeArgs(initialSnapshotId),
+      ],
       {
         cwd: consumer,
         env: cleanEnvironment(),
@@ -375,14 +386,13 @@ try {
     },
   );
   assert.deepEqual(await readFile(snapshot), snapshotBytes);
-  const replacement = await runCli(
-    cli,
-    [...analyzeArgs, '--overwrite'],
-    consumer,
-  );
-  assert.equal(replacement.schemaVersion, 2);
-  assert.equal(replacement.result?.snapshotPath, '.sourcemesh/graph.json');
-  await verifyMcp(cli, fixture, consumer);
+  const handoverSnapshotId = 'package-handover';
+  const handoverSnapshotPath = `.sourcemesh/snapshots/${handoverSnapshotId}.json`;
+  const handover = await runCli(cli, analyzeArgs(handoverSnapshotId), consumer);
+  assert.equal(handover.schemaVersion, 2);
+  assert.equal(handover.result?.snapshotPath, handoverSnapshotPath);
+  await verifyMcp(cli, fixture, consumer, initialSnapshotPath);
+  await verifyMcp(cli, fixture, consumer, handoverSnapshotPath);
 } finally {
   await rm(temporaryRoot, { recursive: true, force: true });
 }
