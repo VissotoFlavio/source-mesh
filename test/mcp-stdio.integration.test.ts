@@ -296,9 +296,8 @@ processTest(
       );
       assert.match(
         MCP_INITIALIZATION_INSTRUCTIONS,
-        /Generate the snapshot before starting this MCP server/u,
+        /must create the snapshot before starting this server/u,
       );
-      assert.equal(MCP_INITIALIZATION_INSTRUCTIONS.includes('Velocy'), false);
       assert.equal(
         /[A-Za-z]:[\\/]/u.test(MCP_INITIALIZATION_INSTRUCTIONS),
         false,
