@@ -215,20 +215,20 @@ if ($offlineGuardItem.PSIsContainer -or
   throw 'Refusing to run: offline guard must be a regular non-reparse file.'
 }
 Assert-NoReparseAncestors -Path $offlineGuard -Label 'offline guard'
-& $nodeExe --import $offlineGuard $cliPath analyze --root $targetRoot --language csharp --solution 'src/Velocy.API.sln'
+& $nodeExe --import $offlineGuard $cliPath analyze --root $targetRoot --snapshot-id velocy-checkout-20261028 --language csharp --solution 'src/Velocy.API.sln'
 if ($LASTEXITCODE -ne 0) {
   throw 'SourceMesh analyze failed; MCP was not started.'
 }
 ```
 
-The default snapshot is `.sourcemesh/graph.json` under the selected root. A
-successful analysis creates that snapshot; MCP only serves the validated
-snapshot and does not analyze the repository itself. For a TypeScript/JavaScript
+Each analysis requires a fresh snapshot ID and creates only the derived
+`.sourcemesh/snapshots/<id>.json` path. MCP only serves the explicitly selected,
+validated snapshot and does not analyze the repository itself. For a TypeScript/JavaScript
 target, use the same absolute `$nodeExe`, `$offlineGuard`, and `$cliPath`
 variables with this guarded command and no C# selector:
 
 ```powershell
-& $nodeExe --import $offlineGuard $cliPath analyze --root $targetRoot
+& $nodeExe --import $offlineGuard $cliPath analyze --root $targetRoot --snapshot-id typescript-checkout-20261028
 if ($LASTEXITCODE -ne 0) {
   throw 'SourceMesh analyze failed; do not start MCP.'
 }
@@ -257,7 +257,9 @@ quoting and escape Windows backslashes as shown:
         "<absolute-path-to-source-mesh>\\dist\\cli.js",
         "mcp",
         "--root",
-        "<absolute-path-to-target-repository>"
+        "<absolute-path-to-target-repository>",
+        "--snapshot",
+        ".sourcemesh/snapshots/velocy-checkout-20261028.json"
       ]
     }
   }
@@ -267,8 +269,14 @@ quoting and escape Windows backslashes as shown:
 The equivalent local command, using the same absolute paths and root, is:
 
 ```powershell
-& $nodeExe --import $offlineGuard $cliPath mcp --root $targetRoot
+& $nodeExe --import $offlineGuard $cliPath mcp --root $targetRoot --snapshot .sourcemesh/snapshots/velocy-checkout-20261028.json
 ```
+
+To hand over to a later analysis, publish a different snapshot ID and start a
+new MCP process with that derived path; a running process remains pinned to the
+content it validated at startup. `.sourcemesh/graph.json` is legacy read-only
+compatibility only and must be supplied explicitly to a read command. Do not
+automatically delete either legacy or versioned snapshots.
 
 MCP protocol messages use stdout exclusively. Startup, lifecycle, and
 sanitized error diagnostics use stderr. Keep stdout connected only to the MCP
@@ -294,12 +302,12 @@ before selecting a repository.
 
 ## Troubleshooting and safety
 
-Analysis is create-only. If `.sourcemesh/graph.json` already exists, the
-command leaves the existing snapshot intact. To inspect the exact diagnostic,
+Analysis is create-only. If the selected versioned snapshot already exists, the
+command leaves it intact. To inspect the exact diagnostic,
 repeat the same command with `--output json`:
 
 ```powershell
-& $nodeExe --import $offlineGuard $cliPath analyze --root $targetRoot --language csharp --solution 'src/Velocy.API.sln' --output json
+& $nodeExe --import $offlineGuard $cliPath analyze --root $targetRoot --snapshot-id velocy-checkout-20261028 --language csharp --solution 'src/Velocy.API.sln' --output json
 ```
 
 That conflict command writes no stdout, writes this sanitized JSON envelope to
@@ -434,11 +442,11 @@ excludes `.sourcemesh`, and never deletes or writes back to the original. Then
 analyze and serve that same copy, preserving the C# selector:
 
 ```powershell
-& $nodeExe --import $offlineGuard $cliPath analyze --root $createdCanonical --language csharp --solution 'src/Velocy.API.sln'
+& $nodeExe --import $offlineGuard $cliPath analyze --root $createdCanonical --snapshot-id velocy-copy-20261028 --language csharp --solution 'src/Velocy.API.sln'
 if ($LASTEXITCODE -ne 0) {
   throw 'SourceMesh analyze failed; MCP was not started.'
 }
-& $nodeExe --import $offlineGuard $cliPath mcp --root $createdCanonical
+& $nodeExe --import $offlineGuard $cliPath mcp --root $createdCanonical --snapshot .sourcemesh/snapshots/velocy-copy-20261028.json
 ```
 
 Do not use a copy command that deletes from the target or writes back to it.

@@ -77,7 +77,7 @@ function error(code: string): NodeJS.ErrnoException {
   return Object.assign(new Error(code), { code });
 }
 function graphPath(root: string): string {
-  return path.join(root, '.sourcemesh', 'graph.json');
+  return path.join(root, '.sourcemesh', 'snapshots', 'test.json');
 }
 async function withWriterOverrides<T>(
   overrides: Parameters<typeof createSnapshotWriterForTesting>[0],
@@ -95,7 +95,9 @@ function failFinalHandleMethod(
     mode?: Parameters<typeof open>[2],
   ) => {
     const handle = await open(file, flags, mode);
-    if (!String(file).endsWith(path.join('.sourcemesh', 'graph.json')))
+    if (
+      !String(file).endsWith(path.join('.sourcemesh', 'snapshots', 'test.json'))
+    )
       return handle;
     return new Proxy(handle, {
       get(target, property) {
@@ -226,30 +228,60 @@ describe('schema-v1 snapshots', () => {
     assert.throws(() => decodeSnapshot(encodeSnapshot(forged)), /identity/i);
   });
 
-  it('writes and loads only under .sourcemesh with explicit replacement', async () => {
+  it('writes and loads only versioned create-only snapshots', async () => {
     const root = await mkdtemp(path.join(process.cwd(), '.snapshot-test-'));
     roots.push(root);
-    const first = await writeSnapshot(root, snapshot(), { mode: 'replace' });
-    assert.equal(first.path, path.join(root, '.sourcemesh', 'graph.json'));
+    const first = await writeSnapshot(root, snapshot(), {
+      path: '.sourcemesh/snapshots/replace.json',
+    });
+    assert.equal(
+      first.path,
+      path.join(root, '.sourcemesh', 'snapshots', 'replace.json'),
+    );
     const emptyRoot = await mkdtemp(
       path.join(process.cwd(), '.snapshot-create-only-'),
     );
     roots.push(emptyRoot);
     const created = await writeSnapshot(emptyRoot, snapshot(), {
-      mode: 'create-only',
+      path: '.sourcemesh/snapshots/test.json',
     });
-    assert.equal((await openValidatedSnapshot(emptyRoot)).schemaVersion, 1);
     assert.equal(
-      created.path.endsWith(path.join('.sourcemesh', 'graph.json')),
+      (
+        await openValidatedSnapshot(
+          emptyRoot,
+          '.sourcemesh/snapshots/test.json',
+        )
+      ).schemaVersion,
+      1,
+    );
+    assert.equal(
+      created.path.endsWith(path.join('.sourcemesh', 'snapshots', 'test.json')),
       true,
     );
     const createOnlyBytes = await readFile(created.path);
     await assert.rejects(
       () =>
-        writeSnapshot(emptyRoot, snapshot('other'), { mode: 'create-only' }),
+        writeSnapshot(emptyRoot, snapshot('other'), {
+          path: '.sourcemesh/snapshots/test.json',
+        }),
       { code: 'snapshot_conflict' },
     );
     assert.deepEqual(await readFile(created.path), createOnlyBytes);
+    await assert.rejects(
+      () =>
+        writeSnapshot(emptyRoot, snapshot(), {
+          path: '.sourcemesh/snapshots/replace.json',
+          mode: 'replace',
+        } as never),
+      { code: 'path_invalid' },
+    );
+    await assert.rejects(
+      () =>
+        writeSnapshot(emptyRoot, snapshot(), {
+          path: '.sourcemesh/graph.json',
+        }),
+      { code: 'path_invalid' },
+    );
     assert.equal(
       (await readdir(path.join(emptyRoot, '.sourcemesh'))).some((item) =>
         item.endsWith('.tmp'),
@@ -261,35 +293,33 @@ describe('schema-v1 snapshots', () => {
     );
     roots.push(customRoot);
     const custom = await writeSnapshot(customRoot, snapshot(), {
-      path: '.sourcemesh/custom.json',
-      mode: 'replace',
+      path: '.sourcemesh/snapshots/custom.json',
     });
     assert.equal(
       custom.path,
-      path.join(customRoot, '.sourcemesh', 'custom.json'),
+      path.join(customRoot, '.sourcemesh', 'snapshots', 'custom.json'),
     );
     assert.equal(
-      (await openValidatedSnapshot(customRoot, '.sourcemesh/custom.json'))
-        .schemaVersion,
+      (
+        await openValidatedSnapshot(
+          customRoot,
+          '.sourcemesh/snapshots/custom.json',
+        )
+      ).schemaVersion,
       1,
     );
-    const createOnly = writeSnapshot(root, snapshot('other'), {
-      mode: 'create-only',
+    await writeSnapshot(root, snapshot('other'), {
+      path: '.sourcemesh/snapshots/test.json',
     });
     await assert.rejects(
-      createOnly,
-      (error: unknown) =>
-        (error as { code: string }).code === 'snapshot_conflict' ||
-        (error as { code: string }).code === 'snapshot_io',
-    );
-    await writeSnapshot(root, snapshot('other'), { mode: 'replace' });
-    assert.equal((await openValidatedSnapshot(root)).repository.name, 'other');
-    await assert.rejects(
       () =>
-        writeSnapshot(root, snapshot(), {
-          path: '../escape.json',
-          mode: 'replace',
+        writeSnapshot(root, snapshot('other'), {
+          path: '.sourcemesh/snapshots/replace.json',
         }),
+      { code: 'snapshot_conflict' },
+    );
+    await assert.rejects(
+      () => writeSnapshot(root, snapshot(), { path: '../escape.json' }),
       { code: 'path_invalid' },
     );
     await mkdir(path.join(root, 'outside'), { recursive: true });
@@ -298,8 +328,19 @@ describe('schema-v1 snapshots', () => {
       () => openValidatedSnapshot(root, 'outside/graph.json'),
       { code: 'path_invalid' },
     );
+    await writeFile(
+      path.join(root, '.sourcemesh', 'graph.json'),
+      encodeSnapshot(snapshot('legacy')),
+    );
     assert.equal(
-      (await readFile(first.path)).toString('utf8').includes('"name":"other"'),
+      (await openValidatedSnapshot(root, '.sourcemesh/graph.json')).repository
+        .name,
+      'legacy',
+    );
+    assert.equal(
+      (await readFile(first.path))
+        .toString('utf8')
+        .includes('"name":"repository"'),
       true,
     );
     const destination = await lstat(first.path);
@@ -331,10 +372,7 @@ describe('schema-v1 snapshots', () => {
       );
       await assert.rejects(
         () =>
-          writeSnapshot(root, snapshot(), {
-            path: '.sourcemesh/link.json',
-            mode: 'replace',
-          }),
+          writeSnapshot(root, snapshot(), { path: '.sourcemesh/link.json' }),
         { code: 'path_invalid' },
       );
     } catch (error) {
@@ -362,18 +400,53 @@ describe('schema-v1 snapshots', () => {
         'win32',
         async (writer) => {
           const created = await writer(root, snapshot(), {
-            mode: 'create-only',
+            path: '.sourcemesh/snapshots/test.json',
           });
           const original = await readFile(created.path);
           await assert.rejects(
-            () => writer(root, snapshot('other'), { mode: 'create-only' }),
+            () =>
+              writer(root, snapshot('other'), {
+                path: '.sourcemesh/snapshots/test.json',
+              }),
             { code: 'snapshot_conflict' },
           );
           assert.deepEqual(await readFile(created.path), original);
         },
       );
       assert.equal(links, 1);
-      assert.equal((await readdir(path.join(root, '.sourcemesh'))).length, 1);
+      assert.equal(
+        (await readdir(path.join(root, '.sourcemesh', 'snapshots'))).length,
+        1,
+      );
+    }
+  });
+
+  it('does not announce invalid or tampered hard-link publications', async () => {
+    for (const [name, published, code] of [
+      ['invalid', Buffer.from('{'), 'invalid_snapshot'],
+      ['tampered', encodeSnapshot(snapshot('tampered')), 'snapshot_io'],
+    ] as const) {
+      const root = await mkdtemp(path.join(process.cwd(), '.snapshot-link-'));
+      roots.push(root);
+      await withWriterOverrides(
+        {
+          link: async (_existingPath, newPath) => {
+            await writeFile(newPath, published, { flag: 'wx', mode: 0o600 });
+          },
+        },
+        process.platform,
+        async (writer) => {
+          await assert.rejects(
+            () =>
+              writer(root, snapshot(), {
+                path: '.sourcemesh/snapshots/test.json',
+              }),
+            { code },
+            `${name} publication must not be announced`,
+          );
+        },
+      );
+      assert.equal((await lstat(graphPath(root))).isFile(), true);
     }
   });
 
@@ -389,17 +462,23 @@ describe('schema-v1 snapshots', () => {
         platform,
         async (writer) => {
           await assert.rejects(
-            () => writer(root, snapshot(), { mode: 'create-only' }),
+            () =>
+              writer(root, snapshot(), {
+                path: '.sourcemesh/snapshots/test.json',
+              }),
             { code: 'snapshot_io' },
           );
         },
       );
       await assert.rejects(() => lstat(graphPath(root)), { code: 'ENOENT' });
-      assert.equal((await readdir(path.join(root, '.sourcemesh'))).length, 0);
+      assert.equal(
+        (await readdir(path.join(root, '.sourcemesh', 'snapshots'))).length,
+        0,
+      );
     }
   });
 
-  it('retains an invalid failed Windows fallback until explicit overwrite recovery', async () => {
+  it('retains an invalid failed Windows fallback without replacement recovery', async () => {
     for (const method of ['writeFile', 'chmod'] as const) {
       const root = await mkdtemp(
         path.join(process.cwd(), '.snapshot-fallback-'),
@@ -413,22 +492,32 @@ describe('schema-v1 snapshots', () => {
         'win32',
         async (writer) => {
           await assert.rejects(
-            () => writer(root, snapshot(), { mode: 'create-only' }),
+            () =>
+              writer(root, snapshot(), {
+                path: '.sourcemesh/snapshots/test.json',
+              }),
             { code: 'snapshot_io' },
           );
         },
       );
       assert.equal((await lstat(graphPath(root))).isFile(), true);
       assert.equal((await readdir(path.join(root, '.sourcemesh'))).length, 1);
-      await assert.rejects(() => openValidatedSnapshot(root));
+      await assert.rejects(() =>
+        openValidatedSnapshot(root, '.sourcemesh/snapshots/test.json'),
+      );
       await assert.rejects(
-        () => writeSnapshot(root, snapshot(), { mode: 'create-only' }),
+        () =>
+          writeSnapshot(root, snapshot(), {
+            path: '.sourcemesh/snapshots/test.json',
+          }),
         { code: 'snapshot_conflict' },
       );
-      await writeSnapshot(root, snapshot('recovered'), { mode: 'replace' });
-      assert.equal(
-        (await openValidatedSnapshot(root)).repository.name,
-        'recovered',
+      await assert.rejects(
+        () =>
+          writeSnapshot(root, snapshot('recovered'), {
+            path: '.sourcemesh/snapshots/test.json',
+          }),
+        { code: 'snapshot_conflict' },
       );
     }
   });
@@ -462,7 +551,10 @@ describe('schema-v1 snapshots', () => {
       'win32',
       async (writer) => {
         await assert.rejects(
-          () => writer(root, snapshot(), { mode: 'create-only' }),
+          () =>
+            writer(root, snapshot(), {
+              path: '.sourcemesh/snapshots/test.json',
+            }),
           { code: 'snapshot_io' },
         );
       },
@@ -693,8 +785,13 @@ describe('schema-v2 snapshots', () => {
   it('loads v2 through the validated bootstrap boundary', async () => {
     const root = await mkdtemp(path.join(process.cwd(), '.snapshot-v2-'));
     roots.push(root);
-    await writeSnapshot(root, snapshotV2(), { mode: 'replace' });
-    const loaded = await openValidatedSnapshot(root);
+    await writeSnapshot(root, snapshotV2(), {
+      path: '.sourcemesh/snapshots/replace.json',
+    });
+    const loaded = await openValidatedSnapshot(
+      root,
+      '.sourcemesh/snapshots/replace.json',
+    );
     assert.equal(loaded.schemaVersion, 2);
   });
 });

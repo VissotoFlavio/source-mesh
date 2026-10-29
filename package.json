@@ -1,6 +1,6 @@
 {
   "name": "@vissotoflavio/source-mesh",
-  "version": "0.1.0-beta.3",
+  "version": "0.1.0-beta.4",
   "description": "Local-first structural graph tooling for source code",
   "private": true,
   "type": "module",
@@ -13,6 +13,7 @@
   },
   "files": [
     "dist",
+    "docs/csharp-mcp-snapshot-package-guide.md",
     "tools/sourcemesh-roslyn/bin/Release/net10.0/Microsoft.CodeAnalysis.CSharp.dll",
     "tools/sourcemesh-roslyn/bin/Release/net10.0/Microsoft.CodeAnalysis.dll",
     "tools/sourcemesh-roslyn/bin/Release/net10.0/sourcemesh-roslyn.deps.json",

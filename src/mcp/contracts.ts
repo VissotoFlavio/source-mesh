@@ -26,6 +26,14 @@ export const MCP_MAX_MESSAGE_BYTES = 1024 * 1024;
 export const MCP_MAX_REQUEST_BYTES = 64 * 1024;
 export const MCP_FRAME_OVERHEAD_BYTES = MCP_MAX_REQUEST_BYTES + 1024;
 
+export const MCP_INITIALIZATION_INSTRUCTIONS = [
+  'SourceMesh serves one existing validated local snapshot through read-only queries.',
+  'Generate the snapshot before starting this MCP server; the server never analyzes repositories or writes snapshots.',
+  'For C#, run analyze with --language csharp and exactly one relative --solution or --project selector.',
+  'Snapshot creation is create-only. Start a new MCP process with an explicitly selected snapshot after each analysis; a running server never reloads snapshots.',
+  'See docs/csharp-mcp-snapshot-package-guide.md in this installed package for source-encoding and diagnostic-budget guidance.',
+].join(' ');
+
 export const MCP_TOOL_NAMES = [
   'searchSymbols',
   'getSymbol',

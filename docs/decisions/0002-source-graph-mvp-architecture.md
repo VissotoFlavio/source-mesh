@@ -235,10 +235,9 @@ optional `LocationV1`. Absolute paths, source text, timestamps, and host metadat
 are never serialized.
 
 Snapshot paths use the same canonical repository root as source loading. The
-default `.sourcemesh/graph.json` and every selected relative snapshot path must be
-repository-relative, canonical-contained, and beneath the reserved excluded
-`.sourcemesh` directory. A custom output path outside `.sourcemesh`, or one that
-overlaps any eligible source or discovery root, is rejected. Absolute,
+current publication contract requires an explicit safe snapshot ID and derives
+only `.sourcemesh/snapshots/<id>.json`; IDs are ASCII lowercase letters, digits,
+and hyphens, start with a letter, and exclude reserved device names. Absolute,
 drive-letter, UNC, traversal, escaping symlink, and escaping junction paths are
 rejected. Every parent directory is an existing no-follow directory with the
 same verified identity from validation through installation; the destination is
@@ -580,9 +579,9 @@ all. Other fatal analysis failures also return a typed error without a snapshot;
 completed non-fatal graph diagnostics do not grant partial status. A snapshot
 with no recoverable compiler errors is `complete`.
 
-### Snapshot codec and atomic replacement
+### Snapshot codec and immutable publication
 
-The default snapshot path is `.sourcemesh/graph.json`. Snapshot bytes are UTF-8,
+Snapshot bytes are UTF-8,
 have no BOM, use LF line endings, compact canonical JSON, fixed key order, and
 one trailing newline. The codec exposes
 `encode(snapshot: SnapshotV1) -> UTF-8 bytes` and
@@ -599,54 +598,55 @@ Snapshot writes return the closed error union
 EEXIST-equivalent result for a `create-only` no-replace install; it is distinct
 from validation, path, and I/O failures.
 
-The writer creates `.sourcemesh` with POSIX mode `0700`, and snapshot and exact
+The writer creates `.sourcemesh/snapshots` with POSIX mode `0700`, and snapshot and exact
 temporary files with mode `0600`. On Windows it applies and verifies a
 current-user-only/default private ACL; if effective permissions cannot be kept
-from broadening, the operation fails closed. `replace` preserves existing
-permissions when they are already private and may restrict them, but never
-broadens them. Permission validation is part of validation-before-touch and is
-repeated before installation.
+from broadening, the operation fails closed. Permission validation is part of
+validation-before-touch and is repeated before installation.
 
-Snapshot writing has explicit `create-only` and `replace` modes. Both modes
-validate the complete normalized snapshot and the canonical root/path identity
-before touching the destination. In `create-only`, final installation is an
-atomic no-replace operation: if the destination appears after validation, the
-operation returns the typed `snapshot_conflict` error with an EEXIST-equivalent
-cause, preserves the existing bytes, and removes only the exact temporary name.
-There is no fallback to delete-then-rename or to an ordinary replace-capable
-rename. A host without a reliable atomic no-replace primitive fails closed.
+Snapshot writing is exclusively `create-only`. It validates the complete
+normalized snapshot and the canonical root/path identity before touching the
+destination. Final installation uses atomic no-replace publication where the
+filesystem supports it: a destination appearing after validation returns typed
+`snapshot_conflict`, preserves existing bytes, and removes only the exact
+temporary name. There is no delete-then-rename or replace-capable rename.
 
-`replace` is explicit authorization to atomically replace an existing regular
-destination, or install when it is absent; it never replaces a symlink, junction,
-directory, device, socket, FIFO, or other special file. The writer creates one
-cryptographically random exact temporary name in the destination's same
+The writer never replaces an existing destination. It creates one cryptographically
+random exact temporary name in the destination's same
 directory with exclusive `wx` creation, verifies the parent identity and
 temporary handle as no-follow regular objects, writes through the opened handle,
 syncs, closes, revalidates the canonical parent and destination identity, and
-performs the selected atomic install primitive. The final operation is the only
-point at which `replace` can replace bytes.
+performs the atomic no-replace install primitive. On Windows where linking is
+unavailable, exclusive `wx` creation claims the final pathname before bytes are
+written. A write, sync, or permission failure can therefore leave an invalid,
+partial, unannounced file at that pathname. It is never exposed as a snapshot:
+the writer validates bytes, schema, and digest before announcement; bootstrap
+and MCP validate the selected path identity plus its bytes, schema, and graph
+invariants before use. Cleanup
+does not delete that pathname, because a concurrent actor could have replaced it;
+the operator must choose a new ID or perform manual conservative cleanup after
+confirming ownership. This fallback does not provide old-or-new atomicity.
 
-The destination is the old complete snapshot or the new complete snapshot, never
-a partial one. Cleanup may remove only that exact temporary path, and only after
-the handle is closed; a cleanup failure is reported without touching any other
-path. Target swap, parent change, disappearance, special-file detection, or
-rename uncertainty fails closed. These guarantees do not promise a hard
-peak-memory bound, power-loss durability beyond successful sync semantics, or
-protection from a hostile kernel/filesystem after the last identity check.
+Cleanup may remove only the exact temporary path, and only after the handle is
+closed; a cleanup failure is reported without touching any other path. Target
+swap, parent change, disappearance, special-file detection, or rename uncertainty
+fails closed. These guarantees do not promise a hard peak-memory bound, power-loss
+durability beyond successful sync semantics, or protection from a hostile
+kernel/filesystem after the last identity check.
 
 ### Validated snapshot bootstrap
 
-`openValidatedSnapshot(root, snapshotPath?)` is the only boundary that loads a
-snapshot for query or MCP use. When omitted, `snapshotPath` is
-`.sourcemesh/graph.json`; when supplied, it must be repository-relative, beneath
-the reserved `.sourcemesh` directory, and canonical-contained after all path and
-identity checks. The function validates permissions, canonical bytes/schema, and
+`openValidatedSnapshot(root, snapshotPath)` is the only boundary that loads a
+snapshot for query or MCP use. `snapshotPath` is always explicit and is either a
+versioned derived path or the exact legacy `.sourcemesh/graph.json` migration
+path; arbitrary paths beneath `.sourcemesh` are invalid. The function validates permissions, canonical bytes/schema, and
 all graph invariants before returning an immutable in-memory snapshot. Missing,
 invalid, unsupported, unsafe-permission, or I/O failures return typed sanitized
 errors before query evaluation or MCP startup; they never expose filesystem text.
 
-`analyze` is the only controlled writer and is the only command allowed to create
-or explicitly replace the validated snapshot. The query CLI and MCP are strictly
+`analyze` is the only controlled writer and requires `--snapshot-id`; it can only
+create its derived immutable snapshot. The query CLI and MCP require an explicit
+`--snapshot` and are strictly
 read-only and can call only `openValidatedSnapshot` plus the shared immutable
 query service. MCP opens and validates once, binds one immutable query service,
 advertises the fixed server name `sourcemesh` and version `1`, and exposes exactly
@@ -848,9 +848,9 @@ operation and every other normalized request field; its canonical JSON uses the
 same closed-key and NFC rules.
 The cursor is rejected as `invalid_request` when malformed, over 4096 bytes,
 mismatched to the operation or filter, bound to a different snapshot digest, or
-stale. The replacement fixture must prove that a cursor from snapshot A is
-rejected after a valid replacement produces snapshot B, even when the request is
-otherwise unchanged.
+stale. The publication fixture must prove that a cursor from snapshot A is
+rejected when the same request is evaluated against separately published snapshot
+B under a new ID, even when the request is otherwise unchanged.
 
 `lastSortKey` is a closed JSON-array union with no other shapes:
 
@@ -907,23 +907,22 @@ text, absolute path, timestamp, telemetry, prompt, or graph result is sent to an
 external service.
 
 This read-only rule applies to every query and MCP path. Analysis is the sole
-controlled snapshot-writing path and is delivered by issue #22 under the
-create-only/replace contract above; query and MCP never create, replace, or
-delete any validated snapshot path. The default path, encoding, line ending, and
-canonical JSON rules are identical for analysis output and codec re-emission.
+controlled snapshot-writing path and publishes only create-only versioned
+snapshots; query and MCP never create, replace, or delete any snapshot path.
+MCP validates and pins one selected snapshot at startup. Handover publishes a
+new ID and starts a new process; no reload or automatic deletion exists.
 
 The boundary is explicit:
 
-| Surface                            | Reads                                                        | Writes                                                                  |
-| ---------------------------------- | ------------------------------------------------------------ | ----------------------------------------------------------------------- |
-| Query service and CLI/MCP adapters | validated in-memory graph and snapshot data                  | none; never source files or snapshots                                   |
-| Analysis service                   | repository/compiler inputs under the bounded worker contract | only the validated snapshot through `create-only` or explicit `replace` |
+| Surface                            | Reads                                                        | Writes                                          |
+| ---------------------------------- | ------------------------------------------------------------ | ----------------------------------------------- |
+| Query service and CLI/MCP adapters | validated in-memory graph and snapshot data                  | none; never source files or snapshots           |
+| Analysis service                   | repository/compiler inputs under the bounded worker contract | only a validated create-only versioned snapshot |
 
-Analysis is therefore allowed to write only the controlled snapshot path after
+Analysis is therefore allowed to write only a controlled versioned snapshot after
 validation; query and MCP are read-only even when invoked by the same process.
 All snapshot writes and re-emissions retain the authoritative compact canonical
-UTF-8 JSON format, LF line endings, one trailing newline, and default path
-`.sourcemesh/graph.json`.
+UTF-8 JSON format, LF line endings, and one trailing newline.
 
 ### Deterministic fixture and test requirements
 
@@ -946,12 +945,12 @@ assertions must cover:
    rejection, NFC and invalid-surrogate handling, control/quote/backslash escape
    vectors, non-ASCII UTF-8 bytes, safe-integer rejection, and exact canonical
    re-emission with UTF-8/no BOM, LF, compact JSON, and trailing newline.
-5. Atomic snapshot `create-only` and `replace` behavior, including canonical
+5. Atomic immutable snapshot publication behavior, including canonical
    root containment, external symlink/junction links, parent/destination swaps,
    special files, validation-before-touch, same-directory random `wx` temporary
-   creation, opened-handle write/sync/close ordering, final no-replace versus
-   explicit replace installation, typed EEXIST conflict, old-or-new visibility,
-   and exact-temp cleanup scope.
+   creation, opened-handle write/sync/close ordering, final no-replace
+   installation, typed EEXIST conflict, post-publication byte/digest validation,
+   the documented Windows fallback behavior, and exact-temp cleanup scope.
 6. Overload and same-kind merges, cross-kind separation, anonymous/default
    handling, variable-bound expressions, static/instance `memberRole`, lexical
    same-name collisions, direct-parent `contains`, every closed endpoint matrix,
@@ -995,7 +994,7 @@ assertions must cover:
     significant for qualified names/paths/kinds/container IDs, node ID is the
     selector alternative, and file relations require `fileId`.
 15. The read-only query/MCP boundary versus the analysis-only controlled snapshot
-    write, including default-path enforcement, custom-output containment,
+    write, including explicit versioned-path enforcement,
     source-root overlap rejection, compact canonical UTF-8 re-emission, POSIX and
     Windows privacy enforcement, sanitized static errors, bootstrap-before-startup
     failure, one immutable MCP service load, fixed metadata, and stdout/stderr
@@ -1016,16 +1015,15 @@ The minimum named fixture corpus is:
   forward and reverse traversal order; canonical snapshot bytes, IDs, locations,
   and diagnostics must be byte-identical, including duplicate normalization.
 - `query-cursor-replacement-v1`: page snapshot A, its exact golden cursor, a
-  validated replacement snapshot B, and the unchanged request; the cursor must
-  fail with `invalid_request` after replacement, while a newly issued cursor for B
+  separately published immutable snapshot B, and the unchanged request; the cursor must
+  fail with `invalid_request` for B, while a newly issued cursor for B
   succeeds.
-- `snapshot-modes-v1`: absent destination in `create-only`, existing destination
-  rejected by `create-only`, a destination race returning `snapshot_conflict`
-  without overwriting existing bytes, and old complete bytes retained until a
-  validated explicit `replace` completes; injected write/sync/close/install
-  failures leave only the old complete bytes and clean the exact temporary name.
-- `snapshot-path-containment-v1`: default and selected relative snapshot paths,
-  external symlink/junction links, parent and destination swaps, traversal,
+- `snapshot-modes-v1`: absent versioned destination, existing destination
+  rejected with `snapshot_conflict` without overwriting existing bytes, and
+  injected write/sync/close/install failures that preserve existing bytes and
+  clean only the exact temporary name.
+- `snapshot-path-containment-v1`: explicit versioned paths and the exact legacy
+  read path, external symlink/junction links, parent and destination swaps, traversal,
   absolute/drive/UNC paths, and directory/device/socket/FIFO/symlink/special
   destinations; every escape or identity change fails closed.
 - `analysis-boundary-v1`: config/package/`extends`/reference counts and byte

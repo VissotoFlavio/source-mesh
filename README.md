@@ -83,19 +83,30 @@ For SemVer beta candidates, release metadata timing, promotion gates, evidence,
 rollback, and authorization limits, see the
 [beta versioning and promotion policy](docs/beta-version-promotion.md).
 
+For the authorized GitHub workflow that turns an eligible release pull request
+into an immutable private package candidate, see
+[immutable package candidates](docs/package-candidate-recovery.md).
+
 After a build, analyze and query a repository locally:
 
 ```sh
-node dist/cli.js analyze --root /path/to/repository
-node dist/cli.js symbol --root /path/to/repository --query Widget --output json
+node dist/cli.js analyze --root /path/to/repository --snapshot-id run-20261028
+node dist/cli.js symbol --root /path/to/repository --snapshot .sourcemesh/snapshots/run-20261028.json --query Widget --output json
 ```
 
-The default snapshot is `.sourcemesh/graph.json`. Analysis is create-only; pass
-`--overwrite` to atomically replace the selected snapshot. The other commands are
-`details`, `dependencies`, `dependents`, `callers`, and `callees`. Query commands
+Each analysis requires a new explicit snapshot ID. IDs use only lowercase ASCII
+letters, digits, and hyphens, start with a letter, and are 1–64 characters. The
+derived path is always `.sourcemesh/snapshots/<id>.json`; creation is atomic and
+create-only, so `--overwrite` is not available. The other commands are `details`,
+`dependencies`, `dependents`, `callers`, and `callees`. Query commands
 accept `--limit 1..100`, `--cursor`, and `--allow-partial`; selectors are explicit
 and do not guess when they are ambiguous. Use `<command> --help` for the exact
 grammar.
+
+`.sourcemesh/graph.json` is a legacy location. It is never an analysis target;
+it can only be read when an operator explicitly supplies it to a read command.
+Do not delete snapshots automatically. Clean up manually only after confirming
+that no configured MCP process still uses the selected snapshot.
 
 JSON output is a deterministic versioned envelope on stdout:
 
@@ -114,11 +125,15 @@ SourceMesh can expose the pinned snapshot through a read-only MCP server over th
 local process pipes:
 
 ```sh
-node dist/cli.js mcp --root /path/to/repository
-node dist/cli.js mcp --root /path/to/repository --snapshot .sourcemesh/graph.json
+node dist/cli.js mcp --root /path/to/repository --snapshot .sourcemesh/snapshots/run-20261028.json
 ```
 
-The server loads one validated snapshot before opening `stdio`, constructs one
+Generate the snapshot before configuring or starting MCP. The server only
+queries an existing validated snapshot; it does not analyze the repository or
+write a snapshot. The C# selection, encoding, diagnostic-budget, create-only,
+and same-root flow is in the [installed C# snapshot guide](docs/csharp-mcp-snapshot-package-guide.md).
+
+The server requires a snapshot explicitly, loads and validates it once before opening `stdio`, constructs one
 immutable query service, and registers exactly these bounded tools:
 `searchSymbols`, `getSymbol`, `listFileDependencies`, `listFileDependents`,
 `listCallers`, and `listCallees`. Query text is limited to 256 UTF-16 code
@@ -127,8 +142,10 @@ objects reject unknown properties. The server has no network listener,
 resources, prompts, or write tools. MCP protocol messages exclusively use
 stdout; startup, lifecycle, and sanitized error diagnostics use stderr.
 
-Configure an MCP host to start `node` directly with `dist/cli.js mcp` and an
-explicit repository root. SourceMesh sends only requested bounded graph
+Configure an MCP host to start `node` directly with `dist/cli.js mcp`, an
+explicit repository root, and a snapshot path. To hand over to a fresh analysis,
+publish a different ID then start a new MCP process with that path; a running
+process remains pinned to its original snapshot. SourceMesh sends only requested bounded graph
 responses through the local pipe. The connected editor, agent, or model host
 may process or transmit tool schemas, arguments, and results under its own
 privacy and data-processing policy; local `stdio` is not a guarantee that the

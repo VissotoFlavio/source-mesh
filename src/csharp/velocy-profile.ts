@@ -9,6 +9,7 @@ import {
 import { extractCSharpDeclarationGraph } from './extractor.js';
 import { isRemoteRoot } from '../discovery.js';
 import { writeSnapshot } from '../snapshot/writer.js';
+import { snapshotPathForId } from '../snapshot/path.js';
 import { SnapshotError } from '../snapshot/types.js';
 import type { SnapshotV2 } from '../snapshot/types.js';
 import type {
@@ -18,7 +19,8 @@ import type {
 } from './contracts.js';
 
 export const VELOCY_SOLUTION_PATH = 'src/Velocy.API.sln';
-export const VELOCY_SNAPSHOT_PATH = '.sourcemesh/velocy-api.json';
+export const VELOCY_SNAPSHOT_ID = 'velocy-api';
+export const VELOCY_SNAPSHOT_PATH = snapshotPathForId(VELOCY_SNAPSHOT_ID);
 /** The target contains legacy Windows-1252 files without an encoding marker. */
 export const VELOCY_SOURCE_ENCODING = 'windows-1252' as const;
 export const VELOCY_MAX_DIAGNOSTICS = 100_000;
@@ -177,7 +179,6 @@ export async function runVelocyLocalAcceptance(
   try {
     await services.writeSnapshot(repositoryRoot, snapshot, {
       path: VELOCY_SNAPSHOT_PATH,
-      mode: 'create-only',
     });
   } catch (error) {
     snapshotFailure(error);

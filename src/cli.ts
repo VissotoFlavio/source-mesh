@@ -38,6 +38,7 @@ import type {
   SnapshotWriteResult,
 } from './index.js';
 import { SnapshotError } from './snapshot/types.js';
+import { isReadableSnapshotPath, snapshotPathForId } from './snapshot/path.js';
 import { runMcpStdio } from './mcp/run-stdio.js';
 
 type CommandName =
@@ -73,7 +74,6 @@ interface AnalyzeCommand {
   readonly sourceEncoding?: 'windows-1252';
   readonly maxDiagnostics?: number;
   readonly output: OutputFormat;
-  readonly overwrite: boolean;
 }
 
 interface McpCommand {
@@ -174,7 +174,6 @@ const processIO: CliIO = {
   stderr: (value) => process.stderr.write(value),
 };
 
-const DEFAULT_SNAPSHOT = '.sourcemesh/graph.json';
 const NODE_ID = /^n:[0-9a-f]{64}$/u;
 const COMMANDS = new Set<CommandName>([
   'analyze',
@@ -294,8 +293,17 @@ function normalizeRelativePath(value: string, field: string): string {
 
 function normalizeSnapshotPath(value: string): string {
   const normalized = normalizeRelativePath(value, 'snapshot');
-  if (!normalized.startsWith('.sourcemesh/')) throw invalid('snapshot');
+  if (!isReadableSnapshotPath(normalized)) throw invalid('snapshot');
   return normalized;
+}
+
+function normalizeSnapshotId(value: string): string {
+  try {
+    snapshotPathForId(value);
+    return value;
+  } catch {
+    throw invalid('snapshot-id');
+  }
 }
 
 function readOutputHint(argv: readonly string[]): OutputFormat {
@@ -324,20 +332,20 @@ function helpText(command?: CommandName): string {
     ].join('\n');
   const usage: Record<CommandName, string> = {
     analyze:
-      'sourcemesh analyze --root <path> [--snapshot <relative>] [--tsconfig <relative>] [--language csharp --solution <relative>|--project <relative> [--source-encoding windows-1252] [--max-diagnostics <1..100000>]] [--output human|json] [--overwrite]',
-    mcp: 'sourcemesh mcp --root <path> [--snapshot <relative>]',
+      'sourcemesh analyze --root <path> --snapshot-id <id> [--tsconfig <relative>] [--language csharp --solution <relative>|--project <relative> [--source-encoding windows-1252] [--max-diagnostics <1..100000>]] [--output human|json]',
+    mcp: 'sourcemesh mcp --root <path> --snapshot <relative>',
     symbol:
-      'sourcemesh symbol --root <path> [--snapshot <relative>] --query <text> [--kind <kind>] [--path <relative>] [--container-id <node-id>] [--limit <1..100>] [--cursor <token>] [--allow-partial] [--output human|json]',
+      'sourcemesh symbol --root <path> --snapshot <relative> --query <text> [--kind <kind>] [--path <relative>] [--container-id <node-id>] [--limit <1..100>] [--cursor <token>] [--allow-partial] [--output human|json]',
     details:
-      'sourcemesh details --root <path> [--snapshot <relative>] --id <node-id> [--limit <1..100>] [--cursor <token>] [--allow-partial] [--output human|json]',
+      'sourcemesh details --root <path> --snapshot <relative> --id <node-id> [--limit <1..100>] [--cursor <token>] [--allow-partial] [--output human|json]',
     dependencies:
-      'sourcemesh dependencies --root <path> [--snapshot <relative>] --file-id <file-id> [--limit <1..100>] [--cursor <token>] [--allow-partial] [--output human|json]',
+      'sourcemesh dependencies --root <path> --snapshot <relative> --file-id <file-id> [--limit <1..100>] [--cursor <token>] [--allow-partial] [--output human|json]',
     dependents:
-      'sourcemesh dependents --root <path> [--snapshot <relative>] --file-id <file-id> [--limit <1..100>] [--cursor <token>] [--allow-partial] [--output human|json]',
+      'sourcemesh dependents --root <path> --snapshot <relative> --file-id <file-id> [--limit <1..100>] [--cursor <token>] [--allow-partial] [--output human|json]',
     callers:
-      'sourcemesh callers --root <path> [--snapshot <relative>] --name <function-name> [--qualified-name <name>] [--path <relative>] [--member-role <none|static|instance>] [--container-id <node-id>] [--limit <1..100>] [--cursor <token>] [--allow-partial] [--output human|json]',
+      'sourcemesh callers --root <path> --snapshot <relative> --name <function-name> [--qualified-name <name>] [--path <relative>] [--member-role <none|static|instance>] [--container-id <node-id>] [--limit <1..100>] [--cursor <token>] [--allow-partial] [--output human|json]',
     callees:
-      'sourcemesh callees --root <path> [--snapshot <relative>] --name <function-name> [--qualified-name <name>] [--path <relative>] [--member-role <none|static|instance>] [--container-id <node-id>] [--limit <1..100>] [--cursor <token>] [--allow-partial] [--output human|json]',
+      'sourcemesh callees --root <path> --snapshot <relative> --name <function-name> [--qualified-name <name>] [--path <relative>] [--member-role <none|static|instance>] [--container-id <node-id>] [--limit <1..100>] [--cursor <token>] [--allow-partial] [--output human|json]',
   };
   return usage[command];
 }
@@ -357,14 +365,15 @@ function optionKinds(command: CommandName): ReadonlyMap<string, OptionKind> {
     ]);
   if (command === 'analyze')
     return new Map([
-      ...common,
+      ['--root', 'value'],
+      ['--output', 'value'],
+      ['--snapshot-id', 'value'],
       ['--tsconfig', 'value'],
       ['--language', 'value'],
       ['--solution', 'value'],
       ['--project', 'value'],
       ['--source-encoding', 'value'],
       ['--max-diagnostics', 'value'],
-      ['--overwrite', 'flag'],
     ]);
   const query: [string, OptionKind][] = [
     ['--limit', 'value'],
@@ -441,9 +450,8 @@ function parseCommon(
   values: ReadonlyMap<string, string | true>,
 ): CommonOptions {
   const root = requiredValue(values, '--root', 'root');
-  const snapshotValue = valueOf(values, '--snapshot');
   const snapshot = normalizeSnapshotPath(
-    snapshotValue === undefined ? DEFAULT_SNAPSHOT : snapshotValue,
+    requiredValue(values, '--snapshot', 'snapshot'),
   );
   const outputValue = valueOf(values, '--output') ?? 'human';
   if (outputValue !== 'human' && outputValue !== 'json')
@@ -487,10 +495,10 @@ function parseArguments(argv: readonly string[]): ParsedCommand {
 
   if (command === 'analyze') {
     const root = requiredValue(values, '--root', 'root');
-    const snapshotValue = valueOf(values, '--snapshot');
-    const snapshot = normalizeSnapshotPath(
-      snapshotValue === undefined ? DEFAULT_SNAPSHOT : snapshotValue,
+    const snapshotId = normalizeSnapshotId(
+      requiredValue(values, '--snapshot-id', 'snapshot-id'),
     );
+    const snapshot = snapshotPathForId(snapshotId);
     const outputValue = valueOf(values, '--output') ?? 'human';
     if (outputValue !== 'human' && outputValue !== 'json')
       throw invalid('output');
@@ -556,19 +564,16 @@ function parseArguments(argv: readonly string[]): ParsedCommand {
         : { sourceEncoding: sourceEncodingValue }),
       ...(maxDiagnostics === undefined ? {} : { maxDiagnostics }),
       output: outputValue,
-      overwrite: values.has('--overwrite'),
     };
   }
 
   if (command === 'mcp') {
     const root = requiredValue(values, '--root', 'root');
-    const snapshotValue = valueOf(values, '--snapshot');
+    const snapshotValue = requiredValue(values, '--snapshot', 'snapshot');
     return {
       command,
       root,
-      snapshot: normalizeSnapshotPath(
-        snapshotValue === undefined ? DEFAULT_SNAPSHOT : snapshotValue,
-      ),
+      snapshot: normalizeSnapshotPath(snapshotValue),
     };
   }
 
@@ -757,7 +762,6 @@ async function executeAnalyze(
       try {
         result = await services.writeSnapshot(command.root, snapshot, {
           path: command.snapshot,
-          mode: command.overwrite ? 'replace' : 'create-only',
         });
       } catch (error) {
         if (error instanceof SnapshotError) throw snapshotFailure(error);
@@ -810,7 +814,6 @@ async function executeAnalyze(
         snapshot,
         {
           path: command.snapshot,
-          mode: command.overwrite ? 'replace' : 'create-only',
         },
       );
     } catch (error) {
@@ -957,6 +960,7 @@ function emitSuccess(
             completeness: analysis.completeness,
             digest: analysis.digest,
             bytes: analysis.bytes,
+            handover: `Start a new MCP process with --snapshot ${analysis.snapshotPath}; existing MCP processes remain pinned to their original snapshot.`,
             ...(analysis.compilerDiagnostics === undefined
               ? {}
               : { compilerDiagnostics: analysis.compilerDiagnostics }),
@@ -987,7 +991,7 @@ function emitSuccess(
     }
     const compilerDiagnostics = analysis.compilerDiagnostics;
     io.stdout(
-      `Snapshot written to ${analysis.snapshotPath} (${analysis.completeness}; ${analysis.bytes} bytes; ${analysis.digest})${
+      `Snapshot written to ${analysis.snapshotPath} (${analysis.completeness}; ${analysis.bytes} bytes; ${analysis.digest}). Start a new MCP process with --snapshot ${analysis.snapshotPath}; existing MCP processes remain pinned to their original snapshot.${
         compilerDiagnostics === undefined
           ? ''
           : `; compiler diagnostics: ${compilerDiagnostics.total} (${compilerDiagnostics.errors} errors, ${compilerDiagnostics.warnings} warnings)`

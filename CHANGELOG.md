@@ -6,6 +6,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.0-beta.4] - 2026-10-29
+
+### Changed
+
+- Replaced mutable default analysis output with explicit, versioned immutable
+  snapshots under `.sourcemesh/snapshots/`; MCP now requires an explicitly
+  selected snapshot and handover starts a new pinned process (#97).
+
+- Added the guarded GitHub workflow for immutable private package candidates,
+  with exact-SHA validation, package checks, checksums, and recovery guidance
+  (#84).
+
+- Included generic C# MCP snapshot guidance in the offline package tarball and
+  validate its installed link from README and MCP initialization (#94).
+
+- Made the local C# snapshot prerequisite discoverable from MCP initialization
+  and the MCP setup documentation, with a generic runbook for selection,
+  encoding, and diagnostic budgets (#92).
+
 ## [0.1.0-beta.3] - 2026-10-28
 
 ### Fixed

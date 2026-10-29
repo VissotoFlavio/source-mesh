@@ -126,7 +126,13 @@ export {
   encodeSnapshot,
   snapshotDigest,
 } from './snapshot/codec.js';
-export { DEFAULT_SNAPSHOT_PATH, resolveSnapshotPath } from './snapshot/path.js';
+export {
+  SNAPSHOT_DIRECTORY,
+  isReadableSnapshotPath,
+  isVersionedSnapshotPath,
+  resolveSnapshotPath,
+  snapshotPathForId,
+} from './snapshot/path.js';
 export { openValidatedSnapshot } from './snapshot/bootstrap.js';
 export { writeSnapshot } from './snapshot/writer.js';
 export { SnapshotError } from './snapshot/types.js';
@@ -136,7 +142,6 @@ export type {
   Snapshot,
   SnapshotV1,
   SnapshotV2,
-  SnapshotWriteMode,
   SnapshotWriteRequest,
   SnapshotWriteResult,
 } from './snapshot/types.js';

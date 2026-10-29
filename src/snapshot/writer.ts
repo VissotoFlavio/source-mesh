@@ -1,24 +1,25 @@
 import { randomBytes } from 'node:crypto';
+import path from 'node:path';
 import {
   chmod,
   link,
   lstat,
   mkdir,
   open,
-  rename,
+  readFile,
   unlink,
 } from 'node:fs/promises';
-import { encode, snapshotDigest } from './codec.js';
+import { decode, encode, snapshotDigest } from './codec.js';
 import {
   revalidateSnapshotPath,
   resolveSnapshotPath,
   sameIdentity,
+  isVersionedSnapshotPath,
   type ResolvedSnapshotPath,
 } from './path.js';
 import {
   SnapshotError,
   type Snapshot,
-  type SnapshotWriteMode,
   type SnapshotWriteResult,
 } from './types.js';
 
@@ -28,7 +29,6 @@ interface SnapshotWriterFileSystem {
   readonly lstat: typeof lstat;
   readonly mkdir: typeof mkdir;
   readonly open: typeof open;
-  readonly rename: typeof rename;
   readonly unlink: typeof unlink;
 }
 
@@ -38,7 +38,6 @@ const defaultFileSystem: SnapshotWriterFileSystem = {
   lstat,
   mkdir,
   open,
-  rename,
   unlink,
 };
 
@@ -110,14 +109,31 @@ export function createSnapshotWriterForTesting(
   return async function writeSnapshot(
     root: string,
     snapshot: Snapshot,
-    options: { readonly path?: string; readonly mode: SnapshotWriteMode },
+    options: { readonly path: string },
   ): Promise<SnapshotWriteResult> {
+    if ('mode' in options || !isVersionedSnapshotPath(options.path))
+      throw new SnapshotError('path_invalid', 'The snapshot path is invalid.');
     const bytes = encode(snapshot);
+    // Encoding canonicalizes the input; decoding the actual byte sequence keeps
+    // publication gated on the same schema and graph invariants as bootstrap.
+    decode(bytes);
+    const digest = snapshotDigest(bytes);
     let resolved: ResolvedSnapshotPath = await resolveSnapshotPath(
       root,
       options.path,
     );
     if (resolved.parentIdentity === undefined) {
+      const containingDirectory = path.dirname(resolved.parent);
+      if (containingDirectory !== resolved.root) {
+        await fileSystem
+          .mkdir(containingDirectory, { recursive: false, mode: 0o700 })
+          .catch((error: unknown) => {
+            if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw io();
+          });
+        // Re-resolve after each create attempt so a substituted ancestor or
+        // symlink is rejected before creating the next directory.
+        resolved = await resolveSnapshotPath(root, options.path);
+      }
       await fileSystem
         .mkdir(resolved.parent, { recursive: false, mode: 0o700 })
         .catch((error: unknown) => {
@@ -133,8 +149,7 @@ export function createSnapshotWriterForTesting(
         !sameIdentity(resolved.destinationIdentity, beforeInstall))
     )
       throw io();
-    if (options.mode === 'create-only' && beforeInstall !== undefined)
-      throw conflict();
+    if (beforeInstall !== undefined) throw conflict();
     const temporary = `${resolved.path}.${process.pid}.${randomBytes(16).toString('hex')}.tmp`;
     let handle: Awaited<ReturnType<typeof open>> | undefined;
     try {
@@ -177,10 +192,9 @@ export function createSnapshotWriterForTesting(
           !sameIdentity(resolved.destinationIdentity, installCheck))
       )
         throw io();
-      if (options.mode === 'create-only' && installCheck !== undefined)
-        throw conflict();
+      if (installCheck !== undefined) throw conflict();
       let fallbackPublished = false;
-      if (options.mode === 'create-only') {
+      {
         try {
           await fileSystem.link(temporary, resolved.path);
         } catch (error) {
@@ -215,9 +229,8 @@ export function createSnapshotWriterForTesting(
             fallbackPublished = true;
           } catch (fallbackError) {
             if (destination) await destination.close().catch(() => undefined);
-            // The exclusively claimed pathname may be partial. Retain it for
-            // explicit --overwrite recovery: deleting by pathname could erase
-            // a replacement made by another process.
+            // The exclusively claimed pathname may be partial. Retain it:
+            // deleting by pathname could erase a concurrent replacement.
             if ((fallbackError as NodeJS.ErrnoException).code === 'EEXIST')
               throw conflict();
             throw io();
@@ -227,12 +240,30 @@ export function createSnapshotWriterForTesting(
           await fileSystem.unlink(temporary).catch(() => {
             throw io();
           });
-      } else await fileSystem.rename(temporary, resolved.path);
+      }
       if (!fallbackPublished)
         await ensurePrivate(fileSystem, platform, resolved.path, false);
+      // A successful create-only install is not announced until the exact
+      // destination has been observed, decoded, and tied to its digest. Check
+      // its identity around the read so a detectable pathname substitution
+      // fails closed.
+      const beforeRead = await revalidateSnapshotPath(resolved);
+      if (beforeRead === undefined) throw io();
+      const publishedBytes = await readFile(resolved.path).catch(() => {
+        throw io();
+      });
+      const afterRead = await revalidateSnapshotPath(resolved);
+      if (afterRead === undefined || !sameIdentity(beforeRead, afterRead))
+        throw io();
+      decode(publishedBytes);
+      if (
+        !publishedBytes.equals(bytes) ||
+        snapshotDigest(publishedBytes) !== digest
+      )
+        throw io();
       return {
         path: resolved.path,
-        digest: snapshotDigest(bytes),
+        digest,
         bytes: bytes.byteLength,
       };
     } catch (error) {

@@ -130,24 +130,21 @@ checkout.
    starting MCP. For the Velocy solution, the create-only command is:
 
    ```powershell
-   & $nodeExe --import $offlineGuard $cliPath analyze --root $targetRoot --language csharp --solution 'src/Velocy.API.sln'
+   & $nodeExe --import $offlineGuard $cliPath analyze --root $targetRoot --snapshot-id velocy-validation-20261028 --language csharp --solution 'src/Velocy.API.sln'
    ```
 
    Do not add `--overwrite`. MCP must use the same root and only start after
    analysis succeeds. Its equivalent local command is:
 
    ```powershell
-   & $nodeExe --import $offlineGuard $cliPath mcp --root $targetRoot
+   & $nodeExe --import $offlineGuard $cliPath mcp --root $targetRoot --snapshot .sourcemesh/snapshots/velocy-validation-20261028.json
    ```
 
-   Before running `analyze`, confirm that `.sourcemesh/graph.json` did not
-   exist under the selected root. If it exists or ownership is uncertain, do
-   not delete or overwrite it; use the disposable-copy or OS-snapshot path in
-   step 7. Keep the target and any disposable destination quiescent, with no
-   concurrent filesystem writers, through analysis, MCP, and cleanup. After
-   the run, remove only `.sourcemesh/graph.json` created by the current test,
-   and only when its pre-run absence was confirmed. Preserve the file whenever
-   its prior absence or ownership is uncertain.
+   Before running `analyze`, choose a fresh snapshot ID and confirm that its
+   derived `.sourcemesh/snapshots/<id>.json` path does not exist. Do not delete
+   or overwrite an existing snapshot. Keep the target and any disposable
+   destination quiescent through analysis, MCP, and cleanup. Cleanup is manual
+   and conservative: preserve a snapshot whenever ownership is uncertain.
 
 7. If the target already contains the selected snapshot, or the target cannot
    safely receive the create-only write, do not delete or overwrite anything.
@@ -201,14 +198,14 @@ checkout.
 
    Do not run this profile after the direct CLI + MCP profile on the same
    checkout. It selects only `src/Velocy.API.sln`, writes the create-only
-   `.sourcemesh/velocy-api.json` under the target, and never restores, builds,
+   `.sourcemesh/snapshots/velocy-api.json` under the target, and never restores, builds,
    or runs Velocy. The target and this snapshot path must be quiescent, with no
    concurrent filesystem writers, from the pre-run check through analysis and
    cleanup. Before the run, confirm whether that exact file already exists. If
    its pre-run absence or ownership by the current test cannot be guaranteed,
    preserve the file and do not remove it; use a separate disposable root or
    an OS-level snapshot instead. After the run, only the
-   `.sourcemesh/velocy-api.json` created by the current test may be removed,
+   `.sourcemesh/snapshots/velocy-api.json` created by the current test may be removed,
    and only when it was confirmed absent before the run. Never remove a
    pre-existing snapshot or any other target data. Do not commit, copy, or
    attach the snapshot.
@@ -226,7 +223,7 @@ the direct CLI contract from the `accept:velocy` wrapper:
   snapshot, apply the same canonical-root separation check above, and run:
 
   ```powershell
-  & $nodeExe --import $offlineGuard $cliPath analyze --root $targetRoot --language csharp --solution 'src/Velocy.API.sln' --output json
+  & $nodeExe --import $offlineGuard $cliPath analyze --root $targetRoot --snapshot-id velocy-validation-20261028 --language csharp --solution 'src/Velocy.API.sln' --output json
   ```
 
   It must remain create-only; do not delete or overwrite the snapshot to make

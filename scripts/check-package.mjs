@@ -20,6 +20,7 @@ const forbiddenLifecycleScripts = new Set([
   'postinstall',
   'prepare',
 ]);
+const csharpMcpSnapshotGuide = 'docs/csharp-mcp-snapshot-package-guide.md';
 
 function fail(code) {
   const error = new Error(code);
@@ -294,6 +295,7 @@ async function verifyPackageRoot(root, { installed = false } = {}) {
   const files = [...(packageJson.files ?? [])].sort();
   const expectedFiles = [
     'THIRD-PARTY-NOTICES.md',
+    csharpMcpSnapshotGuide,
     'dist',
     `${manifest.helperPath}/${manifest.helperIntegrityFile}`,
     ...manifest.helperFiles.map(
@@ -311,6 +313,7 @@ async function verifyPackageRoot(root, { installed = false } = {}) {
   if (installed) {
     const allowedRootEntries = new Set([
       'dist',
+      'docs',
       'tools',
       'node_modules',
       'package.json',
@@ -330,6 +333,31 @@ async function verifyPackageRoot(root, { installed = false } = {}) {
     if (packageJson.scripts?.[script] !== undefined)
       fail('install_script_forbidden');
   }
+  const readme = await readFile(path.join(root, 'README.md'), 'utf8').catch(
+    () => fail('package_readme_missing'),
+  );
+  if (!readme.includes(`](${csharpMcpSnapshotGuide})`))
+    fail('package_csharp_guide_unlinked');
+  const guide = await readFile(
+    path.join(root, ...csharpMcpSnapshotGuide.split('/')),
+    'utf8',
+  ).catch(() => fail('package_csharp_guide_missing'));
+  const normalizedGuide = guide.replace(/\s+/gu, ' ');
+  for (const phrase of [
+    'Generate the snapshot before configuring or starting MCP.',
+    'exactly one repository-relative selector',
+    'UTF-8 is the normal source policy.',
+    'maximum of 4096 compiler diagnostics',
+  ]) {
+    if (!normalizedGuide.includes(phrase)) fail('package_csharp_guide_invalid');
+  }
+  if (
+    guide.includes('Velocy') ||
+    /[A-Za-z]:[\\/]/u.test(guide) ||
+    guide.includes('E2E_SOURCE_TEXT_MARKER') ||
+    guide.includes('E2E_SECRET_VALUE_MARKER')
+  )
+    fail('package_csharp_guide_invalid');
   const notice = await readFile(
     path.join(root, 'THIRD-PARTY-NOTICES.md'),
     'utf8',

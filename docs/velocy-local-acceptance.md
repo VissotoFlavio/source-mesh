@@ -64,7 +64,7 @@ does not print the target root, source text, symbol names, compiler messages,
 or snapshot contents.
 
 The only target-repository write is the create-only snapshot
-`.sourcemesh/velocy-api.json`. If that file already exists, the profile fails
+`.sourcemesh/snapshots/velocy-api.json`. If that file already exists, the profile fails
 closed without replacing it. After reviewing the local result, remove that
 snapshot manually when it is no longer needed. Do not commit it or copy it to
 SourceMesh, GitHub, CI artifacts, logs, or an issue.
