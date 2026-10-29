@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Changed
 
+- Replaced mutable default analysis output with explicit, versioned immutable
+  snapshots under `.sourcemesh/snapshots/`; MCP now requires an explicitly
+  selected snapshot and handover starts a new pinned process (#97).
+
 - Added the guarded GitHub workflow for immutable private package candidates,
   with exact-SHA validation, package checks, checksums, and recovery guidance
   (#84).

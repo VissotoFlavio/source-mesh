@@ -34,9 +34,9 @@ allowed to create local child processes; each SourceMesh child loads
 The test proves:
 
 1. Discovery excludes `generated/` and does not rediscover `.sourcemesh` output.
-2. The built analysis command creates a schema-v1 snapshot. Identical fixture
-   content in two different absolute roots, and a repeated overwrite, produce
-   byte-identical UTF-8 snapshot files.
+2. The built analysis command creates a schema-v1 versioned snapshot. Identical
+   fixture content in two different absolute roots produces byte-identical UTF-8
+   snapshot files; repeating the same snapshot ID returns a create-only conflict.
 3. The loaded graph contains containment, imports/exports, `extends`,
    `implements`, and resolved calls. The unresolved call produces the stable
    `relationship_unresolved` diagnostic and no certain call edge.

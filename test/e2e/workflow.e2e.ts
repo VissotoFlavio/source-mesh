@@ -77,36 +77,41 @@ function parseJson<T>(value: string): T {
   return JSON.parse(value) as T;
 }
 
-function analyzeArgs(root: string): string[] {
+function analyzeArgs(root: string, snapshotId = 'workflow'): string[] {
   return [
     'analyze',
     '--root',
     root,
+    '--snapshot-id',
+    snapshotId,
     '--tsconfig',
     'tsconfig.json',
-    '--overwrite',
     '--output',
     'json',
   ];
 }
 
-function csharpAnalyzeArgs(root: string): string[] {
+function csharpAnalyzeArgs(
+  root: string,
+  snapshotId = 'csharp-workflow',
+): string[] {
   return [
     'analyze',
     '--root',
     root,
+    '--snapshot-id',
+    snapshotId,
     '--language',
     'csharp',
     '--solution',
     'Synthetic.sln',
-    '--overwrite',
     '--output',
     'json',
   ];
 }
 
-function snapshotPath(root: string): string {
-  return path.join(root, '.sourcemesh', 'graph.json');
+function snapshotPath(root: string, snapshotId = 'workflow'): string {
+  return path.join(root, '.sourcemesh', 'snapshots', `${snapshotId}.json`);
 }
 
 async function createFixtureCopy(source = fixture): Promise<string> {
@@ -193,18 +198,24 @@ function assertBoundedPages(value: unknown, limit: number): void {
 function cliQuery(
   root: string,
   args: readonly string[],
+  snapshotId = 'workflow',
 ): Promise<ProcessResult> {
   return runSourceMesh(root, [
     ...args,
     '--root',
     root,
+    '--snapshot',
+    `.sourcemesh/snapshots/${snapshotId}.json`,
     '--allow-partial',
     '--output',
     'json',
   ]);
 }
 
-async function startMcp(root: string): Promise<McpConnection> {
+async function startMcp(
+  root: string,
+  snapshotId = 'workflow',
+): Promise<McpConnection> {
   let stderr = '';
   const transport = new StdioClientTransport({
     command: process.execPath,
@@ -215,6 +226,8 @@ async function startMcp(root: string): Promise<McpConnection> {
       'mcp',
       '--root',
       root,
+      '--snapshot',
+      `.sourcemesh/snapshots/${snapshotId}.json`,
     ],
     cwd: repository,
     stderr: 'pipe',
@@ -266,13 +279,18 @@ test('built local workflow is deterministic, bounded, equivalent, and offline', 
   const secondBytes = await readFile(snapshotPath(secondRoot));
   assert.deepEqual(firstBytes, secondBytes);
 
-  const repeated = assertCliSuccess(
-    await runSourceMesh(firstRoot, analyzeArgs(firstRoot)),
+  const repeated = await runSourceMesh(firstRoot, analyzeArgs(firstRoot));
+  assert.equal(repeated.code, 4);
+  assert.equal(
+    parseJson<CliEnvelope>(repeated.stderr).error?.code,
+    'snapshot_conflict',
   );
-  assert.deepEqual(repeated.result, firstAnalysis.result);
   assert.deepEqual(firstBytes, await readFile(snapshotPath(firstRoot)));
 
-  const snapshot = await openValidatedSnapshot(firstRoot);
+  const snapshot = await openValidatedSnapshot(
+    firstRoot,
+    '.sourcemesh/snapshots/workflow.json',
+  );
   assert.equal(snapshot.schemaVersion, 1);
   assert.equal(snapshot.completeness, 'partial');
   assert.equal(
@@ -416,6 +434,8 @@ test('built local workflow is deterministic, bounded, equivalent, and offline', 
       'details',
       '--root',
       firstRoot,
+      '--snapshot',
+      '.sourcemesh/snapshots/workflow.json',
       '--id',
       `n:${'0'.repeat(64)}`,
       '--allow-partial',
@@ -459,7 +479,10 @@ test('built local workflow is deterministic, bounded, equivalent, and offline', 
     'partial',
   );
   assertNoPrivateValues(malformed, malformedRoot);
-  const malformedSnapshot = await openValidatedSnapshot(malformedRoot);
+  const malformedSnapshot = await openValidatedSnapshot(
+    malformedRoot,
+    '.sourcemesh/snapshots/workflow.json',
+  );
   const malformedBytes = await readFile(snapshotPath(malformedRoot));
   assert.equal(malformedSnapshot.completeness, 'partial');
   assert.deepEqual(
@@ -490,6 +513,8 @@ test('built local workflow is deterministic, bounded, equivalent, and offline', 
     'symbol',
     '--root',
     malformedRoot,
+    '--snapshot',
+    '.sourcemesh/snapshots/workflow.json',
     '--query',
     'LocalService',
     '--output',
@@ -528,17 +553,32 @@ test(
     assertNoPrivateValues(firstAnalysis, firstRoot);
     assertNoPrivateValues(secondAnalysis, secondRoot);
 
-    const firstBytes = await readFile(snapshotPath(firstRoot));
-    const secondBytes = await readFile(snapshotPath(secondRoot));
+    const firstBytes = await readFile(
+      snapshotPath(firstRoot, 'csharp-workflow'),
+    );
+    const secondBytes = await readFile(
+      snapshotPath(secondRoot, 'csharp-workflow'),
+    );
     assert.deepEqual(firstBytes, secondBytes);
 
-    const repeated = assertCliSuccess(
-      await runSourceMesh(firstRoot, csharpAnalyzeArgs(firstRoot)),
+    const repeated = await runSourceMesh(
+      firstRoot,
+      csharpAnalyzeArgs(firstRoot),
     );
-    assert.deepEqual(repeated.result, firstAnalysis.result);
-    assert.deepEqual(firstBytes, await readFile(snapshotPath(firstRoot)));
+    assert.equal(repeated.code, 4);
+    assert.equal(
+      parseJson<CliEnvelope>(repeated.stderr).error?.code,
+      'snapshot_conflict',
+    );
+    assert.deepEqual(
+      firstBytes,
+      await readFile(snapshotPath(firstRoot, 'csharp-workflow')),
+    );
 
-    const snapshot = await openValidatedSnapshot(firstRoot);
+    const snapshot = await openValidatedSnapshot(
+      firstRoot,
+      '.sourcemesh/snapshots/csharp-workflow.json',
+    );
     assert.equal(snapshot.schemaVersion, 2);
     assert.equal(snapshot.completeness, 'complete');
     assertNoPrivateValues(snapshot, firstRoot);
@@ -685,7 +725,11 @@ test(
 
     const cliResults: unknown[] = [];
     for (const request of requestTable) {
-      const result = await cliQuery(firstRoot, request.command);
+      const result = await cliQuery(
+        firstRoot,
+        request.command,
+        'csharp-workflow',
+      );
       const envelope = assertCliSuccess(result);
       assert.equal(envelope.schemaVersion, 2);
       assert.equal(envelope.command, request.command[0]);
@@ -695,7 +739,7 @@ test(
       cliResults.push(envelope.result);
     }
 
-    const mcp = await startMcp(firstRoot);
+    const mcp = await startMcp(firstRoot, 'csharp-workflow');
     try {
       const listed = await mcp.client.listTools();
       assert.deepEqual(
@@ -737,6 +781,8 @@ test(
       'analyze',
       '--root',
       firstRoot,
+      '--snapshot-id',
+      'csharp-workflow',
       '--language',
       'csharp',
       '--solution',
@@ -750,7 +796,10 @@ test(
       parseJson<CliEnvelope>(noPersist.stderr).error?.code,
       'snapshot_conflict',
     );
-    assert.deepEqual(firstBytes, await readFile(snapshotPath(firstRoot)));
+    assert.deepEqual(
+      firstBytes,
+      await readFile(snapshotPath(firstRoot, 'csharp-workflow')),
+    );
     assertNoPrivateValues(noPersist.stderr, firstRoot);
   },
 );

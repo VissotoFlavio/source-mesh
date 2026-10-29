@@ -92,14 +92,25 @@ async function createSyntheticRepository(): Promise<{
   const io = capture();
   assert.equal(
     await main(
-      ['analyze', '--root', root, '--overwrite', '--output', 'json'],
+      [
+        'analyze',
+        '--root',
+        root,
+        '--snapshot-id',
+        'initial',
+        '--output',
+        'json',
+      ],
       undefined,
       io.io,
     ),
     0,
   );
   assert.equal(io.read().stderr, '');
-  const snapshot = await openValidatedSnapshot(root);
+  const snapshot = await openValidatedSnapshot(
+    root,
+    '.sourcemesh/snapshots/initial.json',
+  );
   const caller = snapshot.nodes.find(
     (node) => node.kind === 'function' && node.name === 'caller',
   );
@@ -118,6 +129,7 @@ async function createSyntheticRepository(): Promise<{
 async function startClient(
   root: string,
   offline = false,
+  snapshot = '.sourcemesh/snapshots/initial.json',
 ): Promise<{
   readonly client: Client;
   readonly transport: StdioClientTransport;
@@ -136,6 +148,8 @@ async function startClient(
     'mcp',
     '--root',
     root,
+    '--snapshot',
+    snapshot,
   ];
   const transport = new StdioClientTransport({
     command: process.execPath,
@@ -300,6 +314,7 @@ processTest(
           allowPartial: true,
         }) as QueryResponseV1,
       );
+
       await assertToolCall(
         connection.client,
         'getSymbol',
@@ -320,6 +335,7 @@ processTest(
           allowPartial: true,
         }) as QueryResponseV1,
       );
+
       await assertToolCall(
         connection.client,
         'listFileDependents',
@@ -560,7 +576,8 @@ processTest(
             'analyze',
             '--root',
             repository.root,
-            '--overwrite',
+            '--snapshot-id',
+            'replacement',
             '--output',
             'json',
           ],
@@ -581,6 +598,31 @@ processTest(
           allowPartial: true,
         }) as QueryResponseV1,
       );
+      const replacement = await startClient(
+        repository.root,
+        false,
+        '.sourcemesh/snapshots/replacement.json',
+      );
+      try {
+        const replacementSnapshot = await openValidatedSnapshot(
+          repository.root,
+          '.sourcemesh/snapshots/replacement.json',
+        );
+        await assertToolCall(
+          replacement.client,
+          'searchSymbols',
+          { query: 'replacement', allowPartial: true },
+          createGraphQueryService(replacementSnapshot).searchSymbols({
+            operation: 'searchSymbols',
+            query: 'replacement',
+            allowPartial: true,
+          }) as QueryResponseV1,
+        );
+      } finally {
+        await replacement.client.close();
+        assert.equal(replacement.transport.pid, null);
+        assert.equal(replacement.readStderr(), '');
+      }
     } finally {
       await connection.client.close();
       assert.equal(connection.transport.pid, null);
@@ -594,10 +636,13 @@ processTest(
   async () => {
     const repository = await createSyntheticRepository();
     const snapshotBytes = await readFile(
-      path.join(repository.root, '.sourcemesh', 'graph.json'),
+      path.join(repository.root, '.sourcemesh', 'snapshots', 'initial.json'),
     );
 
-    const malformed = spawnRawServer(repository.root);
+    const malformed = spawnRawServer(repository.root, [
+      '--snapshot',
+      '.sourcemesh/snapshots/initial.json',
+    ]);
     malformed.child.stdin?.end(
       `not-json ${untrustedPayload}\n${JSON.stringify({
         jsonrpc: '2.0',
@@ -623,7 +668,10 @@ processTest(
       snapshotBytes.toString('utf8'),
     ]);
 
-    const oversized = spawnRawServer(repository.root);
+    const oversized = spawnRawServer(repository.root, [
+      '--snapshot',
+      '.sourcemesh/snapshots/initial.json',
+    ]);
     let oversizedInputError: NodeJS.ErrnoException | undefined;
     oversized.child.stdin?.once('error', (error) => {
       oversizedInputError = error as NodeJS.ErrnoException;
@@ -670,6 +718,15 @@ processTest(
     roots.push(root);
     await mkdir(path.join(root, '.sourcemesh'), { recursive: true });
 
+    const missingSelection = spawnRawServer(root);
+    missingSelection.child.stdin?.end();
+    const missingSelectionExit = await waitForExit(missingSelection.child);
+    assert.equal(missingSelectionExit.code, 2);
+    assert.deepEqual(missingSelection.read(), {
+      stdout: '',
+      stderr: 'The command arguments are invalid. (snapshot)\n',
+    });
+
     const unsafe = spawnRawServer(root, [
       '--snapshot',
       '.sourcemesh/../graph.json',
@@ -678,6 +735,18 @@ processTest(
     const unsafeExit = await waitForExit(unsafe.child);
     assert.equal(unsafeExit.code, 2);
     assert.deepEqual(unsafe.read(), {
+      stdout: '',
+      stderr: 'The command arguments are invalid. (snapshot)\n',
+    });
+
+    const arbitrary = spawnRawServer(root, [
+      '--snapshot',
+      '.sourcemesh/other.json',
+    ]);
+    arbitrary.child.stdin?.end();
+    const arbitraryExit = await waitForExit(arbitrary.child);
+    assert.equal(arbitraryExit.code, 2);
+    assert.deepEqual(arbitrary.read(), {
       stdout: '',
       stderr: 'The command arguments are invalid. (snapshot)\n',
     });
@@ -692,7 +761,10 @@ processTest(
       }),
       'utf8',
     );
-    const malformed = spawnRawServer(root);
+    const malformed = spawnRawServer(root, [
+      '--snapshot',
+      '.sourcemesh/graph.json',
+    ]);
     malformed.child.stdin?.end();
     const malformedExit = await waitForExit(malformed.child);
     assert.equal(malformedExit.code, 1);
@@ -713,7 +785,10 @@ processTest(
       '{"schemaVersion":3}\n',
       'utf8',
     );
-    const unsupported = spawnRawServer(root);
+    const unsupported = spawnRawServer(root, [
+      '--snapshot',
+      '.sourcemesh/graph.json',
+    ]);
     unsupported.child.stdin?.end();
     const unsupportedExit = await waitForExit(unsupported.child);
     assert.equal(unsupportedExit.code, 1);
@@ -729,13 +804,19 @@ processTest(
   async () => {
     const repository = await createSyntheticRepository();
 
-    const eof = spawnRawServer(repository.root);
+    const eof = spawnRawServer(repository.root, [
+      '--snapshot',
+      '.sourcemesh/snapshots/initial.json',
+    ]);
     eof.child.stdin?.end();
     const eofExit = await waitForExit(eof.child);
     assert.equal(eofExit.code, 0);
     assert.deepEqual(eof.read(), { stdout: '', stderr: '' });
 
-    const signaled = spawnRawServer(repository.root);
+    const signaled = spawnRawServer(repository.root, [
+      '--snapshot',
+      '.sourcemesh/snapshots/initial.json',
+    ]);
     signaled.child.stdin?.write(
       `${JSON.stringify({
         jsonrpc: '2.0',
@@ -776,7 +857,14 @@ processTest(
     roots.push(root);
     const child = spawn(
       process.execPath,
-      [...localServerArgs(), 'mcp', '--root', root],
+      [
+        ...localServerArgs(),
+        'mcp',
+        '--root',
+        root,
+        '--snapshot',
+        '.sourcemesh/snapshots/missing.json',
+      ],
       {
         cwd: process.cwd(),
         stdio: ['ignore', 'pipe', 'pipe'],

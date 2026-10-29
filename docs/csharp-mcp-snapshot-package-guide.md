@@ -11,25 +11,25 @@ Choose exactly one repository-relative selector: a solution or a project. Do
 not rely on automatic solution discovery.
 
 ```sh
-node dist/cli.js analyze --root <repository-root> --language csharp --solution <relative-solution-path> --snapshot .sourcemesh/graph.json
+node dist/cli.js analyze --root <repository-root> --language csharp --solution <relative-solution-path> --snapshot-id csharp-20261028
 ```
 
 For an intentionally single-project target, use `--project` instead:
 
 ```sh
-node dist/cli.js analyze --root <repository-root> --language csharp --project <relative-project-path> --snapshot .sourcemesh/graph.json
+node dist/cli.js analyze --root <repository-root> --language csharp --project <relative-project-path> --snapshot-id csharp-20261028
 ```
 
-The snapshot path is repository-relative. Analysis is create-only by default:
-do not pass `--overwrite` for this workflow. If the selected snapshot already
-exists, preserve it and choose a safely isolated target or an approved
-replacement workflow.
+Each analysis requires a new lowercase ASCII snapshot ID (letters, digits, and
+hyphens; starting with a letter; 1–64 characters). It deterministically maps to
+`.sourcemesh/snapshots/<id>.json`. Creation is create-only and `--overwrite` is
+not supported. If the ID already exists, preserve it and choose a new ID.
 
 After analysis succeeds, use the same repository root and snapshot path when
 starting MCP:
 
 ```sh
-node dist/cli.js mcp --root <repository-root> --snapshot .sourcemesh/graph.json
+node dist/cli.js mcp --root <repository-root> --snapshot .sourcemesh/snapshots/csharp-20261028.json
 ```
 
 ## Encoding and diagnostic budget
@@ -44,3 +44,9 @@ exceeds that budget, select an explicit `--max-diagnostics` value from `1` to
 
 Do not include a target's source, diagnostics, graph data, or absolute paths in
 MCP initialization instructions, logs, or test evidence.
+
+For handover, publish a new ID and start a new MCP process with its derived
+path. Existing MCP processes remain pinned to their loaded, validated content.
+Snapshots are not automatically deleted; clean them up manually only after
+confirming no process still references them. The former `.sourcemesh/graph.json`
+location is legacy read-only compatibility and must be supplied explicitly.

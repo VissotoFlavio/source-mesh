@@ -9,7 +9,7 @@ import { SnapshotError, type Snapshot } from './types.js';
 
 export async function openValidatedSnapshot(
   root: string,
-  snapshotPath?: string,
+  snapshotPath: string,
 ): Promise<Snapshot> {
   const target = await resolveSnapshotPath(root, snapshotPath);
   if (target.destinationIdentity === undefined)
