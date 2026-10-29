@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- Made immutable package candidate publication recognize the current GitHub CLI
+  `release not found` response while retaining fail-closed handling for every
+  other release lookup failure (#106).
+
 - Made C# discovery and worker test fixtures use canonical Windows paths so
   their adversarial path checks exercise the fail-closed production boundaries
   consistently (#103).
