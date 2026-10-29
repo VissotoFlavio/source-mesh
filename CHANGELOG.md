@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- Made C# discovery and worker test fixtures use canonical Windows paths so
+  their adversarial path checks exercise the fail-closed production boundaries
+  consistently (#103).
+
 ### Changed
 
 - Replaced application-specific validation and documentation with a generic,
