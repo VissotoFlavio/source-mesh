@@ -2,7 +2,7 @@
 
 SourceMesh is an experimental, local-first project for building a deterministic structural graph of source code. Its goal is to give developers and software agents a compact view of code structure and relationships without sending repository data to a hosted service.
 
-The local CLI can analyze an explicitly selected TypeScript/JavaScript repository into a contained schema-v1 snapshot and query symbols, files, and direct call relationships without a hosted service.
+The local CLI can analyze an explicitly selected TypeScript/JavaScript or C#/.NET repository into a contained snapshot and query symbols, files, and direct call relationships without a hosted service.
 
 ## Privacy boundary
 
@@ -43,11 +43,24 @@ npm run offline:check
 npm run pack:check
 ```
 
-## Local package distribution
+## Install an official prerelease
 
-The supported installed package is a Windows x64 tarball for a machine that
-already has the .NET 10 runtime installed. Build the helper from the committed
-offline NuGet feed, then create and validate a complete local tarball:
+The supported installed package is a Windows x64 prerelease asset for a machine
+with the .NET 10 runtime already installed. Download the selected GitHub
+prerelease tarball and its SHA-256 checksum, verify it, install it globally,
+and configure an MCP host without requiring a SourceMesh checkout. The complete
+user and AI-host procedure is in the packaged
+[installation and MCP guide](docs/csharp-mcp-snapshot-package-guide.md).
+
+The package is private and is not installed from the npm registry. Installation
+is a local `npm install --global --ignore-scripts <downloaded-tarball>` step;
+runtime analysis does not restore, compile, download dependencies, update
+itself, or contact a registry.
+
+## Verify package distribution from a checkout
+
+Maintainers build the helper from the committed offline NuGet feed and validate
+the complete package with:
 
 ```powershell
 dotnet restore tools/sourcemesh-roslyn/sourcemesh-roslyn.csproj --locked-mode --configfile tools/sourcemesh-roslyn/NuGet.offline.config
@@ -55,14 +68,9 @@ npm run csharp:offline:check
 npm run package:check
 ```
 
-`package:check` creates a real tarball containing `dist`, the Release `net10.0`
-Roslyn payload, and bundled production Node dependencies. It
-installs that tarball into an empty consumer with
-`npm install --offline --ignore-scripts`, analyzes the C# fixture, verifies a
-schema-v2 create-only snapshot, and queries the installed MCP over stdio under
-the offline guard. Consumer installation performs no restore, build, network
-access, telemetry, or lifecycle installation script. The tarball is a local
-artifact; this project does not publish it or auto-update it.
+`package:check` installs a real package into an empty local consumer, analyzes
+the synthetic C# fixture, and queries the installed MCP over stdio under the
+checkout validation guard.
 
 The exact payload allowlist, approved dependency SHA-256 values, package
 versions, and size bounds are recorded in
@@ -73,7 +81,7 @@ Third-party license and integrity inventory is in
 [docs/package-distribution.md](docs/package-distribution.md) for the supported
 contract and exclusions.
 
-For the authorized Windows x64 local-checkout beta flow, see
+For checkout-only Windows x64 beta validation, see
 [docs/beta-checkout.md](docs/beta-checkout.md).
 
 For the ordered beta gates, safe execution rules, outcomes, and tester evidence
@@ -87,7 +95,7 @@ For the authorized GitHub workflow that turns an eligible release pull request
 into an immutable private package candidate, see
 [immutable package candidates](docs/package-candidate-recovery.md).
 
-After a build, analyze and query a repository locally:
+From a checkout after a build, analyze and query a repository locally:
 
 ```sh
 node dist/cli.js analyze --root /path/to/repository --snapshot-id run-20261028
@@ -130,8 +138,9 @@ node dist/cli.js mcp --root /path/to/repository --snapshot .sourcemesh/snapshots
 
 Generate the snapshot before configuring or starting MCP. The server only
 queries an existing validated snapshot; it does not analyze the repository or
-write a snapshot. The C# selection, encoding, diagnostic-budget, create-only,
-and same-root flow is in the [installed C# snapshot guide](docs/csharp-mcp-snapshot-package-guide.md).
+write a snapshot. The installed C# selection, encoding, diagnostic-budget,
+create-only, and same-root flow is in the
+[installation and MCP guide](docs/csharp-mcp-snapshot-package-guide.md).
 
 The server requires a snapshot explicitly, loads and validates it once before opening `stdio`, constructs one
 immutable query service, and registers exactly these bounded tools:
@@ -142,11 +151,12 @@ objects reject unknown properties. The server has no network listener,
 resources, prompts, or write tools. MCP protocol messages exclusively use
 stdout; startup, lifecycle, and sanitized error diagnostics use stderr.
 
-Configure an MCP host to start `node` directly with `dist/cli.js mcp`, an
-explicit repository root, and a snapshot path. To hand over to a fresh analysis,
-publish a different ID then start a new MCP process with that path; a running
-process remains pinned to its original snapshot. SourceMesh sends only requested bounded graph
-responses through the local pipe. The connected editor, agent, or model host
+Configure an MCP host with the installed Node executable and CLI path from the
+[installation and MCP guide](docs/csharp-mcp-snapshot-package-guide.md), an
+explicit repository root, and a snapshot path. To hand over to a fresh
+analysis, publish a different ID then start a new MCP process with that path; a
+running process remains pinned to its original snapshot. SourceMesh sends only
+requested bounded graph responses through the local pipe. The connected editor, agent, or model host
 may process or transmit tool schemas, arguments, and results under its own
 privacy and data-processing policy; local `stdio` is not a guarantee that the
 host or its provider remains local.
@@ -188,13 +198,6 @@ Node.js, OS, commit, fixture counts, and snapshot bytes. These measurements are
 fixture- and host-specific; they are not production capacity, latency SLOs, or
 arbitrary-repository scale claims. The complete validation record and limitations
 are in [docs/mvp-validation.md](docs/mvp-validation.md).
-
-## Optional Velocy API acceptance
-
-The real Velocy API checkout can be checked locally with the explicit,
-opt-in-only profile described in [docs/velocy-local-acceptance.md](docs/velocy-local-acceptance.md).
-It is outside CI, does not restore or build the target, and writes only a
-create-only snapshot inside the target's `.sourcemesh/` directory.
 
 ## Project status
 
