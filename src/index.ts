@@ -6,6 +6,20 @@ export {
   validateLanguagePackManifest,
 } from './packs.js';
 export { BUNDLED_LANGUAGE_PACKS } from './bundled-packs.js';
+export {
+  LOCAL_WORKER_MAX_MESSAGE_BYTES,
+  LOCAL_WORKER_MAX_STDERR_BYTES,
+  LOCAL_WORKER_PROTOCOL_VERSION,
+  LocalWorkerError,
+  LocalWorkerRegistry,
+  runLocalWorker,
+} from './local-worker.js';
+export type {
+  LocalWorkerDefinition,
+  LocalWorkerRequest,
+  LocalWorkerResponse,
+  LocalWorkerRunOptions,
+} from './local-worker.js';
 export { typescriptPack } from './packs/typescript.js';
 export type {
   TypeScriptGraphFragment,
