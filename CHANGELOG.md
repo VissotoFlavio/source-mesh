@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- Added a reusable, offline language-pack conformance suite covering request
+  boundaries, fragment validation, determinism, diagnostics, and resource
+  limits (#54).
+
 - Added schema-v3 snapshots with deterministic language-pack provenance and
   relation evidence, plus bounded query and MCP projections that keep legacy
   schemas readable (#53).

@@ -451,3 +451,55 @@ test('a registered manifest is snapshotted before later mutation or getter repla
   assert.deepEqual(result.diagnostics, []);
   assert.equal(result.fragment?.pack.id, 'stable');
 });
+
+test('a returned fragment is isolated from later pack-owned mutation', async () => {
+  const node = {
+    key: 'stable',
+    kind: 'module',
+    path: 'src/main.fake',
+    name: 'stable',
+  };
+  const registry = new LanguagePackRegistry();
+  registry.register({
+    ...pack,
+    manifest: { ...pack.manifest, id: 'isolated' },
+    analyze: () => ({
+      pack: { id: 'isolated', version: '1.0.0' },
+      nodes: [node],
+      edges: [],
+      diagnostics: [],
+    }),
+  });
+  registry.configure({ enabledPackIds: ['isolated'] });
+  const result = await registry.analyze('isolated', request);
+  node.path = '/outside.fake';
+  assert.equal(result.fragment?.nodes[0]?.path, 'src/main.fake');
+});
+
+test('a fragment snapshot closes getters before the Core validates it', async () => {
+  let reads = 0;
+  const node = {
+    key: 'getter',
+    kind: 'module',
+    get path(): string {
+      reads += 1;
+      return reads === 1 ? 'src/main.fake' : '/outside.fake';
+    },
+    name: 'getter',
+  };
+  const registry = new LanguagePackRegistry();
+  registry.register({
+    ...pack,
+    manifest: { ...pack.manifest, id: 'getter-snapshot' },
+    analyze: () => ({
+      pack: { id: 'getter-snapshot', version: '1.0.0' },
+      nodes: [node],
+      edges: [],
+      diagnostics: [],
+    }),
+  });
+  registry.configure({ enabledPackIds: ['getter-snapshot'] });
+  const result = await registry.analyze('getter-snapshot', request);
+  assert.equal(result.fragment?.nodes[0]?.path, 'src/main.fake');
+  assert.equal(reads, 1);
+});

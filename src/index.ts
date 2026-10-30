@@ -5,6 +5,7 @@ export {
   LanguagePackRegistry,
   validateLanguagePackManifest,
 } from './packs.js';
+export { BUNDLED_LANGUAGE_PACKS } from './bundled-packs.js';
 export type {
   AnalysisLimits,
   AnalysisRequest,
