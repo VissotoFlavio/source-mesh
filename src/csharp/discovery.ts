@@ -34,8 +34,13 @@ import {
   CSHARP_MAX_XML_NODES,
   CSHARP_MAX_XML_TEXT_ATTRIBUTE_BYTES,
   CSHARP_MAX_XML_BYTES,
+  CSHARP_EXPLICIT_PROJECT_SELECTION_VERSION,
+  createCSharpExplicitProjectSelection,
   type CSharpDiscoveryDiagnostic,
   type CSharpDiscoverySelection,
+  type CSharpExplicitProjectManifest,
+  type CSharpExplicitProjectManifestResult,
+  type CSharpExplicitProjectSelection,
   type CSharpManifest,
   type CSharpManifestResult,
   type CSharpProjectManifest,
@@ -97,6 +102,15 @@ function failureResult(
   code: CSharpDiscoveryDiagnostic['code'],
   relativePath?: string,
 ): CSharpManifestResult {
+  return Object.freeze({
+    diagnostics: freezeArray([diagnostic(code, relativePath)]),
+  });
+}
+
+function explicitFailureResult(
+  code: CSharpDiscoveryDiagnostic['code'],
+  relativePath?: string,
+): CSharpExplicitProjectManifestResult {
   return Object.freeze({
     diagnostics: freezeArray([diagnostic(code, relativePath)]),
   });
@@ -1029,6 +1043,7 @@ async function discoverProjectFiles(
 async function parseProject(
   state: DiscoveryState,
   projectPath: string,
+  readReferences = true,
 ): Promise<{
   readonly manifest: CSharpProjectManifest;
   readonly references: readonly string[];
@@ -1206,7 +1221,13 @@ async function parseProject(
     const reference = resolveLiteral(directory, value, projectPath);
     if (!isProjectPath(reference))
       throw new CSharpFailure('unsupported_construct', projectPath);
-    const inspected = await inspectContainedFile(state, reference, 'file');
+    const inspected = await inspectContainedFile(
+      state,
+      reference,
+      'file',
+      undefined,
+      readReferences,
+    );
     if (!isProjectPath(inspected.canonicalPath))
       throw new CSharpFailure('unsupported_construct', projectPath);
     references.push(inspected.canonicalPath);
@@ -1384,3 +1405,125 @@ export async function discoverCSharpManifest(
 }
 
 export const discoverCSharpProjectManifest = discoverCSharpManifest;
+
+/**
+ * Constructs a manifest for exactly the projects named by the explicit v1
+ * selection. Project references remain manifest data only; they never extend
+ * this selection or trigger source discovery for an unselected project.
+ */
+export async function discoverCSharpExplicitProjectManifest(
+  repositoryRoot: string,
+  selection: CSharpExplicitProjectSelection,
+  options: DiscoverCSharpManifestOptions = {},
+): Promise<CSharpExplicitProjectManifestResult> {
+  let canonicalSelection: CSharpExplicitProjectSelection;
+  try {
+    if (
+      typeof selection !== 'object' ||
+      selection === null ||
+      !Array.isArray(selection.projects)
+    )
+      return explicitFailureResult('invalid_selection');
+    const version = selection.version;
+    const kind = selection.kind;
+    const requestedProjects: string[] = [];
+    const requestedLength = selection.projects.length;
+    for (let index = 0; index < requestedLength; index += 1) {
+      const project = selection.projects[index];
+      if (typeof project !== 'string')
+        return explicitFailureResult('invalid_selection');
+      requestedProjects.push(project);
+    }
+    const normalized = createCSharpExplicitProjectSelection(
+      Object.freeze(requestedProjects),
+    );
+    if (
+      version !== CSHARP_EXPLICIT_PROJECT_SELECTION_VERSION ||
+      kind !== 'explicit-projects' ||
+      'diagnostic' in normalized ||
+      normalized.selection.projects.length !== requestedProjects.length ||
+      normalized.selection.projects.some(
+        (project, index) => project !== requestedProjects[index],
+      )
+    )
+      return explicitFailureResult(
+        'diagnostic' in normalized &&
+          normalized.diagnostic.code === 'resource_limit'
+          ? 'resource_limit'
+          : 'invalid_selection',
+      );
+    canonicalSelection = normalized.selection;
+  } catch {
+    return explicitFailureResult('invalid_selection');
+  }
+
+  if (isRemoteRoot(repositoryRoot))
+    return explicitFailureResult('path_invalid');
+
+  try {
+    const filesystem = options.filesystem ?? createDefaultDiscoveryFileSystem();
+    const root = await filesystem.realpath(repositoryRoot);
+    const rootStats = await filesystem.stat(root);
+    if (!rootStats.isDirectory()) return explicitFailureResult('path_invalid');
+    const rootIdentity = await filesystem.lstat(root);
+    if (rootIdentity.isSymbolicLink() || !rootIdentity.isDirectory())
+      return explicitFailureResult('path_invalid');
+    const state: DiscoveryState = {
+      root,
+      rootIdentity,
+      filesystem,
+      aggregateXmlBytes: 0,
+      aggregateReadBytes: 0,
+      readOperations: 0,
+      projectCount: 0,
+      fileCount: 0,
+      explicitIncludeReads: 0,
+      explicitOperations: 0,
+      directoryEntries: 0,
+    };
+
+    // Validate every selected entry before reading any project metadata. This
+    // prevents a partial manifest from giving an invalid selection authority.
+    const selected = new Map<string, string>();
+    const selectedIdentities = new Set<string>();
+    for (const requested of canonicalSelection.projects) {
+      const entry = await inspectContainedFile(
+        state,
+        requested,
+        'file',
+        undefined,
+        false,
+      );
+      const identity = `${entry.identity.dev}:${entry.identity.ino}`;
+      if (selectedIdentities.has(identity))
+        throw new CSharpFailure('path_invalid', requested);
+      selectedIdentities.add(identity);
+      selected.set(pathIdentityKey(entry.canonicalPath), entry.canonicalPath);
+    }
+    if (selected.size !== canonicalSelection.projects.length)
+      throw new CSharpFailure('path_invalid');
+
+    const projects = new Map<string, CSharpProjectManifest>();
+    for (const projectPath of [...selected.values()].sort(ordinal)) {
+      const parsed = await parseProject(state, projectPath, false);
+      projects.set(pathIdentityKey(projectPath), parsed.manifest);
+    }
+    const orderedProjects = [...projects.values()].sort((left, right) =>
+      ordinal(left.path, right.path),
+    );
+    const manifest: CSharpExplicitProjectManifest = Object.freeze({
+      language: 'csharp',
+      selection: Object.freeze({
+        version: CSHARP_EXPLICIT_PROJECT_SELECTION_VERSION,
+        kind: 'explicit-projects',
+        projects: freezeArray(orderedProjects.map((project) => project.path)),
+      }),
+      projects: freezeArray(orderedProjects),
+    });
+    return Object.freeze({ manifest, diagnostics: freezeArray([]) });
+  } catch (error) {
+    if (error instanceof CSharpFailure)
+      return explicitFailureResult(error.code, error.relativePath);
+    return explicitFailureResult('io_error');
+  }
+}

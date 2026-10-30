@@ -93,6 +93,7 @@ export type {
   DiscoveryStats,
 } from './discovery.js';
 export {
+  discoverCSharpExplicitProjectManifest,
   discoverCSharpManifest,
   discoverCSharpProjectManifest,
 } from './csharp/discovery.js';
@@ -107,6 +108,8 @@ export type {
   CSharpExplicitProjectSelectionResult,
   CSharpDiscoveryDiagnostic,
   CSharpDiscoverySelection,
+  CSharpExplicitProjectManifest,
+  CSharpExplicitProjectManifestResult,
   CSharpManifest,
   CSharpManifestResult,
   CSharpProjectManifest,

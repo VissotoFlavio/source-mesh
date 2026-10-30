@@ -102,7 +102,15 @@ export function createCSharpExplicitProjectSelection(
     };
 
   const projects = new Map<string, string>();
-  for (const requested of requestedProjects) {
+  for (let index = 0; index < requestedProjects.length; index += 1) {
+    const requested = requestedProjects[index];
+    if (typeof requested !== 'string')
+      return {
+        diagnostic: {
+          version: CSHARP_EXPLICIT_PROJECT_SELECTION_VERSION,
+          code: 'path_invalid',
+        },
+      };
     if (!isWellFormedUtf16(requested))
       return {
         diagnostic: {
@@ -194,6 +202,17 @@ export interface CSharpManifest {
   readonly projects: readonly CSharpProjectManifest[];
 }
 
+/**
+ * A manifest produced from the versioned explicit-project selection contract.
+ * It is deliberately distinct from the legacy manifest consumed by the Roslyn
+ * worker: worker support for this boundary is introduced separately.
+ */
+export interface CSharpExplicitProjectManifest {
+  readonly language: 'csharp';
+  readonly selection: CSharpExplicitProjectSelection;
+  readonly projects: readonly CSharpProjectManifest[];
+}
+
 export type CSharpDiscoveryDiagnosticCode =
   | 'invalid_selection'
   | 'path_invalid'
@@ -211,6 +230,11 @@ export interface CSharpDiscoveryDiagnostic {
 
 export interface CSharpManifestResult {
   readonly manifest?: CSharpManifest;
+  readonly diagnostics: readonly CSharpDiscoveryDiagnostic[];
+}
+
+export interface CSharpExplicitProjectManifestResult {
+  readonly manifest?: CSharpExplicitProjectManifest;
   readonly diagnostics: readonly CSharpDiscoveryDiagnostic[];
 }
 

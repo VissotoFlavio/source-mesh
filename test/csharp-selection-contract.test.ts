@@ -44,3 +44,15 @@ test('explicit C# project selection fails closed before discovery', () => {
     });
   }
 });
+
+test('explicit C# project selection rejects sparse project arrays', () => {
+  const projects = new Array<string>(2);
+  projects[0] = 'src/App/App.csproj';
+
+  assert.deepEqual(createCSharpExplicitProjectSelection(projects), {
+    diagnostic: {
+      version: CSHARP_EXPLICIT_PROJECT_SELECTION_VERSION,
+      code: 'path_invalid',
+    },
+  });
+});
