@@ -1,3 +1,11 @@
+import path from 'node:path';
+
+import {
+  discoverSourceFiles,
+  type DiscoverSourceFilesOptions,
+  type DiscoveryResult,
+} from './discovery.js';
+
 export const LANGUAGE_PACK_CONTRACT_VERSION = 1;
 
 export type LanguagePackExecutionMode =
@@ -6,7 +14,16 @@ export type LanguagePackCapability =
   'source-analysis' | 'project-manifest' | 'semantic-relations';
 export type RelationConfidence = 'semantic' | 'syntactic' | 'inferred';
 export type PackDiagnosticCode =
-  'pack_response_invalid' | 'pack_not_registered' | 'pack_request_invalid';
+  | 'pack_response_invalid'
+  | 'pack_not_registered'
+  | 'pack_request_invalid'
+  | 'pack_disabled'
+  | 'pack_already_registered'
+  | 'pack_unsupported_extension'
+  | 'pack_duplicate_extension'
+  | 'pack_unavailable'
+  | 'pack_incompatible'
+  | 'pack_selection_ambiguous';
 
 export interface LanguagePackManifest {
   readonly contractVersion: 1;
@@ -75,6 +92,60 @@ export interface PackAnalysisResult {
   readonly diagnostics: readonly PackBoundaryDiagnostic[];
 }
 
+/** The static, local list of packs that may participate in one analysis. */
+export interface LanguagePackSelection {
+  readonly enabledPackIds: readonly string[];
+  /** Resolves a shared extension to exactly one enabled local pack. */
+  readonly extensionOwners?: Readonly<Record<string, string>>;
+}
+
+export interface PackExtensionOwner {
+  readonly extension: string;
+  readonly packId: string;
+}
+
+/**
+ * The closed discovery input derived from enabled local pack manifests. No
+ * repository metadata, package lookup, or remote state participates here.
+ */
+export interface PackDiscoveryPlan {
+  readonly extensions: readonly string[];
+  readonly owners: readonly PackExtensionOwner[];
+  readonly diagnostics: readonly PackBoundaryDiagnostic[];
+}
+
+export interface PackFileDispatch {
+  readonly path: string;
+  readonly packId: string;
+}
+
+export interface PackDispatchResult {
+  readonly dispatch?: PackFileDispatch;
+  readonly diagnostics: readonly PackBoundaryDiagnostic[];
+}
+
+export interface EnabledPackDiscoveryResult {
+  readonly discovery?: DiscoveryResult;
+  readonly dispatches: readonly PackFileDispatch[];
+  readonly diagnostics: readonly PackBoundaryDiagnostic[];
+}
+
+export interface PackRegistrationResult {
+  readonly diagnostics: readonly PackBoundaryDiagnostic[];
+}
+
+interface StoredLanguagePackSelection {
+  readonly enabledPackIds: readonly string[];
+  readonly extensionOwners: ReadonlyMap<string, string>;
+}
+
+interface RegisteredLanguagePack {
+  readonly manifest: LanguagePackManifest;
+  readonly analyze: LanguagePack['analyze'];
+}
+
+const INVALID_SELECTION = Symbol('invalid-language-pack-selection');
+
 const modes = new Set<LanguagePackExecutionMode>([
   'in-process',
   'local-worker',
@@ -114,6 +185,82 @@ const failure = (
 ): PackAnalysisResult => ({
   diagnostics: Object.freeze([{ code, severity: 'error', message }]),
 });
+const diagnostic = (
+  code: PackDiagnosticCode,
+  message: string,
+): PackBoundaryDiagnostic => ({ code, severity: 'error', message });
+const diagnostics = (
+  ...items: readonly PackBoundaryDiagnostic[]
+): readonly PackBoundaryDiagnostic[] =>
+  Object.freeze(
+    [...items].sort(
+      (left, right) =>
+        ordinal(left.code, right.code) || ordinal(left.message, right.message),
+    ),
+  );
+
+function storedSelection(
+  value: unknown,
+): StoredLanguagePackSelection | typeof INVALID_SELECTION {
+  try {
+    if (typeof value !== 'object' || value === null || Array.isArray(value))
+      return INVALID_SELECTION;
+    const selection = value as Partial<LanguagePackSelection>;
+    if (
+      !Array.isArray(selection.enabledPackIds) ||
+      !selection.enabledPackIds.every(safeText)
+    )
+      return INVALID_SELECTION;
+    const ownerConfiguration = selection.extensionOwners;
+    if (ownerConfiguration === undefined)
+      return Object.freeze({
+        enabledPackIds: Object.freeze([...selection.enabledPackIds]),
+        extensionOwners: new Map(),
+      });
+    if (
+      typeof ownerConfiguration !== 'object' ||
+      ownerConfiguration === null ||
+      Array.isArray(ownerConfiguration)
+    )
+      return INVALID_SELECTION;
+    const prototype = Object.getPrototypeOf(ownerConfiguration);
+    if (prototype !== Object.prototype && prototype !== null)
+      return INVALID_SELECTION;
+    const entries = Object.entries(ownerConfiguration);
+    if (
+      !entries.every(
+        ([extensionName, packId]) =>
+          extension.test(extensionName) && safeText(packId),
+      )
+    )
+      return INVALID_SELECTION;
+    return Object.freeze({
+      enabledPackIds: Object.freeze([...selection.enabledPackIds]),
+      extensionOwners: new Map(entries),
+    });
+  } catch {
+    return INVALID_SELECTION;
+  }
+}
+
+function snapshotManifest(
+  manifest: LanguagePackManifest,
+): LanguagePackManifest {
+  const snapshot: LanguagePackManifest = {
+    contractVersion: manifest.contractVersion,
+    id: manifest.id,
+    version: manifest.version,
+    extensions: [...manifest.extensions],
+    executionMode: manifest.executionMode,
+    capabilities: [...manifest.capabilities],
+  };
+  validateLanguagePackManifest(snapshot);
+  return Object.freeze({
+    ...snapshot,
+    extensions: Object.freeze([...snapshot.extensions]),
+    capabilities: Object.freeze([...snapshot.capabilities]),
+  });
+}
 
 export function validateLanguagePackManifest(
   manifest: LanguagePackManifest,
@@ -226,22 +373,256 @@ function normalized(fragment: GraphFragment): GraphFragment {
 }
 
 export class LanguagePackRegistry {
-  readonly #packs = new Map<string, LanguagePack>();
+  readonly #packs = new Map<string, RegisteredLanguagePack>();
+  readonly #incompatiblePackIds = new Set<string>();
+  #selection:
+    StoredLanguagePackSelection | typeof INVALID_SELECTION | undefined;
 
   register(pack: LanguagePack): void {
-    validateLanguagePackManifest(pack.manifest);
-    if (this.#packs.has(pack.manifest.id))
+    const manifest = snapshotManifest(pack.manifest);
+    this.#store(manifest, pack.analyze);
+  }
+
+  #store(
+    manifest: LanguagePackManifest,
+    analyze: LanguagePack['analyze'],
+  ): void {
+    if (this.#packs.has(manifest.id))
       throw new TypeError('Language pack is already registered.');
-    this.#packs.set(pack.manifest.id, pack);
+    this.#incompatiblePackIds.delete(manifest.id);
+    this.#packs.set(manifest.id, Object.freeze({ manifest, analyze }));
+  }
+
+  /**
+   * Records a compatible, preinstalled pack without allowing an invalid local
+   * candidate to escape as an exception or trigger any lookup.
+   */
+  registerCandidate(candidate: unknown): PackRegistrationResult {
+    let id: unknown;
+    try {
+      const pack = candidate as Partial<LanguagePack> | undefined;
+      const candidateManifest = pack?.manifest;
+      id = candidateManifest?.id;
+      if (typeof pack?.analyze !== 'function') throw new TypeError();
+      const manifest = snapshotManifest(
+        candidateManifest as LanguagePackManifest,
+      );
+      if (this.#packs.has(manifest.id))
+        return {
+          diagnostics: diagnostics(
+            diagnostic(
+              'pack_already_registered',
+              'Language pack is already registered.',
+            ),
+          ),
+        };
+      this.#store(manifest, pack.analyze);
+      return { diagnostics: Object.freeze([]) };
+    } catch {
+      if (safeText(id) && !this.#packs.has(id))
+        this.#incompatiblePackIds.add(id);
+      return {
+        diagnostics: diagnostics(
+          diagnostic(
+            'pack_incompatible',
+            'Language pack is incompatible with the Core contract.',
+          ),
+        ),
+      };
+    }
+  }
+
+  /**
+   * Sets the explicit local enablement list and optional ownership choices.
+   * A caller must choose an owner for every extension shared by enabled packs.
+   */
+  configure(selection: LanguagePackSelection): PackDiscoveryPlan {
+    this.#selection = storedSelection(selection);
+    return this.discoveryPlan();
+  }
+
+  /** Returns the deterministic extension union and its unique local owners. */
+  discoveryPlan(): PackDiscoveryPlan {
+    const selection = this.#selection;
+    if (selection === undefined || selection === INVALID_SELECTION)
+      return Object.freeze({
+        extensions: Object.freeze([]),
+        owners: Object.freeze([]),
+        diagnostics: diagnostics(
+          diagnostic(
+            'pack_selection_ambiguous',
+            'Language pack selection is ambiguous.',
+          ),
+        ),
+      });
+    const enabledIds = selection?.enabledPackIds ?? [...this.#packs.keys()];
+    const configuredOwners = selection?.extensionOwners ?? new Map();
+    const items: PackBoundaryDiagnostic[] = [];
+    const requested = new Set<string>();
+
+    for (const id of enabledIds) {
+      if (!safeText(id) || requested.has(id)) {
+        items.push(
+          diagnostic(
+            'pack_selection_ambiguous',
+            'Language pack selection is ambiguous.',
+          ),
+        );
+        continue;
+      }
+      requested.add(id);
+      if (this.#incompatiblePackIds.has(id)) {
+        items.push(
+          diagnostic(
+            'pack_incompatible',
+            'Language pack is incompatible with the Core contract.',
+          ),
+        );
+      } else if (!this.#packs.has(id)) {
+        items.push(
+          diagnostic('pack_unavailable', 'Language pack is unavailable.'),
+        );
+      }
+    }
+
+    const enabled = [...requested]
+      .map((id) => this.#packs.get(id))
+      .filter((pack): pack is RegisteredLanguagePack => pack !== undefined)
+      .sort((left, right) => ordinal(left.manifest.id, right.manifest.id));
+    const candidates = new Map<string, RegisteredLanguagePack[]>();
+    for (const pack of enabled) {
+      for (const extensionName of pack.manifest.extensions) {
+        const owners = candidates.get(extensionName) ?? [];
+        owners.push(pack);
+        candidates.set(extensionName, owners);
+      }
+    }
+
+    for (const [extensionName, packId] of configuredOwners) {
+      const candidatesForExtension = candidates.get(extensionName) ?? [];
+      if (
+        candidatesForExtension.length === 0 ||
+        !candidatesForExtension.some((pack) => pack.manifest.id === packId)
+      )
+        items.push(
+          diagnostic(
+            'pack_selection_ambiguous',
+            'Language pack selection is ambiguous.',
+          ),
+        );
+    }
+
+    const owners: PackExtensionOwner[] = [];
+    for (const extensionName of [...candidates.keys()].sort(ordinal)) {
+      const candidatesForExtension = candidates.get(extensionName)!;
+      if (candidatesForExtension.length === 1) {
+        owners.push({
+          extension: extensionName,
+          packId: candidatesForExtension[0]!.manifest.id,
+        });
+        continue;
+      }
+      const ownerId = configuredOwners.get(extensionName);
+      const owner = candidatesForExtension.find(
+        (pack) => pack.manifest.id === ownerId,
+      );
+      if (owner === undefined) {
+        items.push(
+          diagnostic(
+            'pack_duplicate_extension',
+            'Language pack extension ownership must be configured explicitly.',
+          ),
+        );
+        continue;
+      }
+      owners.push({ extension: extensionName, packId: owner.manifest.id });
+    }
+
+    return Object.freeze({
+      extensions: Object.freeze(owners.map((owner) => owner.extension)),
+      owners: Object.freeze(owners.map((owner) => Object.freeze(owner))),
+      diagnostics: diagnostics(...items),
+    });
+  }
+
+  /** Resolves one approved repository-relative path to exactly one pack. */
+  dispatch(filePath: string): PackDispatchResult {
+    const plan = this.discoveryPlan();
+    if (plan.diagnostics.length > 0) return { diagnostics: plan.diagnostics };
+    const extensionName = path.posix.extname(filePath).toLowerCase();
+    const owner = plan.owners.find(
+      (candidate) => candidate.extension === extensionName,
+    );
+    return owner === undefined
+      ? {
+          diagnostics: diagnostics(
+            diagnostic(
+              'pack_unsupported_extension',
+              'Source file extension is not supported by an enabled language pack.',
+            ),
+          ),
+        }
+      : {
+          dispatch: Object.freeze({ path: filePath, packId: owner.packId }),
+          diagnostics: Object.freeze([]),
+        };
+  }
+
+  /**
+   * Discovers only the union of enabled, uniquely owned extensions and then
+   * dispatches each approved file to that single local owner.
+   */
+  async discover(
+    selectedRoot: string,
+    options: Omit<DiscoverSourceFilesOptions, 'extensions'> = {},
+  ): Promise<EnabledPackDiscoveryResult> {
+    const plan = this.discoveryPlan();
+    if (plan.diagnostics.length > 0)
+      return {
+        dispatches: Object.freeze([]),
+        diagnostics: plan.diagnostics,
+      };
+    if (plan.extensions.length === 0)
+      return {
+        dispatches: Object.freeze([]),
+        diagnostics: Object.freeze([]),
+      };
+    const discovery = await discoverSourceFiles(selectedRoot, {
+      ...options,
+      extensions: plan.extensions,
+    });
+    const dispatches: PackFileDispatch[] = [];
+    const items: PackBoundaryDiagnostic[] = [];
+    for (const source of discovery.sources) {
+      const result = this.dispatch(source);
+      if (result.dispatch !== undefined) dispatches.push(result.dispatch);
+      items.push(...result.diagnostics);
+    }
+    return {
+      discovery,
+      dispatches: Object.freeze(dispatches),
+      diagnostics: diagnostics(...items),
+    };
   }
 
   async analyze(
     id: string,
     request: AnalysisRequest,
   ): Promise<PackAnalysisResult> {
+    const plan = this.discoveryPlan();
+    if (plan.diagnostics.length > 0) return { diagnostics: plan.diagnostics };
     const pack = this.#packs.get(id);
     if (pack === undefined)
       return failure('pack_not_registered', 'Language pack is not registered.');
+    if (
+      this.#selection !== undefined &&
+      this.#selection !== INVALID_SELECTION &&
+      !this.#selection.enabledPackIds.includes(id)
+    )
+      return failure(
+        'pack_disabled',
+        'Language pack is disabled for this analysis.',
+      );
     if (!validRequest(request))
       return failure(
         'pack_request_invalid',

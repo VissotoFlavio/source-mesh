@@ -8,6 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- Added deterministic local enabled-pack extension discovery and single-owner
+  dispatch, with fail-closed compatibility and selection diagnostics (#52).
+
 - Added deterministic offline Roslyn handoff and composition for explicit C#
   project selections without expanding unselected project references (#116).
 
