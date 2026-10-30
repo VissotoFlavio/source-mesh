@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- Added release pull-request feedback for successful and failed immutable package
+  candidate generation, with a safe link to the relevant workflow run (#108).
+
 ## [0.1.0-beta.5] - 2026-10-29
 
 ### Fixed
