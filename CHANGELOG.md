@@ -8,6 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- Added ADR 0005, defining the local versioned language-pack architecture,
+  Core-owned isolation, and the C# worker boundary (#50).
+
 - Added release pull-request feedback for successful and failed immutable package
   candidate generation, with a safe link to the relevant workflow run (#108).
 
