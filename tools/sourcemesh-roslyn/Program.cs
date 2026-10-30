@@ -10,7 +10,11 @@ using Microsoft.CodeAnalysis.CSharp.Syntax;
 
 record Request(int Version, Manifest Manifest, string? SourceEncoding, int? MaxDiagnostics, List<Source> Sources);
 record Manifest(string Language, Selection Selection, Solution? Solution, List<Project> Projects);
-record Selection(string Kind, string Path);
+record Selection(string Kind, string? Path)
+{
+    public int? Version { get; init; }
+    public List<string>? Projects { get; init; }
+}
 record Solution(string Path, List<string> Projects);
 record Project(string Path, string? TargetFramework, string? LangVersion, List<string> References, List<string> Files);
 record Source(string Path, string Staged);
@@ -140,6 +144,8 @@ internal static class Program
     "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
     "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
 };
+    static readonly UTF8Encoding StrictUtf8 = new(false, true);
+    static readonly IComparer<string> Utf8OrdinalComparer = Comparer<string>.Create(CompareUtf8Ordinal);
 
     static bool Relative(string? value) =>
         !string.IsNullOrWhiteSpace(value) &&
@@ -152,6 +158,33 @@ internal static class Program
             x != "." &&
             x != ".." &&
             !WindowsDeviceNames.Contains(x.TrimEnd(' ', '.').Split('.')[0]));
+
+    static bool CanonicalProjectPath(string? value)
+    {
+        if (value is null || !Relative(value) || !value.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase)) return false;
+        try
+        {
+            return value.IsNormalized(NormalizationForm.FormC) && StrictUtf8.GetByteCount(value) <= MaxSerializedPathBytes;
+        }
+        catch (EncoderFallbackException)
+        {
+            return false;
+        }
+    }
+
+    static int CompareUtf8Ordinal(string left, string right)
+    {
+        var leftBytes = StrictUtf8.GetBytes(left);
+        var rightBytes = StrictUtf8.GetBytes(right);
+        return leftBytes.AsSpan().SequenceCompareTo(rightBytes);
+    }
+
+    static bool StrictlyUtf8Ordered(IReadOnlyList<string> paths)
+    {
+        for (var index = 1; index < paths.Count; index++)
+            if (CompareUtf8Ordinal(paths[index - 1], paths[index]) >= 0) return false;
+        return true;
+    }
 
     static bool ContainedBy(string root, string candidate) =>
         candidate.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
@@ -189,6 +222,7 @@ internal static class Program
     const int MaxReferences = 256;
     const int MaxFiles = 10_000;
     const int MaxReadOperations = 16_384;
+    const int MaxSerializedPathBytes = 16 * 1024;
     const long MaxSourceBytes = 4L * 1024 * 1024;
     const long MaxAggregateBytes = 256L * 1024 * 1024;
     const int MaxDiagnostics = 4096;
@@ -449,7 +483,7 @@ internal static class Program
 
     static void CollectDeclarations(ProjectAnalysis analysis)
     {
-        foreach (var tree in analysis.Models.Keys.OrderBy(item => item.FilePath, StringComparer.Ordinal))
+        foreach (var tree in analysis.Models.Keys.OrderBy(item => item.FilePath, Utf8OrdinalComparer))
         {
             var module = Module(tree.FilePath);
             foreach (var member in ((CompilationUnitSyntax)tree.GetRoot()).Members)
@@ -518,7 +552,7 @@ internal static class Program
         ProjectAnalysis analysis,
         Dictionary<string, List<SymbolResult>> allSymbols)
     {
-        foreach (var tree in analysis.Models.Keys.OrderBy(item => item.FilePath, StringComparer.Ordinal))
+        foreach (var tree in analysis.Models.Keys.OrderBy(item => item.FilePath, Utf8OrdinalComparer))
         {
             var model = analysis.Models[tree];
             var module = Module(tree.FilePath);
@@ -580,8 +614,8 @@ internal static class Program
     }
 
     static int CompareLocation(LocationResult left, LocationResult right) =>
-        string.CompareOrdinal(left.Path, right.Path) != 0
-            ? string.CompareOrdinal(left.Path, right.Path)
+        CompareUtf8Ordinal(left.Path, right.Path) != 0
+            ? CompareUtf8Ordinal(left.Path, right.Path)
             : left.Start.Line != right.Start.Line
                 ? left.Start.Line - right.Start.Line
                 : left.Start.Column != right.Start.Column
@@ -591,15 +625,15 @@ internal static class Program
                         : left.End.Column - right.End.Column;
 
     static int CompareSymbol(SymbolResult left, SymbolResult right) =>
-        string.CompareOrdinal(left.Path, right.Path) != 0
-            ? string.CompareOrdinal(left.Path, right.Path)
-            : string.CompareOrdinal(left.QualifiedName, right.QualifiedName) != 0
-                ? string.CompareOrdinal(left.QualifiedName, right.QualifiedName)
-                : string.CompareOrdinal(left.Kind, right.Kind) != 0
-                    ? string.CompareOrdinal(left.Kind, right.Kind)
-                    : string.CompareOrdinal(left.MemberRole, right.MemberRole) != 0
-                        ? string.CompareOrdinal(left.MemberRole, right.MemberRole)
-                        : string.CompareOrdinal(left.Name, right.Name);
+        CompareUtf8Ordinal(left.Path, right.Path) != 0
+            ? CompareUtf8Ordinal(left.Path, right.Path)
+            : CompareUtf8Ordinal(left.QualifiedName, right.QualifiedName) != 0
+                ? CompareUtf8Ordinal(left.QualifiedName, right.QualifiedName)
+                : CompareUtf8Ordinal(left.Kind, right.Kind) != 0
+                    ? CompareUtf8Ordinal(left.Kind, right.Kind)
+                    : CompareUtf8Ordinal(left.MemberRole, right.MemberRole) != 0
+                        ? CompareUtf8Ordinal(left.MemberRole, right.MemberRole)
+                        : CompareUtf8Ordinal(left.Name, right.Name);
 
     static int CompareDeclaration(DeclarationResult left, DeclarationResult right) =>
         CompareSymbol(new(left.Kind, left.Path, left.Name, left.QualifiedName, left.MemberRole), new(right.Kind, right.Path, right.Name, right.QualifiedName, right.MemberRole)) != 0
@@ -609,10 +643,10 @@ internal static class Program
                 : CompareLocation(left.Locations[0], right.Locations[0]);
 
     static int CompareRelationship(RelationshipResult left, RelationshipResult right) =>
-        string.CompareOrdinal(left.Kind, right.Kind) != 0
-            ? string.CompareOrdinal(left.Kind, right.Kind)
-            : string.CompareOrdinal(left.Status, right.Status) != 0
-                ? string.CompareOrdinal(left.Status, right.Status)
+        CompareUtf8Ordinal(left.Kind, right.Kind) != 0
+            ? CompareUtf8Ordinal(left.Kind, right.Kind)
+            : CompareUtf8Ordinal(left.Status, right.Status) != 0
+                ? CompareUtf8Ordinal(left.Status, right.Status)
                 : CompareSymbol(left.Source, right.Source) != 0
                     ? CompareSymbol(left.Source, right.Source)
                     : CompareSymbol(left.Target ?? left.Source, right.Target ?? right.Source) != 0
@@ -718,15 +752,23 @@ internal static class Program
             var declaredProjects = manifest.Projects ?? throw new InvalidOperationException();
             var selection = manifest.Selection ?? throw new InvalidOperationException();
             var sources = request.Sources ?? throw new InvalidOperationException();
-            if (request.Version != 1 || manifest.Language != "csharp" || request.SourceEncoding is not (null or "windows-1252") || request.MaxDiagnostics is not null && (request.MaxDiagnostics < 1 || request.MaxDiagnostics > 100_000) || selection.Kind is not ("solution" or "project") || !Relative(selection.Path) || declaredProjects.Count is 0 or > MaxProjects) Invalid();
+            if (request.Version != 1 || manifest.Language != "csharp" || request.SourceEncoding is not (null or "windows-1252") || request.MaxDiagnostics is not null && (request.MaxDiagnostics < 1 || request.MaxDiagnostics > 100_000) || declaredProjects.Count is 0 or > MaxProjects) Invalid();
+            var legacySelection = selection.Kind is "solution" or "project";
+            var explicitSelection = selection.Kind == "explicit-projects";
+            if (!legacySelection && !explicitSelection) Invalid();
+            if (legacySelection && (selection.Path is null || selection.Version is not null || selection.Projects is not null || !Relative(selection.Path))) Invalid();
+            var selectedProjects = selection.Projects;
+            if (explicitSelection && (selection.Path is not null || selection.Version != 1 || selectedProjects is null || selectedProjects.Count is 0 or > MaxProjects || selectedProjects.Any(project => !CanonicalProjectPath(project)) || selectedProjects.Distinct(StringComparer.OrdinalIgnoreCase).Count() != selectedProjects.Count || !StrictlyUtf8Ordered(selectedProjects))) Invalid();
             if (declaredProjects.Any(x => x.Files is null || x.References is null || !Relative(x.Path) || x.Files.Count > MaxFiles || x.References.Count > MaxReferences || x.Files.Distinct(StringComparer.Ordinal).Count() != x.Files.Count || x.References.Distinct(StringComparer.Ordinal).Count() != x.References.Count || x.Files.Any(file => !Relative(file)) || x.References.Any(reference => !Relative(reference)))) Invalid();
             var declared = declaredProjects.Select(x => x.Path).ToHashSet(StringComparer.Ordinal);
             if (declared.Count != declaredProjects.Count) Invalid();
+            if (explicitSelection && (declaredProjects.Any(project => !CanonicalProjectPath(project.Path)) || declaredProjects.Select(project => project.Path).Distinct(StringComparer.OrdinalIgnoreCase).Count() != declaredProjects.Count)) Invalid();
             if (manifest.Solution is { } solution && (solution.Projects is null || !Relative(solution.Path) || solution.Projects.Count > MaxSolutionProjects || solution.Projects.Any(project => !Relative(project)) || solution.Projects.Distinct(StringComparer.Ordinal).Count() != solution.Projects.Count || !solution.Projects.SequenceEqual(declaredProjects.OrderBy(x => x.Path, StringComparer.Ordinal).Select(x => x.Path), StringComparer.Ordinal))) Invalid();
-            if ((selection.Kind == "solution" && (manifest.Solution is null || manifest.Solution.Path != selection.Path)) || (selection.Kind == "project" && (manifest.Solution is not null || !declared.Contains(selection.Path)))) Invalid();
+            if ((selection.Kind == "solution" && (manifest.Solution is null || manifest.Solution.Path != selection.Path!)) || (selection.Kind == "project" && (manifest.Solution is not null || !declared.Contains(selection.Path!)))) Invalid();
+            if (explicitSelection && (manifest.Solution is not null || !selectedProjects!.SequenceEqual(declaredProjects.Select(project => project.Path), StringComparer.Ordinal))) Invalid();
             if (declaredProjects.SelectMany(x => x.Files).Count() > MaxReadOperations || declaredProjects.Any(x => x.References.Any(reference => reference == x.Path))) Invalid();
-            var logicalFiles = declaredProjects.SelectMany(x => x.Files).Distinct(StringComparer.Ordinal).OrderBy(x => x, StringComparer.Ordinal).ToArray();
-            if (sources.Count != logicalFiles.Length || sources.Any(source => !Relative(source.Path)) || sources.Select(source => source.Path).Distinct(StringComparer.Ordinal).Count() != sources.Count || sources.Select(source => source.Staged).Distinct(StringComparer.Ordinal).Count() != sources.Count || !sources.OrderBy(source => source.Path, StringComparer.Ordinal).Select((source, index) => source.Path == logicalFiles[index] && source.Staged == StagedName(index)).All(valid => valid)) Invalid();
+            var logicalFiles = declaredProjects.SelectMany(x => x.Files).Distinct(StringComparer.Ordinal).OrderBy(x => x, Utf8OrdinalComparer).ToArray();
+            if (sources.Count != logicalFiles.Length || sources.Any(source => !Relative(source.Path)) || sources.Select(source => source.Path).Distinct(StringComparer.Ordinal).Count() != sources.Count || sources.Select(source => source.Staged).Distinct(StringComparer.Ordinal).Count() != sources.Count || !sources.OrderBy(source => source.Path, Utf8OrdinalComparer).Select((source, index) => source.Path == logicalFiles[index] && source.Staged == StagedName(index)).All(valid => valid)) Invalid();
             var sourcePaths = sources.ToDictionary(source => source.Path, source => source.Staged, StringComparer.Ordinal);
             var diagnosticLimit = request.MaxDiagnostics ?? MaxDiagnostics;
             var diagnostics = new List<DiagnosticResult>();
@@ -737,7 +779,7 @@ internal static class Program
             MetadataReference[] runtimeReferences = RuntimeReferences();
             var compilations = new Dictionary<string, CSharpCompilation>(StringComparer.Ordinal);
             var allSymbols = new Dictionary<string, List<SymbolResult>>(StringComparer.Ordinal);
-            var pending = declaredProjects.OrderBy(x => x.Path, StringComparer.Ordinal).ToList();
+            var pending = declaredProjects.OrderBy(x => x.Path, Utf8OrdinalComparer).ToList();
             while (pending.Count > 0)
             {
                 var project = pending.FirstOrDefault(candidate => candidate.References is not null && candidate.References.All(reference => !declared.Contains(reference) || compilations.ContainsKey(reference))) ?? throw new InvalidOperationException();
@@ -746,7 +788,7 @@ internal static class Program
                 var projectReferences = project.References ?? throw new InvalidOperationException();
                 var parseOptions = ParseOptions(project.LangVersion);
                 var trees = new List<SyntaxTree>();
-                foreach (var file in projectFiles.OrderBy(x => x, StringComparer.Ordinal))
+                foreach (var file in projectFiles.OrderBy(x => x, Utf8OrdinalComparer))
                 {
                     var staged = sourcePaths[file];
                     var full = Path.Combine(stagingRoot, staged);

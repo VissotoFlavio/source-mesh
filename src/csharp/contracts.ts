@@ -56,7 +56,8 @@ export type CSharpExplicitProjectSelectionResult =
       readonly diagnostic: CSharpExplicitProjectSelectionDiagnostic;
     };
 
-function compareUtf8Ordinal(left: string, right: string): number {
+/** Compares canonical C# contract values by their UTF-8 byte sequence. */
+export function compareCSharpUtf8Ordinal(left: string, right: string): number {
   return Buffer.from(left, 'utf8').compare(Buffer.from(right, 'utf8'));
 }
 
@@ -163,7 +164,9 @@ export function createCSharpExplicitProjectSelection(
     selection: Object.freeze({
       version: CSHARP_EXPLICIT_PROJECT_SELECTION_VERSION,
       kind: 'explicit-projects',
-      projects: Object.freeze([...projects.values()].sort(compareUtf8Ordinal)),
+      projects: Object.freeze(
+        [...projects.values()].sort(compareCSharpUtf8Ordinal),
+      ),
     }),
   };
 }
@@ -204,14 +207,22 @@ export interface CSharpManifest {
 
 /**
  * A manifest produced from the versioned explicit-project selection contract.
- * It is deliberately distinct from the legacy manifest consumed by the Roslyn
- * worker: worker support for this boundary is introduced separately.
+ * Its project list is the complete analysis boundary: project references that
+ * are not listed here remain external to the local Roslyn compilation.
  */
 export interface CSharpExplicitProjectManifest {
   readonly language: 'csharp';
   readonly selection: CSharpExplicitProjectSelection;
   readonly projects: readonly CSharpProjectManifest[];
 }
+
+/**
+ * A C# manifest accepted by the local, offline analysis pipeline. The legacy
+ * form preserves single-project and solution behavior; the explicit form
+ * analyzes exactly its selected projects.
+ */
+export type CSharpAnalysisManifest =
+  CSharpManifest | CSharpExplicitProjectManifest;
 
 export type CSharpDiscoveryDiagnosticCode =
   | 'invalid_selection'

@@ -99,6 +99,7 @@ export {
 } from './csharp/discovery.js';
 export {
   createCSharpExplicitProjectSelection,
+  compareCSharpUtf8Ordinal,
   CSHARP_EXPLICIT_PROJECT_SELECTION_VERSION,
 } from './csharp/contracts.js';
 export type {
@@ -110,6 +111,7 @@ export type {
   CSharpDiscoverySelection,
   CSharpExplicitProjectManifest,
   CSharpExplicitProjectManifestResult,
+  CSharpAnalysisManifest,
   CSharpManifest,
   CSharpManifestResult,
   CSharpProjectManifest,

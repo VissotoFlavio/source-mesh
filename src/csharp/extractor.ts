@@ -16,6 +16,7 @@ import {
 } from '../graph.js';
 import type { SnapshotV2 } from '../snapshot/types.js';
 import type {
+  CSharpAnalysisManifest,
   CSharpManifest,
   CSharpWorkerLocation,
   CSharpWorkerRelationship,
@@ -25,9 +26,15 @@ import type { CSharpWorkerResult } from './worker.js';
 
 export interface ExtractCSharpDeclarationGraphRequest {
   readonly repositoryRoot: string;
-  readonly manifest: CSharpManifest;
+  readonly manifest: CSharpAnalysisManifest;
   readonly worker: CSharpWorkerResult;
   readonly repositoryName?: string;
+}
+
+function isLegacyManifest(
+  manifest: CSharpAnalysisManifest,
+): manifest is CSharpManifest {
+  return manifest.selection.kind !== 'explicit-projects';
 }
 
 type LogicalKind = Exclude<NodeKindV2, 'repository'>;
@@ -286,18 +293,20 @@ export function extractCSharpDeclarationGraph(
 
   const projectKeys = new Map<string, string>();
   const projectOwner = new Map<string, string>();
-  const solutionKey = request.manifest.solution
+  const solution = isLegacyManifest(request.manifest)
+    ? request.manifest.solution
+    : undefined;
+  const solutionKey = solution
     ? symbolKey(
         candidateSymbol(
           'solution',
-          request.manifest.solution.path,
-          basename(request.manifest.solution.path, ['.slnx', '.sln']),
-          basename(request.manifest.solution.path, ['.slnx', '.sln']),
+          solution.path,
+          basename(solution.path, ['.slnx', '.sln']),
+          basename(solution.path, ['.slnx', '.sln']),
         ),
       )
     : undefined;
-  if (request.manifest.solution !== undefined) {
-    const solution = request.manifest.solution;
+  if (solution !== undefined) {
     addLogical(
       candidateSymbol(
         'solution',

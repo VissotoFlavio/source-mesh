@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import {
   encodeSnapshot,
   extractCSharpDeclarationGraph,
+  type CSharpExplicitProjectManifest,
   type CSharpManifest,
   type CSharpWorkerRelationship,
   type CSharpWorkerResult,
@@ -17,6 +18,27 @@ const manifest: CSharpManifest = {
       path: 'App.csproj',
       references: [],
       files: ['src/App.cs'],
+    },
+  ],
+};
+
+const explicitManifest: CSharpExplicitProjectManifest = {
+  language: 'csharp',
+  selection: {
+    version: 1,
+    kind: 'explicit-projects',
+    projects: ['src/App/App.csproj', 'src/Tools/Tools.csproj'],
+  },
+  projects: [
+    {
+      path: 'src/App/App.csproj',
+      references: ['src/Lib/Lib.csproj'],
+      files: ['src/App/App.cs'],
+    },
+    {
+      path: 'src/Tools/Tools.csproj',
+      references: [],
+      files: ['src/Tools/Tools.cs'],
     },
   ],
 };
@@ -140,6 +162,52 @@ test('C# extraction is independent of repository roots and worker order', () => 
     worker: worker(),
   });
   assert.deepEqual(encodeSnapshot(first), encodeSnapshot(second));
+});
+
+test('C# explicit selections compose one deterministic snapshot without adding external references', () => {
+  const project = (path: string) => ({
+    path,
+    sourceCount: 1,
+    syntaxTreeCount: 1,
+    diagnosticCount: 0,
+  });
+  const first = extractCSharpDeclarationGraph({
+    repositoryRoot: 'C:/one',
+    manifest: explicitManifest,
+    worker: {
+      projects: [
+        project('src/Tools/Tools.csproj'),
+        project('src/App/App.csproj'),
+      ],
+      diagnostics: [],
+    },
+  });
+  const second = extractCSharpDeclarationGraph({
+    repositoryRoot: 'D:/two',
+    manifest: explicitManifest,
+    worker: {
+      projects: [
+        project('src/App/App.csproj'),
+        project('src/Tools/Tools.csproj'),
+      ],
+      diagnostics: [],
+    },
+  });
+
+  assert.deepEqual(encodeSnapshot(first), encodeSnapshot(second));
+  assert.deepEqual(
+    first.nodes
+      .flatMap((node) => (node.kind === 'project' ? [node.path] : []))
+      .sort(),
+    ['src/App/App.csproj', 'src/Tools/Tools.csproj'],
+  );
+  assert.ok(
+    first.diagnostics.some(
+      (diagnostic) =>
+        diagnostic.code === 'relationship_unresolved' &&
+        diagnostic.relationKind === 'references',
+    ),
+  );
 });
 
 test('C# compiler diagnostics remain visible to analysis callers without making a structurally complete graph partial', () => {
