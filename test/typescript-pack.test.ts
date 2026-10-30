@@ -68,3 +68,37 @@ test('TypeScript pack produces the established deterministic declaration graph f
     ],
   );
 });
+
+test('TypeScript pack marks graphs partial when the compiler reports diagnostics', async () => {
+  const result = await typescriptPack.analyze(
+    request({ 'broken.ts': 'const value: number = "not a number";\n' }),
+  );
+
+  assert.equal(result.completeness, 'partial');
+});
+
+test('TypeScript pack preserves external primitive method diagnostics', async () => {
+  const result = await typescriptPack.analyze(
+    request({
+      'service.ts':
+        'export function normalize(value: string): string { return value.trim(); }\n',
+    }),
+  );
+
+  assert.equal(
+    result.graph.diagnostics.some(
+      (diagnostic) =>
+        diagnostic.code === 'relationship_external' &&
+        diagnostic.path === 'service.ts',
+    ),
+    true,
+  );
+  assert.equal(
+    result.graph.diagnostics.some(
+      (diagnostic) =>
+        diagnostic.code === 'relationship_unresolved' &&
+        diagnostic.path === 'service.ts',
+    ),
+    false,
+  );
+});

@@ -267,6 +267,21 @@ function addDiagnostic(
   );
 }
 
+function isPrimitivePropertyAccess(
+  checker: ts.TypeChecker,
+  expression: ts.PropertyAccessExpression,
+): boolean {
+  const primitive =
+    ts.TypeFlags.StringLike |
+    ts.TypeFlags.NumberLike |
+    ts.TypeFlags.BooleanLike |
+    ts.TypeFlags.BigIntLike |
+    ts.TypeFlags.ESSymbolLike;
+  return (
+    (checker.getTypeAtLocation(expression.expression).flags & primitive) !== 0
+  );
+}
+
 export function extractRelationships(context: RelationshipContext): {
   readonly edges: readonly EdgeV1[];
   readonly diagnostics: readonly DiagnosticV1[];
@@ -617,7 +632,10 @@ export function extractRelationships(context: RelationshipContext): {
                   context,
                   nodeIds,
                 )
-              : { ids: [], external: false },
+              : ts.isPropertyAccessExpression(node.expression) &&
+                  isPrimitivePropertyAccess(checker, node.expression)
+                ? { ids: [], external: true }
+                : { ids: [], external: false },
             source,
             node,
           );

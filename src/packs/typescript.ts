@@ -136,6 +136,11 @@ function programFor(request: AnalysisRequest): {
 
 function analyze(request: AnalysisRequest): TypeScriptGraphFragment {
   const loaded = programFor(request);
+  const compilerDiagnostics = [
+    ...loaded.program.getOptionsDiagnostics(),
+    ...loaded.program.getSyntacticDiagnostics(),
+    ...loaded.program.getSemanticDiagnostics(),
+  ];
   const graph = extractDeclarationGraph({
     repositoryRoot: VIRTUAL_ROOT,
     project: {
@@ -158,7 +163,8 @@ function analyze(request: AnalysisRequest): TypeScriptGraphFragment {
     edges: [],
     diagnostics: [],
     graph,
-    completeness: loaded.valid ? 'complete' : 'partial',
+    completeness:
+      loaded.valid && compilerDiagnostics.length === 0 ? 'complete' : 'partial',
   });
 }
 
