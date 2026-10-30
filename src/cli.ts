@@ -18,20 +18,27 @@ import { isWindowsUnsafePath } from './discovery.js';
 import type {
   FileRelationResponseV1,
   FileRelationResponseV2,
+  FileRelationResponseV3,
   CSharpManifest,
   FunctionSelectorV1,
   GetSymbolResponseV1,
   GetSymbolResponseV2,
+  GetSymbolResponseV3,
   GraphQueryService,
   GraphQueryServiceV2,
+  GraphQueryServiceV3,
   NodeSummaryV1,
   NodeSummaryV2,
+  NodeSummaryV3,
   QueryErrorV1,
   QueryErrorV2,
+  QueryErrorV3,
   QueryResponseV1,
   QueryResponseV2,
+  QueryResponseV3,
   SearchResponseV1,
   SearchResponseV2,
+  SearchResponseV3,
   SearchSymbolKindV2,
   Snapshot,
   SnapshotV1,
@@ -154,7 +161,7 @@ export interface CliServices {
   readonly openValidatedSnapshot: typeof openValidatedSnapshot;
   readonly createGraphQueryService: (
     snapshot: Snapshot,
-  ) => GraphQueryService | GraphQueryServiceV2;
+  ) => GraphQueryService | GraphQueryServiceV2 | GraphQueryServiceV3;
 }
 
 const productionServices: CliServices = {
@@ -199,10 +206,11 @@ const SEARCH_KINDS = new Set<SearchSymbolKindV2>([
 ]);
 const MEMBER_ROLES = new Set(['none', 'static', 'instance']);
 
-type QueryService = GraphQueryService | GraphQueryServiceV2;
-type QueryResponse = QueryResponseV1 | QueryResponseV2;
-type QueryError = QueryErrorV1 | QueryErrorV2;
-type NodeSummary = NodeSummaryV1 | NodeSummaryV2;
+type QueryService =
+  GraphQueryService | GraphQueryServiceV2 | GraphQueryServiceV3;
+type QueryResponse = QueryResponseV1 | QueryResponseV2 | QueryResponseV3;
+type QueryError = QueryErrorV1 | QueryErrorV2 | QueryErrorV3;
+type NodeSummary = NodeSummaryV1 | NodeSummaryV2 | NodeSummaryV3;
 
 const QUERY_MESSAGES: Record<QueryError['code'], string> = {
   invalid_request: 'The query request is invalid.',
@@ -232,7 +240,7 @@ class CliFailure extends Error {
   readonly field: string | undefined;
   readonly candidates: QueryError['candidates'];
   readonly totalCandidates: number | undefined;
-  readonly schemaVersion: 1 | 2 | undefined;
+  readonly schemaVersion: 1 | 2 | 3 | undefined;
 
   constructor(
     code: string,
@@ -242,7 +250,7 @@ class CliFailure extends Error {
     options?: {
       readonly candidates?: QueryError['candidates'];
       readonly totalCandidates?: number;
-      readonly schemaVersion?: 1 | 2;
+      readonly schemaVersion?: 1 | 2 | 3;
     },
   ) {
     super(message);
@@ -666,7 +674,10 @@ function queryOptions(command: CommonOptions): {
   };
 }
 
-function queryFailure(error: QueryError, schemaVersion?: 1 | 2): CliFailure {
+function queryFailure(
+  error: QueryError,
+  schemaVersion?: 1 | 2 | 3,
+): CliFailure {
   const exitCode: 1 | 3 =
     error.code === 'invalid_request' ||
     error.code === 'limit_exceeded' ||
@@ -922,7 +933,8 @@ function pageLines(items: readonly NodeSummary[]): string[] {
 
 function humanQuery(command: QueryCommand, response: QueryResponse): string {
   if (response.operation === 'getSymbol') {
-    const details = response as GetSymbolResponseV1 | GetSymbolResponseV2;
+    const details = response as
+      GetSymbolResponseV1 | GetSymbolResponseV2 | GetSymbolResponseV3;
     return [
       summaryLine(details.symbol),
       `children: ${details.children.items.length}/${details.children.total}`,
@@ -932,15 +944,27 @@ function humanQuery(command: QueryCommand, response: QueryResponse): string {
   const page = response.page as
     | SearchResponseV1['page']
     | SearchResponseV2['page']
+    | SearchResponseV3['page']
     | FileRelationResponseV1['page']
-    | FileRelationResponseV2['page'];
+    | FileRelationResponseV2['page']
+    | FileRelationResponseV3['page'];
+  const items =
+    page.schemaVersion === 3 &&
+    (response.operation === 'listFileDependencies' ||
+      response.operation === 'listFileDependents' ||
+      response.operation === 'listCallers' ||
+      response.operation === 'listCallees')
+      ? (page.items as FileRelationResponseV3['page']['items']).map(
+          (item) => item.node,
+        )
+      : (page.items as readonly NodeSummary[]);
   return [
     `${command}: ${page.items.length}/${page.total}`,
-    ...pageLines(page.items),
+    ...pageLines(items),
   ].join('\n');
 }
 
-function querySchemaVersion(response: QueryResponse): 1 | 2 {
+function querySchemaVersion(response: QueryResponse): 1 | 2 | 3 {
   return response.operation === 'getSymbol'
     ? response.schemaVersion
     : response.page.schemaVersion;

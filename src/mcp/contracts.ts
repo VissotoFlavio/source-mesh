@@ -14,6 +14,7 @@ import type {
   QueryErrorV2,
   QueryResponseV1,
   QueryResponseV2,
+  QueryResponseV3,
   SearchRequestV1,
   SearchRequestV2,
   SearchSymbolKindV1,
@@ -65,7 +66,9 @@ const CURSOR_SCHEMA = { type: 'string', maxLength: 4096 };
 const LIMIT_SCHEMA = { type: 'integer', minimum: 1, maximum: 100 };
 const ALLOW_PARTIAL_SCHEMA = { type: 'boolean' };
 const NODE_ID_SCHEMA = { type: 'string', pattern: NODE_ID_PATTERN };
-const SCHEMA_VERSION_SCHEMA = { oneOf: [{ const: 1 }, { const: 2 }] };
+const SCHEMA_VERSION_SCHEMA = {
+  oneOf: [{ const: 1 }, { const: 2 }, { const: 3 }],
+};
 const PATH_SCHEMA = { type: 'string', pattern: RELATIVE_PATH_PATTERN };
 const TEXT_SCHEMA = { type: 'string' };
 
@@ -203,6 +206,76 @@ const symbolSummaryV1Schema = {
   },
 } as const;
 
+const packAttributionSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['id', 'language', 'version', 'capabilities'],
+  properties: {
+    id: TEXT_SCHEMA,
+    language: TEXT_SCHEMA,
+    version: TEXT_SCHEMA,
+    capabilities: {
+      type: 'array',
+      items: {
+        type: 'string',
+        enum: ['source-analysis', 'project-manifest', 'semantic-relations'],
+      },
+    },
+  },
+} as const;
+const snapshotMetadataV3Schema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['verification', 'packs'],
+  properties: {
+    verification: { const: 'unverified' },
+    packs: { type: 'array', items: packAttributionSchema },
+  },
+} as const;
+const fileSummaryV3Schema = {
+  ...fileSummarySchema,
+  required: [...fileSummarySchema.required, 'packId', 'language'],
+  properties: {
+    ...fileSummarySchema.properties,
+    packId: TEXT_SCHEMA,
+    language: TEXT_SCHEMA,
+  },
+} as const;
+const symbolSummaryV3Schema = {
+  ...symbolSummarySchema,
+  required: [...symbolSummarySchema.required, 'packId', 'language'],
+  properties: {
+    ...symbolSummarySchema.properties,
+    packId: TEXT_SCHEMA,
+    language: TEXT_SCHEMA,
+  },
+} as const;
+const nodeSummaryV3Schema = {
+  oneOf: [fileSummaryV3Schema, symbolSummaryV3Schema],
+} as const;
+const relationEvidenceV3Schema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['id', 'kind', 'packId', 'evidence'],
+  properties: {
+    id: { type: 'string', pattern: '^e:[0-9a-f]{64}$' },
+    kind: {
+      type: 'string',
+      enum: [
+        'imports',
+        'exports',
+        'extends',
+        'implements',
+        'calls',
+        'references',
+        'uses',
+      ],
+    },
+    packId: TEXT_SCHEMA,
+    evidence: { type: 'string', enum: ['semantic', 'syntactic', 'inferred'] },
+  },
+} as const;
+
 const nodeSummaryV1Schema = {
   oneOf: [fileSummarySchema, symbolSummaryV1Schema],
 } as const;
@@ -230,6 +303,19 @@ function pageSchema(
 }
 
 function versionedPageSchema(
+  v1ItemSchema: JsonSchemaType,
+  v2ItemSchema: JsonSchemaType,
+): JsonSchemaType {
+  return {
+    oneOf: [
+      pageSchema(v1ItemSchema, { const: 1 }),
+      pageSchema(v2ItemSchema, { const: 2 }),
+      pageSchema(nodeSummaryV3Schema, { const: 3 }),
+    ],
+  };
+}
+
+function legacyPageSchema(
   v1ItemSchema: JsonSchemaType,
   v2ItemSchema: JsonSchemaType,
 ): JsonSchemaType {
@@ -413,13 +499,27 @@ const inputContracts = {
 } as const;
 
 const searchResponseSchema = {
-  type: 'object',
-  additionalProperties: false,
-  required: ['operation', 'page'],
-  properties: {
-    operation: { const: 'searchSymbols' },
-    page: versionedPageSchema(symbolSummaryV1Schema, symbolSummarySchema),
-  },
+  oneOf: [
+    {
+      type: 'object',
+      additionalProperties: false,
+      required: ['operation', 'page'],
+      properties: {
+        operation: { const: 'searchSymbols' },
+        page: legacyPageSchema(symbolSummaryV1Schema, symbolSummarySchema),
+      },
+    },
+    {
+      type: 'object',
+      additionalProperties: false,
+      required: ['operation', 'metadata', 'page'],
+      properties: {
+        operation: { const: 'searchSymbols' },
+        metadata: snapshotMetadataV3Schema,
+        page: pageSchema(symbolSummaryV3Schema, { const: 3 }),
+      },
+    },
+  ],
 } as const;
 
 const getSymbolResponseV1Schema = {
@@ -451,8 +551,24 @@ const getSymbolResponseV2Schema = {
     children: pageSchema(nodeSummaryV2Schema, { const: 2 }),
   },
 } as const;
+const getSymbolResponseV3Schema = {
+  ...getSymbolResponseV1Schema,
+  required: [...getSymbolResponseV1Schema.required, 'metadata'],
+  properties: {
+    ...getSymbolResponseV1Schema.properties,
+    schemaVersion: { const: 3 },
+    metadata: snapshotMetadataV3Schema,
+    symbol: symbolSummaryV3Schema,
+    container: nodeSummaryV3Schema,
+    children: pageSchema(nodeSummaryV3Schema, { const: 3 }),
+  },
+} as const;
 const getSymbolResponseSchema = {
-  oneOf: [getSymbolResponseV1Schema, getSymbolResponseV2Schema],
+  oneOf: [
+    getSymbolResponseV1Schema,
+    getSymbolResponseV2Schema,
+    getSymbolResponseV3Schema,
+  ],
 } as const;
 
 function relationResponseSchema(
@@ -481,6 +597,41 @@ function relationResponseSchema(
           page: pageSchema(v2ItemSchema, { const: 2 }),
         },
       },
+      {
+        type: 'object',
+        additionalProperties: false,
+        required: ['operation', 'metadata', 'page'],
+        properties: {
+          operation: { const: operation },
+          metadata: snapshotMetadataV3Schema,
+          page: pageSchema(
+            {
+              type: 'object',
+              additionalProperties: false,
+              required: [
+                'node',
+                'relationships',
+                'relationshipsTotal',
+                'relationshipsTruncated',
+              ],
+              properties: {
+                node:
+                  operation === 'listFileDependencies' ||
+                  operation === 'listFileDependents'
+                    ? fileSummaryV3Schema
+                    : symbolSummaryV3Schema,
+                relationships: {
+                  type: 'array',
+                  items: relationEvidenceV3Schema,
+                },
+                relationshipsTotal: { type: 'integer', minimum: 0 },
+                relationshipsTruncated: { type: 'boolean' },
+              },
+            },
+            { const: 3 },
+          ),
+        },
+      },
     ],
   };
 }
@@ -488,19 +639,21 @@ function relationResponseSchema(
 export const TOOL_SCHEMAS = {
   searchSymbols: {
     input: inputContracts.searchSymbols.advertised,
-    output: sanitizedSchema<QueryResponseV1 | QueryResponseV2 | McpToolError>(
-      responseSchema(searchResponseSchema),
-    ),
+    output: sanitizedSchema<
+      QueryResponseV1 | QueryResponseV2 | QueryResponseV3 | McpToolError
+    >(responseSchema(searchResponseSchema)),
   },
   getSymbol: {
     input: inputContracts.getSymbol.advertised,
-    output: sanitizedSchema<QueryResponseV1 | QueryResponseV2 | McpToolError>(
-      responseSchema(getSymbolResponseSchema),
-    ),
+    output: sanitizedSchema<
+      QueryResponseV1 | QueryResponseV2 | QueryResponseV3 | McpToolError
+    >(responseSchema(getSymbolResponseSchema)),
   },
   listFileDependencies: {
     input: inputContracts.listFileDependencies.advertised,
-    output: sanitizedSchema<QueryResponseV1 | QueryResponseV2 | McpToolError>(
+    output: sanitizedSchema<
+      QueryResponseV1 | QueryResponseV2 | QueryResponseV3 | McpToolError
+    >(
       responseSchema(
         relationResponseSchema(
           'listFileDependencies',
@@ -512,7 +665,9 @@ export const TOOL_SCHEMAS = {
   },
   listFileDependents: {
     input: inputContracts.listFileDependents.advertised,
-    output: sanitizedSchema<QueryResponseV1 | QueryResponseV2 | McpToolError>(
+    output: sanitizedSchema<
+      QueryResponseV1 | QueryResponseV2 | QueryResponseV3 | McpToolError
+    >(
       responseSchema(
         relationResponseSchema(
           'listFileDependents',
@@ -524,7 +679,9 @@ export const TOOL_SCHEMAS = {
   },
   listCallers: {
     input: inputContracts.listCallers.advertised,
-    output: sanitizedSchema<QueryResponseV1 | QueryResponseV2 | McpToolError>(
+    output: sanitizedSchema<
+      QueryResponseV1 | QueryResponseV2 | QueryResponseV3 | McpToolError
+    >(
       responseSchema(
         relationResponseSchema(
           'listCallers',
@@ -536,7 +693,9 @@ export const TOOL_SCHEMAS = {
   },
   listCallees: {
     input: inputContracts.listCallees.advertised,
-    output: sanitizedSchema<QueryResponseV1 | QueryResponseV2 | McpToolError>(
+    output: sanitizedSchema<
+      QueryResponseV1 | QueryResponseV2 | QueryResponseV3 | McpToolError
+    >(
       responseSchema(
         relationResponseSchema(
           'listCallees',

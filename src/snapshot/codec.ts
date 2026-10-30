@@ -20,17 +20,21 @@ import {
   type EdgeKindV2,
   type EdgeV1,
   type EdgeV2,
+  type EdgeV3,
   type LocationV1,
   type NodeKind,
   type NodeKindV2,
   type NodeV1,
   type NodeV2,
+  type NodeV3,
+  type RelationEvidence,
 } from '../graph.js';
 import {
   SnapshotError,
   type Snapshot,
   type SnapshotV1,
   type SnapshotV2,
+  type SnapshotV3,
 } from './types.js';
 
 export const MAX_BYTES = 64 * 1024 * 1024;
@@ -40,6 +44,23 @@ const MAX_EDGES = 200_000;
 const MAX_DIAGNOSTICS = 100_000;
 const MAX_LOCATIONS_PER_ITEM = 4_096;
 const MAX_LOCATION_BYTES_PER_ITEM = 256 * 1024;
+const MAX_PACKS = 256;
+// V3 metadata is emitted in every V3 query response and twice by the MCP
+// transport (text plus structured content). Keep it comfortably below that
+// transport's 1 MiB frame budget without coupling this codec to MCP code.
+export const MAX_PACK_METADATA_BYTES = 8 * 1024;
+// Pack ids and languages are repeated in V3 node summaries and relationship
+// evidence. Unlike the extractor version, they therefore need their own
+// per-field limit in addition to the aggregate metadata limit.
+export const MAX_PACK_PROVENANCE_TEXT_BYTES = 64;
+// Schema v3 promises that a full 100-item query page is safe to carry over
+// MCP.  V1/V2 retain their historical codec limits; these limits apply only
+// to the new V3 response fields and the V2 graph values V3 exposes again.
+// Text rejects JSON control characters so its serialized form cannot expand
+// beyond the small, documented escape overhead for quotes and backslashes.
+export const MAX_V3_QUERY_TEXT_BYTES = 64;
+export const MAX_V3_QUERY_LOCATIONS_PER_NODE = 1;
+const MAX_V3_METADATA_TEXT_BYTES = 1024;
 const kinds = new Set<NodeKind>([
   'repository',
   'file',
@@ -60,6 +81,16 @@ const edgeKinds = new Set<EdgeKindV1>([
   'calls',
 ]);
 const roles = new Set(['none', 'static', 'instance']);
+const evidence = new Set<RelationEvidence>([
+  'semantic',
+  'syntactic',
+  'inferred',
+]);
+const packCapabilities = new Set([
+  'source-analysis',
+  'project-manifest',
+  'semantic-relations',
+]);
 const diagnosticCodes = new Set([
   'unsupported_declaration',
   'duplicate_declaration',
@@ -119,6 +150,29 @@ function safeString(value: unknown, label: string): string {
       fail(!(code >= 0xdc00 && code <= 0xdfff), `Invalid snapshot ${label}.`);
   }
   return value.normalize('NFC');
+}
+function provenanceText(value: unknown, label: string): string {
+  return transportText(value, label, MAX_PACK_PROVENANCE_TEXT_BYTES);
+}
+function hasJsonControlCharacter(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code <= 0x1f || (code >= 0x7f && code <= 0x9f)) return true;
+  }
+  return false;
+}
+function transportText(
+  value: unknown,
+  label: string,
+  maxBytes: number,
+): string {
+  const normalized = safeString(value, label);
+  fail(
+    Buffer.byteLength(normalized, 'utf8') <= maxBytes &&
+      !hasJsonControlCharacter(normalized),
+    `Invalid snapshot ${label}.`,
+  );
+  return normalized;
 }
 function object(value: unknown, label: string): Record<string, unknown> {
   fail(
@@ -216,6 +270,27 @@ function locations(
 }
 function locationsV2(value: unknown): readonly LocationV1[] | undefined {
   return locations(value, true);
+}
+function validateV3QueryNodeFields(node: Record<string, unknown>): void {
+  transportText(node.name, 'v3 node name', MAX_V3_QUERY_TEXT_BYTES);
+  if (node.kind === 'repository') return;
+  transportText(node.path, 'v3 node path', MAX_V3_QUERY_TEXT_BYTES);
+  if (node.kind !== 'file')
+    transportText(
+      node.qualifiedName,
+      'v3 node qualified name',
+      MAX_V3_QUERY_TEXT_BYTES,
+    );
+  if (node.locations === undefined) return;
+  const rawLocations = array(node.locations, 'v3 node locations');
+  fail(
+    rawLocations.length <= MAX_V3_QUERY_LOCATIONS_PER_NODE,
+    'Invalid snapshot v3 node locations.',
+  );
+  for (const rawLocation of rawLocations) {
+    const item = object(rawLocation, 'v3 node location');
+    transportText(item.path, 'v3 node location path', MAX_V3_QUERY_TEXT_BYTES);
+  }
 }
 function id(value: unknown, prefix: 'n' | 'e' | 'd'): string {
   const result = safeString(value, 'id');
@@ -1050,12 +1125,222 @@ function normalizeV2(value: unknown): SnapshotV2 {
   }) as SnapshotV2;
 }
 
+function metadataV3(value: unknown): SnapshotV3['metadata'] {
+  const item = object(value, 'snapshot metadata');
+  keys(item, ['verification', 'packs'], 'snapshot metadata');
+  fail(
+    item.verification === 'unverified',
+    'Invalid snapshot provenance verification.',
+  );
+  const rawPacks = array(item.packs, 'snapshot packs');
+  fail(rawPacks.length <= MAX_PACKS, 'Invalid snapshot packs.');
+  const packs = rawPacks.map((raw) => {
+    const pack = object(raw, 'snapshot pack');
+    keys(pack, ['id', 'language', 'version', 'capabilities'], 'snapshot pack');
+    const capabilitiesValue = array(
+      pack.capabilities,
+      'snapshot capabilities',
+    ).map((capability) =>
+      transportText(
+        capability,
+        'snapshot capability',
+        MAX_V3_METADATA_TEXT_BYTES,
+      ),
+    );
+    fail(
+      capabilitiesValue.every((capability) =>
+        packCapabilities.has(capability),
+      ) && new Set(capabilitiesValue).size === capabilitiesValue.length,
+      'Invalid snapshot capabilities.',
+    );
+    return {
+      id: provenanceText(pack.id, 'snapshot pack id'),
+      language: provenanceText(pack.language, 'snapshot pack language'),
+      version: transportText(
+        pack.version,
+        'snapshot pack version',
+        MAX_V3_METADATA_TEXT_BYTES,
+      ),
+      capabilities: capabilitiesValue.sort(
+        ordinal,
+      ) as SnapshotV3['metadata']['packs'][number]['capabilities'],
+    };
+  });
+  packs.sort((left, right) => ordinal(left.id, right.id));
+  for (let index = 1; index < packs.length; index += 1)
+    fail(packs[index - 1]!.id !== packs[index]!.id, 'Invalid snapshot pack.');
+  fail(
+    Buffer.byteLength(JSON.stringify(packs), 'utf8') <= MAX_PACK_METADATA_BYTES,
+    'Invalid snapshot pack metadata size.',
+  );
+  return { verification: 'unverified', packs };
+}
+
+/**
+ * V3 is intentionally additive over the validated v2 graph: identities and
+ * containment rules remain v2, while local-pack provenance is validated
+ * separately. This keeps old snapshots readable without mutating their data.
+ */
+function normalizeV3(value: unknown): SnapshotV3 {
+  const root = object(value, 'snapshot');
+  keys(
+    root,
+    [
+      'schemaVersion',
+      'completeness',
+      'repository',
+      'metadata',
+      'nodes',
+      'edges',
+      'diagnostics',
+    ],
+    'snapshot',
+  );
+  fail(root.schemaVersion === 3, 'Invalid snapshot schema version.');
+  const metadata = metadataV3(root.metadata);
+  const packs = new Map(metadata.packs.map((pack) => [pack.id, pack]));
+  const rawNodes = array(root.nodes, 'nodes').map((node) =>
+    object(node, 'node'),
+  );
+  const nodeAttribution = new Map<
+    string,
+    { packId: string; language: string }
+  >();
+  const v2Nodes = rawNodes.map((node) => {
+    keys(
+      node,
+      [
+        'id',
+        'kind',
+        'root',
+        'name',
+        'path',
+        'qualifiedName',
+        'memberRole',
+        'locations',
+        'packId',
+        'language',
+      ],
+      'v3 node',
+    );
+    validateV3QueryNodeFields(node);
+    const copy = { ...node };
+    const packId = copy.packId;
+    const language = copy.language;
+    delete copy.packId;
+    delete copy.language;
+    if (copy.kind === 'repository') {
+      fail(
+        packId === undefined && language === undefined,
+        'Invalid repository attribution.',
+      );
+    } else {
+      const normalizedPackId = provenanceText(packId, 'node pack id');
+      const normalizedLanguage = provenanceText(language, 'node language');
+      const pack = packs.get(normalizedPackId);
+      fail(
+        pack !== undefined && pack.language === normalizedLanguage,
+        'Invalid node attribution.',
+      );
+      nodeAttribution.set(id(copy.id, 'n'), {
+        packId: normalizedPackId,
+        language: normalizedLanguage,
+      });
+    }
+    return copy;
+  });
+  const rawEdges = array(root.edges, 'edges').map((edge) =>
+    object(edge, 'edge'),
+  );
+  const edgeAttribution = new Map<
+    string,
+    { packId: string; evidence: RelationEvidence }
+  >();
+  const v2Edges = rawEdges.map((edge) => {
+    keys(
+      edge,
+      [
+        'id',
+        'kind',
+        'from',
+        'to',
+        'resolutionStatus',
+        'locations',
+        'packId',
+        'evidence',
+      ],
+      'v3 edge',
+    );
+    const copy = { ...edge };
+    const packId = copy.packId;
+    const relationEvidence = copy.evidence;
+    delete copy.packId;
+    delete copy.evidence;
+    if (copy.kind === 'contains') {
+      fail(
+        packId === undefined && relationEvidence === undefined,
+        'Invalid containment evidence.',
+      );
+    } else {
+      const normalizedPackId = provenanceText(packId, 'relation pack id');
+      const normalizedEvidence = safeString(
+        relationEvidence,
+        'relation evidence',
+      ) as RelationEvidence;
+      fail(
+        packs.has(normalizedPackId) && evidence.has(normalizedEvidence),
+        'Invalid relation evidence.',
+      );
+      edgeAttribution.set(id(copy.id, 'e'), {
+        packId: normalizedPackId,
+        evidence: normalizedEvidence,
+      });
+    }
+    return copy;
+  });
+  const graph = normalizeV2({
+    schemaVersion: 2,
+    completeness: root.completeness,
+    repository: root.repository,
+    nodes: v2Nodes,
+    edges: v2Edges,
+    diagnostics: root.diagnostics,
+  });
+  const nodes: NodeV3[] = graph.nodes.map((node) => {
+    if (node.kind === 'repository') return node;
+    const attribution = nodeAttribution.get(node.id);
+    fail(attribution !== undefined, 'Invalid node attribution.');
+    return { ...node, ...attribution } as NodeV3;
+  });
+  const edges: EdgeV3[] = graph.edges.map((edge) => {
+    if (edge.kind === 'contains') return edge as EdgeV3;
+    const attribution = edgeAttribution.get(edge.id);
+    fail(attribution !== undefined, 'Invalid relation evidence.');
+    return { ...edge, ...attribution } as EdgeV3;
+  });
+  return structuredClone({
+    schemaVersion: 3,
+    completeness: graph.completeness,
+    repository: graph.repository,
+    metadata,
+    nodes,
+    edges,
+    diagnostics: graph.diagnostics,
+  }) as SnapshotV3;
+}
+
 function canonical(value: unknown): Snapshot {
   const version =
     value !== null && typeof value === 'object' && !Array.isArray(value)
       ? (value as { schemaVersion?: unknown }).schemaVersion
       : undefined;
-  return deepFreeze(version === 2 ? normalizeV2(value) : normalize(value));
+  return deepFreeze(
+    version === 3
+      ? normalizeV3(value)
+      : version === 2
+        ? normalizeV2(value)
+        : normalize(value),
+  );
 }
 
 function deepFreeze<T>(value: T): T {
@@ -1075,8 +1360,8 @@ export function encode(snapshot: Snapshot): Buffer {
   return bytes;
 }
 export function decode(bytes: Uint8Array): Snapshot;
-export function decode(bytes: Uint8Array, version: 1 | 2): Snapshot;
-export function decode(bytes: Uint8Array, version?: 1 | 2): Snapshot {
+export function decode(bytes: Uint8Array, version: 1 | 2 | 3): Snapshot;
+export function decode(bytes: Uint8Array, version?: 1 | 2 | 3): Snapshot {
   fail(bytes.byteLength <= MAX_BYTES, 'Invalid snapshot limits.');
   const input = Buffer.from(bytes);
   fail(
@@ -1102,12 +1387,13 @@ export function decode(bytes: Uint8Array, version?: 1 | 2): Snapshot {
         typeof version === 'number' &&
         Number.isInteger(version) &&
         version !== 1 &&
-        version !== 2
+        version !== 2 &&
+        version !== 3
       )
         throw new SnapshotError(
           'unsupported_schema',
           'The snapshot schema is unsupported.',
-          { observedVersion: version, supportedVersions: [1, 2] },
+          { observedVersion: version, supportedVersions: [1, 2, 3] },
         );
     }
     if (

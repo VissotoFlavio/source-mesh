@@ -16,11 +16,14 @@ import assert from 'node:assert/strict';
 import {
   decodeSnapshot,
   encodeSnapshot,
+  MAX_PACK_METADATA_BYTES,
+  MAX_PACK_PROVENANCE_TEXT_BYTES,
   openValidatedSnapshot,
   snapshotDigest,
   writeSnapshot,
   type SnapshotV1,
   type SnapshotV2,
+  type SnapshotV3,
 } from '../src/index.js';
 import {
   edgeId,
@@ -695,6 +698,37 @@ function snapshotV2(): SnapshotV2 {
   };
 }
 
+function snapshotV3(): SnapshotV3 {
+  const v2 = snapshotV2();
+  return {
+    schemaVersion: 3,
+    completeness: v2.completeness,
+    repository: v2.repository,
+    metadata: {
+      verification: 'unverified',
+      packs: [
+        {
+          id: 'csharp-pack',
+          language: 'csharp',
+          version: '1.0.0',
+          capabilities: ['semantic-relations', 'source-analysis'],
+        },
+      ],
+    },
+    nodes: v2.nodes.map((node) =>
+      node.kind === 'repository'
+        ? node
+        : { ...node, packId: 'csharp-pack', language: 'csharp' },
+    ) as SnapshotV3['nodes'],
+    edges: v2.edges.map((edge) =>
+      edge.kind === 'contains'
+        ? edge
+        : { ...edge, packId: 'csharp-pack', evidence: 'semantic' as const },
+    ) as SnapshotV3['edges'],
+    diagnostics: v2.diagnostics,
+  };
+}
+
 describe('schema-v2 snapshots', () => {
   it('round-trips canonical solution/project/namespace graphs and new edges', () => {
     const graph = snapshotV2();
@@ -732,13 +766,13 @@ describe('schema-v2 snapshots', () => {
     };
     assert.throws(() => encodeSnapshot(broken), /endpoint/i);
     assert.throws(
-      () => decodeSnapshot(Buffer.from('{"schemaVersion":3}')),
+      () => decodeSnapshot(Buffer.from('{"schemaVersion":4}')),
       (error: unknown) =>
         (error as { code?: string; supportedVersions?: readonly number[] })
           .code === 'unsupported_schema' &&
         (
           error as { supportedVersions?: readonly number[] }
-        ).supportedVersions?.join(',') === '1,2',
+        ).supportedVersions?.join(',') === '1,2,3',
     );
     assert.throws(() => fileIdV2('../outside.cs'), /relative/i);
     assert.throws(() => fileIdV2(String.fromCharCode(0xd800)), /Unicode/i);
@@ -793,5 +827,141 @@ describe('schema-v2 snapshots', () => {
       '.sourcemesh/snapshots/replace.json',
     );
     assert.equal(loaded.schemaVersion, 2);
+  });
+});
+
+describe('schema-v3 pack metadata snapshots', () => {
+  it('canonicalizes pack metadata and validates provenance without rewriting v1/v2', () => {
+    const graph = snapshotV3();
+    const bytes = encodeSnapshot({
+      ...graph,
+      metadata: {
+        verification: graph.metadata.verification,
+        packs: graph.metadata.packs.map((pack) => ({
+          ...pack,
+          capabilities: [...pack.capabilities].reverse(),
+        })),
+      },
+      nodes: [...graph.nodes].reverse(),
+    });
+    const decoded = decodeSnapshot(bytes, 3) as SnapshotV3;
+    assert.equal(decoded.schemaVersion, 3);
+    assert.deepEqual(decoded.metadata.packs[0]?.capabilities, [
+      'semantic-relations',
+      'source-analysis',
+    ]);
+    assert.deepEqual(encodeSnapshot(decoded), bytes);
+    assert.throws(
+      () =>
+        encodeSnapshot({
+          ...graph,
+          nodes: graph.nodes.map((node) =>
+            node.kind === 'repository' ? node : { ...node, packId: 'unknown' },
+          ),
+        }),
+      /attribution/i,
+    );
+    assert.equal(decodeSnapshot(encodeSnapshot(snapshot())).schemaVersion, 1);
+    assert.equal(decodeSnapshot(encodeSnapshot(snapshotV2())).schemaVersion, 2);
+  });
+
+  it('bounds unverified metadata for MCP-safe v3 responses', () => {
+    const graph = snapshotV3();
+    const maxVersion = 'v'.repeat(1024);
+    const largeMetadata = {
+      verification: 'unverified' as const,
+      packs: [
+        ...graph.metadata.packs,
+        ...Array.from({ length: 7 }, (_, index) => ({
+          id: `large-pack-${index}`,
+          language: `language-${index}`,
+          version: maxVersion,
+          capabilities: [],
+        })),
+      ],
+    };
+    assert.ok(
+      Buffer.byteLength(JSON.stringify(largeMetadata.packs), 'utf8') <=
+        MAX_PACK_METADATA_BYTES,
+    );
+    const decoded = decodeSnapshot(
+      encodeSnapshot({ ...graph, metadata: largeMetadata }),
+      3,
+    ) as SnapshotV3;
+    assert.equal(decoded.metadata.verification, 'unverified');
+    assert.throws(
+      () =>
+        encodeSnapshot({
+          ...graph,
+          metadata: {
+            ...largeMetadata,
+            packs: [
+              ...largeMetadata.packs,
+              ...Array.from({ length: 2 }, (_, index) => ({
+                id: `overflow-pack-${index}`,
+                language: `overflow-language-${index}`,
+                version: maxVersion,
+                capabilities: [],
+              })),
+            ],
+          },
+        }),
+      /metadata size/i,
+    );
+    assert.throws(
+      () =>
+        encodeSnapshot({
+          ...graph,
+          metadata: {
+            ...graph.metadata,
+            verification: 'verified' as unknown as 'unverified',
+          },
+        }),
+      /verification/i,
+    );
+    assert.throws(
+      () =>
+        encodeSnapshot({
+          ...graph,
+          metadata: {
+            ...graph.metadata,
+            packs: [
+              {
+                ...graph.metadata.packs[0]!,
+                id: 'p'.repeat(MAX_PACK_PROVENANCE_TEXT_BYTES + 1),
+              },
+            ],
+          },
+        }),
+      /pack id/i,
+    );
+    assert.throws(
+      () =>
+        encodeSnapshot({
+          ...graph,
+          nodes: graph.nodes.map((node) =>
+            node.kind === 'repository'
+              ? node
+              : { ...node, name: 'n'.repeat(65) },
+          ),
+        }),
+      /v3 node name/i,
+    );
+    assert.throws(
+      () =>
+        encodeSnapshot({
+          ...graph,
+          metadata: {
+            ...graph.metadata,
+            packs: [
+              {
+                ...graph.metadata.packs[0]!,
+                language: '\0'.repeat(64),
+              },
+            ],
+          },
+        }),
+      /pack language/i,
+    );
   });
 });
