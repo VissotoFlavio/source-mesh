@@ -32,7 +32,9 @@ function directoryHandle(
 }
 
 function fixture(): string {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sourcemesh-csharp-'));
+  const root = fs.realpathSync.native(
+    fs.mkdtempSync(path.join(os.tmpdir(), 'sourcemesh-csharp-')),
+  );
   roots.push(root);
   return root;
 }

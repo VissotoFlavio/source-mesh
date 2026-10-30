@@ -290,7 +290,6 @@ try {
     installedGuide,
     /Generate the snapshot before configuring or starting\s+MCP\./u,
   );
-  assert.equal(installedGuide.includes('Velocy'), false);
   assert.equal(/[A-Za-z]:[\\/]/u.test(installedGuide), false);
   await command(process.execPath, [
     path.join(repository, 'scripts', 'check-package.mjs'),

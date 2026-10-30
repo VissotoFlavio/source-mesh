@@ -6,6 +6,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.0-beta.5] - 2026-10-29
+
+### Fixed
+
+- Made immutable package candidate publication recognize the current GitHub CLI
+  `release not found` response while retaining fail-closed handling for every
+  other release lookup failure (#106).
+
+- Made C# discovery and worker test fixtures use canonical Windows paths so
+  their adversarial path checks exercise the fail-closed production boundaries
+  consistently (#103).
+
+### Changed
+
+- Replaced application-specific validation and documentation with a generic,
+  packaged installation and MCP-host guide for independent local use (#101).
+
+- Removed the application-specific C# acceptance profile while retaining the
+  synthetic C# and installed-package validation boundaries (#101).
+
 ## [0.1.0-beta.4] - 2026-10-29
 
 ### Changed
@@ -50,7 +70,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   evidence, rollback, and authorization limits (#74).
 
 - Operational beta validation runbook covering synthetic, offline helper,
-  packaged tarball, and opt-in real Velocy gates, safe create-only execution,
+  packaged tarball, and opt-in real C# target gates, safe create-only execution,
   outcomes, and sanitized tester evidence (#73).
 
 - Windows x64 local-checkout beta guide covering offline helper setup,
@@ -65,8 +85,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   compile removals and ignored resource/package items, with synthetic graph
   fixture coverage (#65).
 
-- Opt-in local Velocy API acceptance profile with a contained C# solution
-  preflight, create-only local snapshot, aggregate sanitized output, and no
+- Opt-in local C# acceptance profile with a contained solution preflight,
+  create-only local snapshot, aggregate sanitized output, and no
   CI or profile-level network execution (#47).
 
 - Repository-owned synthetic C# solution fixture with offline end-to-end
@@ -127,7 +147,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - C# Roslyn analysis now persists bounded project chunks in the private staging
   directory and validates/merges the chunk protocol without a monolithic helper
-  response; the Velocy profile explicitly permits its known legacy Windows-1252
+  response; explicit compatibility mode supports known legacy Windows-1252
   source files (#67).
 
 - C# Roslyn boundary now preserves sanitized compiler diagnostics and valid

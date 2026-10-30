@@ -26,7 +26,9 @@ const manifest: CSharpManifest = {
 };
 
 before(async () => {
-  root = await fs.mkdtemp(path.join(tmpdir(), 'csharp-worker-test-'));
+  root = await fs.realpath(
+    await fs.mkdtemp(path.join(tmpdir(), 'csharp-worker-test-')),
+  );
   helper = path.join(root, 'helper', 'sourcemesh-roslyn.dll');
   host = path.join(root, 'trusted', 'dotnet.exe');
   await fs.mkdir(path.join(root, 'src'), { recursive: true });

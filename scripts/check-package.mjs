@@ -352,7 +352,6 @@ async function verifyPackageRoot(root, { installed = false } = {}) {
     if (!normalizedGuide.includes(phrase)) fail('package_csharp_guide_invalid');
   }
   if (
-    guide.includes('Velocy') ||
     /[A-Za-z]:[\\/]/u.test(guide) ||
     guide.includes('E2E_SOURCE_TEXT_MARKER') ||
     guide.includes('E2E_SECRET_VALUE_MARKER')

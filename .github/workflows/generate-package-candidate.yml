@@ -241,7 +241,7 @@ jobs:
               --checksum-digest "sha256:$checksum_digest"
             release_url="$(jq -r '.url' <<<"$release_json")"
           else
-            if ! grep -q 'HTTP 404' "$release_error"; then
+            if ! node scripts/is-missing-release-response.mjs < "$release_error"; then
               echo '::error::GitHub did not confirm whether the candidate release exists.'
               exit 1
             fi
