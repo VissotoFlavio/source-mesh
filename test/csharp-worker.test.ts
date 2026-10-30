@@ -8,7 +8,12 @@ import {
   CSHARP_WORKER_MAX_TIMEOUT_MS,
   CSharpWorkerError,
 } from '../src/csharp/worker.js';
-import type { CSharpManifest } from '../src/csharp/contracts.js';
+import { discoverCSharpExplicitProjectManifest } from '../src/csharp/discovery.js';
+import { createCSharpExplicitProjectSelection } from '../src/csharp/contracts.js';
+import type {
+  CSharpExplicitProjectManifest,
+  CSharpManifest,
+} from '../src/csharp/contracts.js';
 
 let root = '';
 let helper = '';
@@ -25,6 +30,27 @@ const manifest: CSharpManifest = {
   ],
 };
 
+const explicitManifest: CSharpExplicitProjectManifest = {
+  language: 'csharp',
+  selection: {
+    version: 1,
+    kind: 'explicit-projects',
+    projects: ['App.csproj', 'Library.csproj'],
+  },
+  projects: [
+    {
+      path: 'App.csproj',
+      references: ['Library.csproj'],
+      files: ['src/App.cs'],
+    },
+    {
+      path: 'Library.csproj',
+      references: [],
+      files: ['src/Library.cs'],
+    },
+  ],
+};
+
 before(async () => {
   root = await fs.realpath(
     await fs.mkdtemp(path.join(tmpdir(), 'csharp-worker-test-')),
@@ -33,6 +59,7 @@ before(async () => {
   host = path.join(root, 'trusted', 'dotnet.exe');
   await fs.mkdir(path.join(root, 'src'), { recursive: true });
   await fs.writeFile(path.join(root, 'src', 'App.cs'), 'class App {}');
+  await fs.writeFile(path.join(root, 'src', 'Library.cs'), 'class Library {}');
   await fs.mkdir(path.dirname(helper), { recursive: true });
   await fs.writeFile(helper, 'test helper');
   await fs.mkdir(path.dirname(host), { recursive: true });
@@ -109,6 +136,135 @@ test('C# worker stages approved source files and accepts a deterministic respons
     ],
     diagnostics: [],
   });
+});
+
+test('C# worker forwards an explicit selection without adding referenced projects', async () => {
+  const result = await analyzeCSharpManifestForTest(
+    root,
+    explicitManifest,
+    async (invocation) => {
+      const request = JSON.parse(invocation.input) as {
+        readonly manifest: unknown;
+        readonly sources: unknown;
+      };
+      assert.deepEqual(request.manifest, explicitManifest);
+      assert.deepEqual(request.sources, [
+        { path: 'src/App.cs', staged: 'source-000000.cs' },
+        { path: 'src/Library.cs', staged: 'source-000001.cs' },
+      ]);
+      return {
+        stdout: Buffer.from(
+          '{"version":1,"projects":[{"path":"App.csproj","sourceCount":1,"syntaxTreeCount":1,"diagnosticCount":0},{"path":"Library.csproj","sourceCount":1,"syntaxTreeCount":1,"diagnosticCount":0}],"diagnostics":[]}\n',
+        ),
+        stderr: Buffer.alloc(0),
+        exitCode: 0,
+        timedOut: false,
+      };
+    },
+    helper,
+    host,
+  );
+  assert.deepEqual(
+    result.projects.map((project) => project.path),
+    ['App.csproj', 'Library.csproj'],
+  );
+});
+
+test('C# explicit selection keeps UTF-8 project order through discovery and worker preflight', async () => {
+  const astralProject = '😀/Astral.csproj';
+  const bmpProject = '\uE000/Bmp.csproj';
+  const projectSources: readonly (readonly [string, string])[] = [
+    [astralProject, '😀/Astral.cs'],
+    [bmpProject, '\uE000/Bmp.cs'],
+  ];
+  for (const [project, source] of projectSources) {
+    await fs.mkdir(path.dirname(path.join(root, ...project.split('/'))), {
+      recursive: true,
+    });
+    await fs.writeFile(path.join(root, ...project.split('/')), '<Project />');
+    await fs.writeFile(
+      path.join(root, ...source.split('/')),
+      'public class Marker {}',
+    );
+  }
+  const selection = createCSharpExplicitProjectSelection([
+    astralProject,
+    bmpProject,
+  ]);
+  assert.ok('selection' in selection);
+  assert.deepEqual(selection.selection.projects, [bmpProject, astralProject]);
+  const discovered = await discoverCSharpExplicitProjectManifest(
+    root,
+    selection.selection,
+  );
+  assert.ok(discovered.manifest);
+
+  let invoked = false;
+  await analyzeCSharpManifestForTest(
+    root,
+    discovered.manifest,
+    async (invocation) => {
+      invoked = true;
+      const request = JSON.parse(invocation.input) as {
+        readonly manifest: CSharpExplicitProjectManifest;
+      };
+      assert.deepEqual(request.manifest.selection.projects, [
+        bmpProject,
+        astralProject,
+      ]);
+      return {
+        stdout: Buffer.from(
+          `${JSON.stringify({
+            version: 1,
+            projects: [
+              {
+                path: bmpProject,
+                sourceCount: 1,
+                syntaxTreeCount: 1,
+                diagnosticCount: 0,
+              },
+              {
+                path: astralProject,
+                sourceCount: 1,
+                syntaxTreeCount: 1,
+                diagnosticCount: 0,
+              },
+            ],
+            diagnostics: [],
+          })}\n`,
+        ),
+        stderr: Buffer.alloc(0),
+        exitCode: 0,
+        timedOut: false,
+      };
+    },
+    helper,
+    host,
+  );
+  assert.equal(invoked, true);
+});
+
+test('C# worker rejects explicit selections that do not exactly name the manifest projects', async () => {
+  const invalid = {
+    ...explicitManifest,
+    selection: {
+      ...explicitManifest.selection,
+      projects: ['App.csproj'],
+    },
+  };
+  await assert.rejects(
+    analyzeCSharpManifestForTest(
+      root,
+      invalid,
+      async () => {
+        throw new Error('runner must not start');
+      },
+      helper,
+      host,
+    ),
+    (error: unknown) =>
+      error instanceof CSharpWorkerError && error.code === 'input_invalid',
+  );
 });
 
 test('C# worker applies a timeout only when an automation explicitly requests one', async () => {

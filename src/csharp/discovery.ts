@@ -35,6 +35,7 @@ import {
   CSHARP_MAX_XML_TEXT_ATTRIBUTE_BYTES,
   CSHARP_MAX_XML_BYTES,
   CSHARP_EXPLICIT_PROJECT_SELECTION_VERSION,
+  compareCSharpUtf8Ordinal,
   createCSharpExplicitProjectSelection,
   type CSharpDiscoveryDiagnostic,
   type CSharpDiscoverySelection,
@@ -69,9 +70,7 @@ class CSharpFailure extends Error {
   }
 }
 
-function ordinal(left: string, right: string): number {
-  return Buffer.from(left, 'utf8').compare(Buffer.from(right, 'utf8'));
-}
+const ordinal = compareCSharpUtf8Ordinal;
 
 function freezeArray<T>(items: readonly T[]): readonly T[] {
   return Object.freeze([...items]);

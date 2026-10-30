@@ -8,6 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- Added deterministic offline Roslyn handoff and composition for explicit C#
+  project selections without expanding unselected project references (#116).
+
 - Added canonical, selected-only C# project manifests with validated physical
   boundaries and unselected project-reference isolation (#115).
 

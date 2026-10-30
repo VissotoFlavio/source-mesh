@@ -11,6 +11,11 @@ import {
   CSHARP_MAX_PROJECTS,
   CSHARP_MAX_READ_OPERATIONS,
   CSHARP_MAX_SOLUTION_PROJECTS,
+  CSHARP_EXPLICIT_PROJECT_SELECTION_VERSION,
+  compareCSharpUtf8Ordinal,
+  createCSharpExplicitProjectSelection,
+  type CSharpAnalysisManifest,
+  type CSharpExplicitProjectManifest,
   type CSharpManifest,
   type CSharpProjectManifest,
   type CSharpWorkerDeclaration,
@@ -171,14 +176,7 @@ function positiveInteger(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 1;
 }
 
-function ordinal(left: string, right: string): number {
-  const length = Math.min(left.length, right.length);
-  for (let index = 0; index < length; index += 1) {
-    const difference = left.charCodeAt(index) - right.charCodeAt(index);
-    if (difference !== 0) return difference;
-  }
-  return left.length - right.length;
-}
+const ordinal = compareCSharpUtf8Ordinal;
 
 const workerNodeKinds = new Set<CSharpWorkerSymbol['kind']>([
   'module',
@@ -507,7 +505,7 @@ function cloneProject(value: unknown): CSharpProjectManifest {
   });
 }
 
-function cloneManifest(value: CSharpManifest): CSharpManifest {
+function cloneLegacyManifest(value: CSharpManifest): CSharpManifest {
   const candidate: unknown = value;
   if (
     !closedObject(candidate, [
@@ -587,7 +585,77 @@ function cloneManifest(value: CSharpManifest): CSharpManifest {
   });
 }
 
-function createSourcePlans(manifest: CSharpManifest): readonly SourcePlan[] {
+function cloneExplicitManifest(
+  value: CSharpExplicitProjectManifest,
+): CSharpExplicitProjectManifest {
+  const candidate: unknown = value;
+  if (
+    !closedObject(candidate, ['language', 'selection', 'projects']) ||
+    candidate.language !== 'csharp' ||
+    !closedObject(candidate.selection, ['version', 'kind', 'projects']) ||
+    candidate.selection.version !== CSHARP_EXPLICIT_PROJECT_SELECTION_VERSION ||
+    candidate.selection.kind !== 'explicit-projects' ||
+    !Array.isArray(candidate.selection.projects) ||
+    !candidate.selection.projects.every(safePath) ||
+    !Array.isArray(candidate.projects)
+  )
+    fail('input_invalid');
+  if (
+    candidate.projects.length === 0 ||
+    candidate.projects.length > CSHARP_MAX_PROJECTS
+  )
+    fail('input_invalid');
+  const selectedProjects = candidate.selection.projects as string[];
+  const projects = candidate.projects.map(cloneProject);
+  const normalizedSelection =
+    createCSharpExplicitProjectSelection(selectedProjects);
+  const sourceReferences = projects.reduce(
+    (total, project) => total + project.files.length,
+    0,
+  );
+  if (
+    sourceReferences > CSHARP_MAX_READ_OPERATIONS ||
+    !sorted(projects) ||
+    new Set(projects.map((project) => project.path)).size !== projects.length ||
+    'diagnostic' in normalizedSelection ||
+    selectedProjects.length !== projects.length ||
+    !sorted(selectedProjects.map((path) => ({ path }))) ||
+    new Set(selectedProjects).size !== selectedProjects.length ||
+    selectedProjects.some(
+      (project, index) => project !== projects[index]!.path,
+    ) ||
+    ('selection' in normalizedSelection &&
+      normalizedSelection.selection.projects.some(
+        (project, index) => project !== selectedProjects[index],
+      )) ||
+    projects.some((project) =>
+      project.references.some((reference) => reference === project.path),
+    )
+  )
+    fail('input_invalid');
+  return Object.freeze({
+    language: 'csharp',
+    selection: Object.freeze({
+      version: CSHARP_EXPLICIT_PROJECT_SELECTION_VERSION,
+      kind: 'explicit-projects',
+      projects: Object.freeze([...selectedProjects]),
+    }),
+    projects: Object.freeze(projects),
+  });
+}
+
+function cloneManifest(value: CSharpAnalysisManifest): CSharpAnalysisManifest {
+  const candidate: unknown = value;
+  if (!plainObject(candidate) || !plainObject(candidate.selection))
+    fail('input_invalid');
+  return candidate.selection.kind === 'explicit-projects'
+    ? cloneExplicitManifest(value as CSharpExplicitProjectManifest)
+    : cloneLegacyManifest(value as CSharpManifest);
+}
+
+function createSourcePlans(
+  manifest: CSharpAnalysisManifest,
+): readonly SourcePlan[] {
   const occurrences = new Map<string, number>();
   for (const project of manifest.projects)
     for (const file of project.files)
@@ -1275,7 +1343,7 @@ async function verifyDotnetHost(host: string | undefined): Promise<string> {
 
 async function executeWorker(
   repositoryRoot: string,
-  manifest: CSharpManifest,
+  manifest: CSharpAnalysisManifest,
   runner: WorkerRunner,
   artifact = helperDll,
   host = dotnetHost,
@@ -1370,7 +1438,7 @@ async function executeWorker(
 /** Runs the repository-owned, offline Roslyn helper over a sanitized manifest. */
 export function analyzeCSharpManifest(
   repositoryRoot: string,
-  manifest: CSharpManifest,
+  manifest: CSharpAnalysisManifest,
   options?: CSharpWorkerOptions,
 ): Promise<CSharpWorkerResult> {
   return executeWorker(
@@ -1387,7 +1455,7 @@ export function analyzeCSharpManifest(
 /** Test-only seam; it receives a fixed command and artifact argument. */
 export function analyzeCSharpManifestForTest(
   repositoryRoot: string,
-  manifest: CSharpManifest,
+  manifest: CSharpAnalysisManifest,
   runner: WorkerRunner,
   artifact: string,
   host: string,
