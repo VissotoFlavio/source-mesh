@@ -1,5 +1,28 @@
 export const SOURCE_MESH_NAME = 'SourceMesh';
 
+export {
+  LANGUAGE_PACK_CONTRACT_VERSION,
+  LanguagePackRegistry,
+  validateLanguagePackManifest,
+} from './packs.js';
+export type {
+  AnalysisLimits,
+  AnalysisRequest,
+  ApprovedFile,
+  GraphFragment,
+  LanguagePack,
+  LanguagePackCapability,
+  LanguagePackExecutionMode,
+  LanguagePackManifest,
+  PackAnalysisResult,
+  PackBoundaryDiagnostic,
+  PackDiagnostic,
+  PackDiagnosticCode,
+  PackEdge,
+  PackNode,
+  RelationConfidence,
+} from './packs.js';
+
 export { extractDeclarationGraph } from './extractor.js';
 export {
   digest,
