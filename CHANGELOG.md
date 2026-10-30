@@ -8,6 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- Added the validated Core-to-pack contract, deterministic fragment boundary,
+  and local pack registry foundation (#51).
+
 - Added ADR 0005, defining the local versioned language-pack architecture,
   Core-owned isolation, and the C# worker boundary (#50).
 
