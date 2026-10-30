@@ -8,6 +8,7 @@ import {
   encode,
   fileId,
   fileIdV2,
+  MAX_RELATION_EVIDENCE_PER_COUNTERPART,
   nodeId,
   nodeIdV2,
   repositoryId,
@@ -16,6 +17,7 @@ import {
   type QueryResponseV1,
   type SnapshotV1,
   type SnapshotV2,
+  type SnapshotV3,
   type NodeV1,
 } from '../src/index.js';
 
@@ -1101,5 +1103,269 @@ test('schema-v2 queries expose versioned pages and container nodes', () => {
   assert.deepEqual(
     details.children.items.map((item) => item.kind),
     ['file'],
+  );
+});
+
+test('schema-v3 queries return pack metadata and relationship evidence', () => {
+  const repository = {
+    id: repositoryIdV2(),
+    kind: 'repository' as const,
+    root: '.' as const,
+    name: 'repository',
+  };
+  const project = {
+    id: nodeIdV2(
+      'project',
+      'App.csproj',
+      `${repository.id}#scope=root`,
+      'App',
+      'App',
+      'none',
+    ),
+    kind: 'project' as const,
+    name: 'App',
+    path: 'App.csproj',
+    qualifiedName: 'App',
+    memberRole: 'none' as const,
+  };
+  const file = (path: string) => ({
+    id: fileIdV2(path),
+    kind: 'file' as const,
+    name: path.split('/').at(-1)!,
+    path,
+  });
+  const a = file('src/a.ts');
+  const b = file('src/b.ts');
+  const module = (source: typeof a) => ({
+    id: nodeIdV2(
+      'module',
+      source.path,
+      `${source.id}#scope=root`,
+      source.path,
+      source.path,
+      'none',
+    ),
+    kind: 'module' as const,
+    name: source.path,
+    path: source.path,
+    qualifiedName: source.path,
+    memberRole: 'none' as const,
+  });
+  const moduleA = module(a);
+  const moduleB = module(b);
+  const functionNode = (
+    source: typeof a,
+    parent: typeof moduleA,
+    name: string,
+  ) => ({
+    id: nodeIdV2(
+      'function',
+      source.path,
+      `${parent.id}#scope=module:${parent.qualifiedName}`,
+      name,
+      name,
+      'none',
+    ),
+    kind: 'function' as const,
+    name,
+    path: source.path,
+    qualifiedName: name,
+    memberRole: 'none' as const,
+  });
+  const caller = functionNode(a, moduleA, 'caller');
+  const callee = functionNode(b, moduleB, 'callee');
+  const contains = (
+    from: { readonly id: string },
+    to: { readonly id: string },
+  ) => ({
+    id: edgeIdV2('contains', from.id, to.id),
+    kind: 'contains' as const,
+    from: from.id,
+    to: to.id,
+    resolutionStatus: 'resolved' as const,
+  });
+  const attributed = <T extends { readonly kind: string }>(node: T) =>
+    node.kind === 'repository'
+      ? node
+      : { ...node, packId: 'typescript-pack', language: 'typescript' };
+  const snapshot: SnapshotV3 = {
+    schemaVersion: 3,
+    completeness: 'complete',
+    repository: { root: '.', name: 'repository' },
+    metadata: {
+      verification: 'unverified',
+      packs: [
+        {
+          id: 'typescript-pack',
+          language: 'typescript',
+          version: '1.0.0',
+          capabilities: ['source-analysis'],
+        },
+      ],
+    },
+    nodes: [repository, project, a, b, moduleA, moduleB, caller, callee].map(
+      attributed,
+    ) as SnapshotV3['nodes'],
+    edges: [
+      contains(repository, project),
+      contains(project, a),
+      contains(project, b),
+      contains(a, moduleA),
+      contains(b, moduleB),
+      contains(moduleA, caller),
+      contains(moduleB, callee),
+      {
+        id: edgeIdV2('imports', moduleA.id, moduleB.id),
+        kind: 'imports' as const,
+        from: moduleA.id,
+        to: moduleB.id,
+        resolutionStatus: 'resolved' as const,
+        packId: 'typescript-pack',
+        evidence: 'syntactic' as const,
+      },
+      {
+        id: edgeIdV2('calls', caller.id, callee.id),
+        kind: 'calls' as const,
+        from: caller.id,
+        to: callee.id,
+        resolutionStatus: 'resolved' as const,
+        packId: 'typescript-pack',
+        evidence: 'semantic' as const,
+      },
+    ],
+    diagnostics: [],
+  };
+  const service = createGraphQueryService(snapshot);
+  const projectDetails = service.getSymbol({
+    operation: 'getSymbol',
+    nodeId: project.id,
+  });
+  assert.ok(!('code' in projectDetails), JSON.stringify(projectDetails));
+  if ('code' in projectDetails || projectDetails.operation !== 'getSymbol')
+    throw new Error('Expected a project response.');
+  assert.deepEqual(
+    projectDetails.children.items.map((item) => item.kind),
+    ['file', 'file'],
+  );
+  assert.equal(projectDetails.metadata.verification, 'unverified');
+  const callers = service.listCallers({
+    operation: 'listCallers',
+    function: { name: 'callee', path: b.path },
+  });
+  assert.ok(!('code' in callers));
+  if ('code' in callers || callers.operation !== 'listCallers')
+    throw new Error('Expected a caller response.');
+  assert.equal(callers.page.schemaVersion, 3);
+  assert.equal(callers.metadata.packs[0]?.id, 'typescript-pack');
+  assert.deepEqual(callers.page.items[0]?.relationships, [
+    {
+      id: edgeIdV2('calls', caller.id, callee.id),
+      kind: 'calls',
+      packId: 'typescript-pack',
+      evidence: 'semantic',
+    },
+  ]);
+  const dependencies = service.listFileDependencies({
+    operation: 'listFileDependencies',
+    fileId: a.id,
+  });
+  assert.ok(!('code' in dependencies));
+  if (
+    'code' in dependencies ||
+    dependencies.operation !== 'listFileDependencies'
+  )
+    throw new Error('Expected a dependency response.');
+  assert.equal(dependencies.page.items[0]?.node.language, 'typescript');
+  assert.equal(
+    dependencies.page.items[0]?.relationships[0]?.evidence,
+    'syntactic',
+  );
+  assert.equal(dependencies.page.items[0]?.relationshipsTotal, 1);
+  assert.equal(dependencies.page.items[0]?.relationshipsTruncated, false);
+
+  const modulePairs = Array.from({ length: 65 }, (_, index) => {
+    const source = {
+      id: nodeIdV2(
+        'module',
+        a.path,
+        `${a.id}#scope=root`,
+        `source-${index}`,
+        `source-${index}`,
+        'none',
+      ),
+      kind: 'module' as const,
+      name: `source-${index}`,
+      path: a.path,
+      qualifiedName: `source-${index}`,
+      memberRole: 'none' as const,
+    };
+    const target = {
+      id: nodeIdV2(
+        'module',
+        b.path,
+        `${b.id}#scope=root`,
+        `target-${index}`,
+        `target-${index}`,
+        'none',
+      ),
+      kind: 'module' as const,
+      name: `target-${index}`,
+      path: b.path,
+      qualifiedName: `target-${index}`,
+      memberRole: 'none' as const,
+    };
+    return { source, target };
+  });
+  const boundedEvidenceSnapshot: SnapshotV3 = {
+    ...snapshot,
+    nodes: [
+      repository,
+      project,
+      a,
+      b,
+      ...modulePairs.flatMap(Object.values),
+    ].map(attributed) as SnapshotV3['nodes'],
+    edges: [
+      contains(repository, project),
+      contains(project, a),
+      contains(project, b),
+      ...modulePairs.flatMap(({ source, target }) => [
+        contains(a, source),
+        contains(b, target),
+        {
+          id: edgeIdV2('imports', source.id, target.id),
+          kind: 'imports' as const,
+          from: source.id,
+          to: target.id,
+          resolutionStatus: 'resolved' as const,
+          packId: 'typescript-pack',
+          evidence: 'syntactic' as const,
+        },
+      ]),
+    ] as SnapshotV3['edges'],
+  };
+  const boundedEvidence = createGraphQueryService(
+    boundedEvidenceSnapshot,
+  ).listFileDependencies({
+    operation: 'listFileDependencies',
+    fileId: a.id,
+  });
+  assert.ok(!('code' in boundedEvidence));
+  if (
+    'code' in boundedEvidence ||
+    boundedEvidence.operation !== 'listFileDependencies'
+  )
+    throw new Error('Expected a bounded relation response.');
+  assert.equal(boundedEvidence.page.items[0]?.relationshipsTotal, 65);
+  assert.equal(boundedEvidence.page.items[0]?.relationshipsTruncated, true);
+  assert.equal(
+    boundedEvidence.page.items[0]?.relationships.length,
+    MAX_RELATION_EVIDENCE_PER_COUNTERPART,
+  );
+  assert.deepEqual(
+    boundedEvidence.page.items[0]?.relationships.map(({ id }) => id),
+    [...(boundedEvidence.page.items[0]?.relationships ?? [])]
+      .map(({ id }) => id)
+      .sort(),
   );
 });

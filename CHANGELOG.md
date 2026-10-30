@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- Added schema-v3 snapshots with deterministic language-pack provenance and
+  relation evidence, plus bounded query and MCP projections that keep legacy
+  schemas readable (#53).
+
 - Added deterministic local enabled-pack extension discovery and single-owner
   dispatch, with fail-closed compatibility and selection diagnostics (#52).
 

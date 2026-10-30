@@ -49,6 +49,7 @@ export type NodeV1 = RepositoryNodeV1 | FileNodeV1 | SymbolNodeV1;
 export type EdgeKindV1 =
   'contains' | 'imports' | 'exports' | 'extends' | 'implements' | 'calls';
 export type EdgeKindV2 = EdgeKindV1 | 'references' | 'uses';
+export type RelationEvidence = 'semantic' | 'syntactic' | 'inferred';
 
 export interface EdgeV1 {
   readonly id: string;
@@ -88,6 +89,24 @@ export interface EdgeV2 {
   readonly resolutionStatus: 'resolved';
   readonly locations?: readonly LocationV1[];
 }
+/**
+ * Schema v3 keeps v2 identities but records which local pack emitted every
+ * queryable relationship. Containment is Core-owned structure, not evidence.
+ */
+export type EdgeV3 =
+  | (EdgeV2 & { readonly kind: 'contains' })
+  | (EdgeV2 & {
+      readonly kind: Exclude<EdgeKindV2, 'contains'>;
+      readonly packId: string;
+      readonly evidence: RelationEvidence;
+    });
+export interface PackAttribution {
+  readonly packId: string;
+  readonly language: string;
+}
+export type FileNodeV3 = FileNodeV2 & PackAttribution;
+export type SymbolNodeV3 = SymbolNodeV2 & PackAttribution;
+export type NodeV3 = RepositoryNodeV2 | FileNodeV3 | SymbolNodeV3;
 export type GraphDiagnosticCode =
   | 'unsupported_declaration'
   | 'duplicate_declaration'
@@ -128,6 +147,13 @@ export interface DeclarationGraphV2 {
   readonly repository: { readonly root: '.'; readonly name: string };
   readonly nodes: readonly NodeV2[];
   readonly edges: readonly EdgeV2[];
+  readonly diagnostics: readonly DiagnosticV2[];
+}
+export interface DeclarationGraphV3 {
+  readonly schemaVersion: 3;
+  readonly repository: { readonly root: '.'; readonly name: string };
+  readonly nodes: readonly NodeV3[];
+  readonly edges: readonly EdgeV3[];
   readonly diagnostics: readonly DiagnosticV2[];
 }
 export interface DiagnosticV2 extends Omit<
