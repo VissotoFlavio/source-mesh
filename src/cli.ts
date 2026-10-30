@@ -9,8 +9,7 @@ import {
   discoverSourceFiles,
   analyzeCSharpManifest,
   extractCSharpDeclarationGraph,
-  extractDeclarationGraph,
-  loadProject,
+  typescriptPack,
   openValidatedSnapshot,
   writeSnapshot,
 } from './index.js';
@@ -155,8 +154,6 @@ export interface CliServices {
   readonly analyzeCSharpManifest?: typeof analyzeCSharpManifest;
   readonly extractCSharpDeclarationGraph?: typeof extractCSharpDeclarationGraph;
   readonly discoverSourceFiles: typeof discoverSourceFiles;
-  readonly loadProject: typeof loadProject;
-  readonly extractDeclarationGraph: typeof extractDeclarationGraph;
   readonly writeSnapshot: typeof writeSnapshot;
   readonly openValidatedSnapshot: typeof openValidatedSnapshot;
   readonly createGraphQueryService: (
@@ -169,8 +166,6 @@ const productionServices: CliServices = {
   analyzeCSharpManifest,
   extractCSharpDeclarationGraph,
   discoverSourceFiles,
-  loadProject,
-  extractDeclarationGraph,
   writeSnapshot,
   openValidatedSnapshot,
   createGraphQueryService,
@@ -796,37 +791,57 @@ async function executeAnalyze(
         },
       };
     }
-    const discovery = await services.discoverSourceFiles(command.root);
+    const discovery = await services.discoverSourceFiles(command.root, {
+      extensions: typescriptPack.manifest.extensions,
+    });
     if (
       discovery.repositoryRoot === undefined ||
       discovery.diagnostics.length > 0
     )
       throw analysisFailure();
-    const loaded = services.loadProject({
-      repositoryRoot: discovery.repositoryRoot,
-      approvedFiles: discovery.sources,
-      ...(command.tsconfig === undefined
-        ? {}
-        : { tsconfigPath: command.tsconfig }),
-    });
-    if (loaded.project === null) throw analysisFailure();
-    const graph = services.extractDeclarationGraph({
-      repositoryRoot: discovery.repositoryRoot,
-      project: loaded.project,
+    const repositoryRoot = discovery.repositoryRoot;
+    const approvedFiles = discovery.sources.map((source) => ({
+      path: source,
+      // Discovery supplied the canonical root and relative allow-list. Core
+      // reads each member once; the pack receives bytes only, never this root.
+      contents: new Uint8Array(
+        fs.readFileSync(path.join(repositoryRoot, source)),
+      ),
+    }));
+    const configuration: Record<string, string> = {};
+    if (command.tsconfig !== undefined) {
+      const candidate = path.resolve(repositoryRoot, command.tsconfig);
+      const relative = path.relative(repositoryRoot, candidate);
+      if (
+        relative === '' ||
+        relative.startsWith(`..${path.sep}`) ||
+        path.isAbsolute(relative)
+      )
+        throw analysisFailure();
+      configuration['typescript.tsconfig'] = fs.readFileSync(candidate, 'utf8');
+    }
+    const analysis = await typescriptPack.analyze({
+      contractVersion: 1,
+      repository: { name: 'repository', root: '.' },
+      files: approvedFiles,
+      limits: {
+        maxFiles: 10_000,
+        maxBytes: 128 * 1024 * 1024,
+        maxNodes: 1_000_000,
+        maxEdges: 1_000_000,
+        maxDiagnostics: 100_000,
+      },
+      configuration,
     });
     const snapshot: SnapshotV1 = {
-      ...graph,
-      completeness: loaded.diagnostics.length > 0 ? 'partial' : 'complete',
+      ...analysis.graph,
+      completeness: analysis.completeness,
     };
     let result: SnapshotWriteResult;
     try {
-      result = await services.writeSnapshot(
-        discovery.repositoryRoot,
-        snapshot,
-        {
-          path: command.snapshot,
-        },
-      );
+      result = await services.writeSnapshot(repositoryRoot, snapshot, {
+        path: command.snapshot,
+      });
     } catch (error) {
       if (error instanceof SnapshotError) throw snapshotFailure(error);
       throw analysisFailure();

@@ -6,6 +6,11 @@ export {
   validateLanguagePackManifest,
 } from './packs.js';
 export { BUNDLED_LANGUAGE_PACKS } from './bundled-packs.js';
+export { typescriptPack } from './packs/typescript.js';
+export type {
+  TypeScriptGraphFragment,
+  TypeScriptLanguagePack,
+} from './packs/typescript.js';
 export type {
   AnalysisLimits,
   AnalysisRequest,
