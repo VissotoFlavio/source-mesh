@@ -47,3 +47,42 @@ test('unknown workers and malformed frames fail closed', async () => {
       error.code === 'worker_protocol_invalid',
   );
 });
+
+test('crashes, timeouts, stderr, and oversized frames fail closed', async () => {
+  const crash = registry('process.exit(1)');
+  await assert.rejects(
+    () => runLocalWorker(crash, 'fixture-worker', request),
+    (error: unknown) =>
+      error instanceof LocalWorkerError && error.code === 'worker_failed',
+  );
+  const timeout = registry('setTimeout(() => {}, 10_000)');
+  await assert.rejects(
+    () => runLocalWorker(timeout, 'fixture-worker', request, { timeoutMs: 10 }),
+    (error: unknown) =>
+      error instanceof LocalWorkerError && error.code === 'worker_timeout',
+  );
+  const stderr = registry("process.stderr.write('unexpected')");
+  await assert.rejects(
+    () => runLocalWorker(stderr, 'fixture-worker', request),
+    (error: unknown) =>
+      error instanceof LocalWorkerError && error.code === 'worker_failed',
+  );
+  await assert.rejects(
+    () =>
+      runLocalWorker(registry(''), 'fixture-worker', {
+        ...request,
+        payload: 'x'.repeat(2 * 1024 * 1024),
+      }),
+    (error: unknown) =>
+      error instanceof LocalWorkerError &&
+      error.code === 'worker_resource_limit',
+  );
+  const oversized = registry(
+    "process.stdout.write('x'.repeat(2 * 1024 * 1024 + 1))",
+  );
+  await assert.rejects(
+    () => runLocalWorker(oversized, 'fixture-worker', request),
+    (error: unknown) =>
+      error instanceof LocalWorkerError && error.code === 'worker_timeout',
+  );
+});
