@@ -1,4 +1,11 @@
-import type { DiscoveryFileSystem } from '../discovery.js';
+import {
+  isSerializedPathTooLong,
+  MAX_PATH_DEPTH,
+  normalizeRelativePath,
+  pathDepth,
+  pathIdentityKey,
+  type DiscoveryFileSystem,
+} from '../discovery.js';
 
 export const CSHARP_MAX_SOLUTION_PROJECTS = 256;
 export const CSHARP_MAX_PROJECTS = 256;
@@ -17,6 +24,141 @@ export const CSHARP_MAX_EXPLICIT_INCLUDE_READS = 2048;
 export const CSHARP_MAX_EXPLICIT_OPERATIONS = 8192;
 export const CSHARP_MAX_AGGREGATE_READ_BYTES = 256 * 1024 * 1024;
 export const CSHARP_MAX_READ_OPERATIONS = 16_384;
+
+/**
+ * The version of the future explicit-project CLI selection contract. This is
+ * intentionally separate from the legacy single-project and solution modes.
+ */
+export const CSHARP_EXPLICIT_PROJECT_SELECTION_VERSION = 1;
+
+export interface CSharpExplicitProjectSelection {
+  readonly version: typeof CSHARP_EXPLICIT_PROJECT_SELECTION_VERSION;
+  readonly kind: 'explicit-projects';
+  /** Canonical, root-relative .csproj paths in UTF-8 ordinal order. */
+  readonly projects: readonly string[];
+}
+
+export type CSharpExplicitProjectSelectionDiagnosticCode =
+  'empty' | 'path_invalid' | 'project_invalid' | 'duplicate' | 'resource_limit';
+
+export interface CSharpExplicitProjectSelectionDiagnostic {
+  readonly version: typeof CSHARP_EXPLICIT_PROJECT_SELECTION_VERSION;
+  readonly code: CSharpExplicitProjectSelectionDiagnosticCode;
+}
+
+export type CSharpExplicitProjectSelectionResult =
+  | {
+      readonly selection: CSharpExplicitProjectSelection;
+      readonly diagnostic?: never;
+    }
+  | {
+      readonly selection?: never;
+      readonly diagnostic: CSharpExplicitProjectSelectionDiagnostic;
+    };
+
+function compareUtf8Ordinal(left: string, right: string): number {
+  return Buffer.from(left, 'utf8').compare(Buffer.from(right, 'utf8'));
+}
+
+function isWellFormedUtf16(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const codeUnit = value.charCodeAt(index);
+    if (codeUnit >= 0xd800 && codeUnit <= 0xdbff) {
+      const next = value.charCodeAt(index + 1);
+      if (next < 0xdc00 || next > 0xdfff) return false;
+      index += 1;
+    } else if (codeUnit >= 0xdc00 && codeUnit <= 0xdfff) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function isPathOverBudget(value: string): boolean {
+  return isSerializedPathTooLong(value) || pathDepth(value) > MAX_PATH_DEPTH;
+}
+
+/**
+ * Forms the versioned selection value only; it must not resolve or discover
+ * projects. Filesystem containment, reparse-point, and physical-alias checks
+ * remain the responsibility of the later manifest boundary.
+ */
+export function createCSharpExplicitProjectSelection(
+  requestedProjects: readonly string[],
+): CSharpExplicitProjectSelectionResult {
+  if (requestedProjects.length === 0)
+    return {
+      diagnostic: {
+        version: CSHARP_EXPLICIT_PROJECT_SELECTION_VERSION,
+        code: 'empty',
+      },
+    };
+  if (requestedProjects.length > CSHARP_MAX_PROJECTS)
+    return {
+      diagnostic: {
+        version: CSHARP_EXPLICIT_PROJECT_SELECTION_VERSION,
+        code: 'resource_limit',
+      },
+    };
+
+  const projects = new Map<string, string>();
+  for (const requested of requestedProjects) {
+    if (!isWellFormedUtf16(requested))
+      return {
+        diagnostic: {
+          version: CSHARP_EXPLICIT_PROJECT_SELECTION_VERSION,
+          code: 'path_invalid',
+        },
+      };
+    if (isSerializedPathTooLong(requested))
+      return {
+        diagnostic: {
+          version: CSHARP_EXPLICIT_PROJECT_SELECTION_VERSION,
+          code: 'resource_limit',
+        },
+      };
+    const portable = normalizeRelativePath(requested);
+    if (portable === undefined)
+      return {
+        diagnostic: {
+          version: CSHARP_EXPLICIT_PROJECT_SELECTION_VERSION,
+          code: 'path_invalid',
+        },
+      };
+    const normalized = portable.normalize('NFC');
+    if (isPathOverBudget(portable) || isPathOverBudget(normalized))
+      return {
+        diagnostic: {
+          version: CSHARP_EXPLICIT_PROJECT_SELECTION_VERSION,
+          code: 'resource_limit',
+        },
+      };
+    if (!normalized.toLowerCase().endsWith('.csproj'))
+      return {
+        diagnostic: {
+          version: CSHARP_EXPLICIT_PROJECT_SELECTION_VERSION,
+          code: 'project_invalid',
+        },
+      };
+    const key = pathIdentityKey(normalized);
+    if (projects.has(key))
+      return {
+        diagnostic: {
+          version: CSHARP_EXPLICIT_PROJECT_SELECTION_VERSION,
+          code: 'duplicate',
+        },
+      };
+    projects.set(key, normalized);
+  }
+
+  return {
+    selection: Object.freeze({
+      version: CSHARP_EXPLICIT_PROJECT_SELECTION_VERSION,
+      kind: 'explicit-projects',
+      projects: Object.freeze([...projects.values()].sort(compareUtf8Ordinal)),
+    }),
+  };
+}
 
 export type CSharpSelectionKind = 'solution' | 'project';
 

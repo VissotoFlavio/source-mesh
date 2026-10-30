@@ -8,6 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- Defined the versioned, explicit C# project-selection contract that later
+  selected-project snapshots will use (#114).
+
 - Added the validated Core-to-pack contract, deterministic fragment boundary,
   and local pack registry foundation (#51).
 

@@ -96,7 +96,15 @@ export {
   discoverCSharpManifest,
   discoverCSharpProjectManifest,
 } from './csharp/discovery.js';
+export {
+  createCSharpExplicitProjectSelection,
+  CSHARP_EXPLICIT_PROJECT_SELECTION_VERSION,
+} from './csharp/contracts.js';
 export type {
+  CSharpExplicitProjectSelection,
+  CSharpExplicitProjectSelectionDiagnostic,
+  CSharpExplicitProjectSelectionDiagnosticCode,
+  CSharpExplicitProjectSelectionResult,
   CSharpDiscoveryDiagnostic,
   CSharpDiscoverySelection,
   CSharpManifest,
