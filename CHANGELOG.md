@@ -8,6 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- Added canonical, selected-only C# project manifests with validated physical
+  boundaries and unselected project-reference isolation (#115).
+
 - Defined the versioned, explicit C# project-selection contract that later
   selected-project snapshots will use (#114).
 

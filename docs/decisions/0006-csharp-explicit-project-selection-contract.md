@@ -49,6 +49,9 @@ spelling can partially discover or analyze a multiple-project selection.
 - The later manifest boundary consumes a canonical ordered selection and owns
   filesystem validation plus the rule that unselected project references are
   external boundaries.
+- That boundary publishes a separate explicit-project manifest representation;
+  the legacy manifest and Roslyn worker contract remain unchanged until their
+  explicit-selection handoff.
 - Existing one-project and solution callers retain their exact parser and
   discovery behavior during the transition.
 - A future CLI implementation must parse repeatable options into the v1 value

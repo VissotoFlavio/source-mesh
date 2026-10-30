@@ -3,9 +3,14 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, test } from 'node:test';
-import { discoverCSharpManifest } from '../src/index.js';
+import {
+  createCSharpExplicitProjectSelection,
+  discoverCSharpExplicitProjectManifest,
+  discoverCSharpManifest,
+} from '../src/index.js';
 import { main, type CliIO, type CliServices } from '../src/cli.js';
 import {
+  CSHARP_EXPLICIT_PROJECT_SELECTION_VERSION,
   CSHARP_MAX_XML_ATTRIBUTES_PER_NODE,
   CSHARP_MAX_XML_DEPTH,
   CSHARP_MAX_XML_NODES,
@@ -18,6 +23,7 @@ import {
   type DiscoveryDirent,
   type DiscoveryFileSystem,
 } from '../src/discovery.js';
+import type { CSharpExplicitProjectSelection } from '../src/csharp/contracts.js';
 
 const roots: string[] = [];
 
@@ -117,6 +123,128 @@ test('csharp project discovery builds a contained reference closure and compile 
   assert.equal(result.manifest.projects[0]!.langVersion, 'latest');
   assert.equal(JSON.stringify(result.manifest).includes(root), false);
   assert.equal(JSON.stringify(result.manifest).includes('<Project'), false);
+});
+
+test('explicit C# selection builds only the selected project manifest boundary', async () => {
+  const root = fixture();
+  write(
+    root,
+    'src/App/App.csproj',
+    '<Project><ItemGroup><ProjectReference Include="../Lib/Lib.csproj" /></ItemGroup></Project>',
+  );
+  write(root, 'src/App/App.cs', 'class App {}');
+  write(root, 'src/Lib/Lib.csproj', '<Project><broken /></Project>');
+  write(root, 'src/Lib/Lib.cs', 'class Lib {}');
+  write(root, 'src/Tools/Tools.csproj', '<Project />');
+  write(root, 'src/Tools/Tools.cs', 'class Tools {}');
+  const selected = createCSharpExplicitProjectSelection([
+    'src/Tools/Tools.csproj',
+    'src/App/App.csproj',
+  ]);
+  assert.ok('selection' in selected);
+
+  const result = await discoverCSharpExplicitProjectManifest(
+    root,
+    selected.selection,
+  );
+
+  assert.deepEqual(result.diagnostics, []);
+  assert.deepEqual(result.manifest?.selection, {
+    version: 1,
+    kind: 'explicit-projects',
+    projects: ['src/App/App.csproj', 'src/Tools/Tools.csproj'],
+  });
+  assert.deepEqual(
+    result.manifest?.projects.map((project) => project.path),
+    ['src/App/App.csproj', 'src/Tools/Tools.csproj'],
+  );
+  assert.deepEqual(result.manifest?.projects[0]?.references, [
+    'src/Lib/Lib.csproj',
+  ]);
+  assert.equal(Object.isFrozen(result.manifest?.selection), true);
+  assert.equal(Object.isFrozen(result.manifest?.selection.projects), true);
+});
+
+test('explicit C# selection validates every selected entry before project discovery', async () => {
+  const root = fixture();
+  write(root, 'src/A/A.csproj', '<Project><unclosed>');
+  write(root, 'src/B/B.csproj', '<Project />');
+  const selected = createCSharpExplicitProjectSelection([
+    'src/A/A.csproj',
+    'src/B/B.csproj',
+  ]);
+  assert.ok('selection' in selected);
+  fs.unlinkSync(path.join(root, 'src/B/B.csproj'));
+
+  const result = await discoverCSharpExplicitProjectManifest(
+    root,
+    selected.selection,
+  );
+
+  assert.equal(result.manifest, undefined);
+  assert.equal(result.diagnostics[0]?.code, 'io_error');
+});
+
+test('explicit C# selection rejects physical project aliases', async () => {
+  const root = fixture();
+  write(root, 'src/A/A.csproj', '<Project />');
+  fs.mkdirSync(path.join(root, 'src/B'), { recursive: true });
+  fs.linkSync(
+    path.join(root, 'src/A/A.csproj'),
+    path.join(root, 'src/B/B.csproj'),
+  );
+  const selected = createCSharpExplicitProjectSelection([
+    'src/A/A.csproj',
+    'src/B/B.csproj',
+  ]);
+  assert.ok('selection' in selected);
+
+  const result = await discoverCSharpExplicitProjectManifest(
+    root,
+    selected.selection,
+  );
+
+  assert.equal(result.manifest, undefined);
+  assert.equal(result.diagnostics[0]?.code, 'path_invalid');
+});
+
+test('explicit C# discovery snapshots the selection before its first await', async () => {
+  const root = fixture();
+  write(root, 'src/A/A.csproj', '<Project />');
+  write(root, 'src/B/B.csproj', '<Project />');
+  const projects = ['src/A/A.csproj'];
+  const selection: CSharpExplicitProjectSelection = {
+    version: CSHARP_EXPLICIT_PROJECT_SELECTION_VERSION,
+    kind: 'explicit-projects',
+    projects,
+  };
+
+  const pending = discoverCSharpExplicitProjectManifest(root, selection);
+  projects.push('src/B/B.csproj');
+  const result = await pending;
+
+  assert.deepEqual(result.diagnostics, []);
+  assert.deepEqual(
+    result.manifest?.projects.map((project) => project.path),
+    ['src/A/A.csproj'],
+  );
+});
+
+test('explicit C# discovery rejects sparse selections without throwing', async () => {
+  const root = fixture();
+  write(root, 'src/A/A.csproj', '<Project />');
+  const projects = new Array<string>(2);
+  projects[0] = 'src/A/A.csproj';
+  const selection: CSharpExplicitProjectSelection = {
+    version: CSHARP_EXPLICIT_PROJECT_SELECTION_VERSION,
+    kind: 'explicit-projects',
+    projects,
+  };
+
+  const result = await discoverCSharpExplicitProjectManifest(root, selection);
+
+  assert.equal(result.manifest, undefined);
+  assert.equal(result.diagnostics[0]?.code, 'invalid_selection');
 });
 
 test('csharp discovery supports bounded SDK metadata and recursive item removals', async () => {
