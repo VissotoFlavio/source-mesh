@@ -6,9 +6,9 @@ that list through `registerConformantBundledLanguagePacks(...)` in
 `test/helpers/language-pack-conformance.ts`; that registration path excludes a
 candidate whose mandatory profile fails.
 
-SourceMesh has no bundled implementation yet. The TypeScript and C# migrations
-must add their packs to this list before adding their application bootstrap;
-there is deliberately no unguarded bundled-pack registration helper.
+The bundled TypeScript pack is the first entry in this list. The C# migration
+must add its pack before adding an application bootstrap; there is deliberately
+no unguarded bundled-pack registration helper.
 
 The profile supplies an immutable Core-owned request, compares two raw pack
 responses before the registry can normalize them, then registers and invokes

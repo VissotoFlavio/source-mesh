@@ -69,18 +69,9 @@ function injectedServices(overrides: Partial<CliServices> = {}): CliServices {
     discoverCSharpManifest: async () => ({ diagnostics: [] }),
     discoverSourceFiles: async () => ({
       repositoryRoot: '/selected/root',
-      sources: ['source.ts'],
+      sources: [],
       diagnostics: [],
     }),
-    loadProject: () => ({
-      project: {
-        program: {} as never,
-        options: {},
-        rootNames: ['source.ts'],
-      },
-      diagnostics: [],
-    }),
-    extractDeclarationGraph: () => emptyGraph(),
     writeSnapshot: async () => ({
       path: '/selected/root/.sourcemesh/graph.json',
       digest: 'a'.repeat(64),

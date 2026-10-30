@@ -8,6 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- Migrated TypeScript and JavaScript analysis through the bundled language-pack
+  boundary while preserving deterministic schema-v1 snapshots (#55).
+
 - Added a reusable, offline language-pack conformance suite covering request
   boundaries, fragment validation, determinism, diagnostics, and resource
   limits (#54).
