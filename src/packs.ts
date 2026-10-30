@@ -310,6 +310,23 @@ function validRequest(request: AnalysisRequest): boolean {
   );
 }
 
+function immutableRequest(request: AnalysisRequest): AnalysisRequest {
+  return Object.freeze({
+    contractVersion: request.contractVersion,
+    repository: Object.freeze({ ...request.repository }),
+    files: Object.freeze(
+      request.files.map((file) =>
+        Object.freeze({
+          path: file.path,
+          contents: new Uint8Array(file.contents),
+        }),
+      ),
+    ),
+    limits: Object.freeze({ ...request.limits }),
+    configuration: Object.freeze({ ...request.configuration }),
+  });
+}
+
 function validFragment(
   value: GraphFragment,
   manifest: LanguagePackManifest,
@@ -348,26 +365,72 @@ function validFragment(
   );
 }
 
+function snapshotFragment(fragment: GraphFragment): GraphFragment {
+  const pack = fragment.pack;
+  const nodes = fragment.nodes;
+  const edges = fragment.edges;
+  const diagnostics = fragment.diagnostics;
+  return Object.freeze({
+    pack: Object.freeze({ id: pack.id, version: pack.version }),
+    nodes: Object.freeze(
+      nodes.map((node) =>
+        Object.freeze({
+          key: node.key,
+          kind: node.kind,
+          path: node.path,
+          name: node.name,
+        }),
+      ),
+    ),
+    edges: Object.freeze(
+      edges.map((edge) =>
+        Object.freeze({
+          kind: edge.kind,
+          from: edge.from,
+          to: edge.to,
+          confidence: edge.confidence,
+        }),
+      ),
+    ),
+    diagnostics: Object.freeze(
+      diagnostics.map((diagnostic) => {
+        const path = diagnostic.path;
+        return Object.freeze({
+          code: diagnostic.code,
+          severity: diagnostic.severity,
+          ...(path === undefined ? {} : { path }),
+        });
+      }),
+    ),
+  });
+}
+
 function normalized(fragment: GraphFragment): GraphFragment {
   return Object.freeze({
     pack: Object.freeze({ ...fragment.pack }),
     nodes: Object.freeze(
-      [...fragment.nodes].sort((left, right) => ordinal(left.key, right.key)),
+      fragment.nodes
+        .map((node) => Object.freeze({ ...node }))
+        .sort((left, right) => ordinal(left.key, right.key)),
     ),
     edges: Object.freeze(
-      [...fragment.edges].sort(
-        (left, right) =>
-          ordinal(left.kind, right.kind) ||
-          ordinal(left.from, right.from) ||
-          ordinal(left.to, right.to),
-      ),
+      fragment.edges
+        .map((edge) => Object.freeze({ ...edge }))
+        .sort(
+          (left, right) =>
+            ordinal(left.kind, right.kind) ||
+            ordinal(left.from, right.from) ||
+            ordinal(left.to, right.to),
+        ),
     ),
     diagnostics: Object.freeze(
-      [...fragment.diagnostics].sort(
-        (left, right) =>
-          ordinal(left.code, right.code) ||
-          ordinal(left.path ?? '', right.path ?? ''),
-      ),
+      fragment.diagnostics
+        .map((diagnostic) => Object.freeze({ ...diagnostic }))
+        .sort(
+          (left, right) =>
+            ordinal(left.code, right.code) ||
+            ordinal(left.path ?? '', right.path ?? ''),
+        ),
     ),
   });
 }
@@ -629,8 +692,9 @@ export class LanguagePackRegistry {
         'Language pack request is invalid.',
       );
     try {
-      const fragment = await pack.analyze(request);
-      return validFragment(fragment, pack.manifest, request)
+      const approvedRequest = immutableRequest(request);
+      const fragment = snapshotFragment(await pack.analyze(approvedRequest));
+      return validFragment(fragment, pack.manifest, approvedRequest)
         ? { fragment: normalized(fragment), diagnostics: Object.freeze([]) }
         : failure(
             'pack_response_invalid',
