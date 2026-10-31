@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- Added deterministic, offline schema-v3 composition of TypeScript/JavaScript
+  and C# language packs, with MCP coverage and fail-closed cross-language
+  relationship diagnostics (#58).
+
 - Moved C# discovery, worker, and graph extraction behind the `csharp` language
   pack boundary while retaining deprecated compatibility exports (#57).
 

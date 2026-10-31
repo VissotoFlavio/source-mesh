@@ -44,6 +44,7 @@ import type {
 import { SnapshotError } from './snapshot/types.js';
 import { isReadableSnapshotPath, snapshotPathForId } from './snapshot/path.js';
 import { runMcpStdio } from './mcp/run-stdio.js';
+import { composeMultiPackSnapshot } from './multi-pack.js';
 
 type CommandName =
   | 'analyze'
@@ -123,7 +124,7 @@ type ParsedCommand =
 
 interface SnapshotAnalyzeResult {
   readonly kind: 'snapshot';
-  readonly schemaVersion: 1 | 2;
+  readonly schemaVersion: 1 | 2 | 3;
   readonly snapshotPath: string;
   readonly completeness: SnapshotV1['completeness'];
   readonly digest: string;
@@ -525,7 +526,6 @@ function parseArguments(argv: readonly string[]): ParsedCommand {
       if (languageValue !== 'csharp') throw invalid('language');
       if ((solutionValue === undefined) === (projectValue === undefined))
         throw invalid('selection');
-      if (tsconfig !== undefined) throw invalid('tsconfig');
     }
     if (
       sourceEncodingValue !== undefined &&
@@ -757,23 +757,35 @@ async function executeAnalyze(
             : { maxDiagnostics: command.maxDiagnostics }),
         },
       );
-      const snapshot = services.extractCSharpDeclarationGraph({
+      const csharpSnapshot = services.extractCSharpDeclarationGraph({
         repositoryRoot: command.root,
         manifest: manifest.manifest,
         worker,
       });
+      const typescript =
+        command.tsconfig === undefined
+          ? undefined
+          : await analyzeTypeScript(command.root, command.tsconfig, services);
+      const snapshot =
+        typescript === undefined
+          ? csharpSnapshot
+          : composeMultiPackSnapshot(typescript.snapshot, csharpSnapshot);
       let result: SnapshotWriteResult;
       try {
-        result = await services.writeSnapshot(command.root, snapshot, {
-          path: command.snapshot,
-        });
+        result = await services.writeSnapshot(
+          typescript?.repositoryRoot ?? command.root,
+          snapshot,
+          {
+            path: command.snapshot,
+          },
+        );
       } catch (error) {
         if (error instanceof SnapshotError) throw snapshotFailure(error);
         throw analysisFailure();
       }
       return {
         kind: 'snapshot',
-        schemaVersion: 2,
+        schemaVersion: snapshot.schemaVersion,
         snapshotPath: command.snapshot,
         completeness: snapshot.completeness,
         digest: result.digest,
@@ -789,57 +801,20 @@ async function executeAnalyze(
         },
       };
     }
-    const discovery = await services.discoverSourceFiles(command.root, {
-      extensions: typescriptPack.manifest.extensions,
-    });
-    if (
-      discovery.repositoryRoot === undefined ||
-      discovery.diagnostics.length > 0
-    )
-      throw analysisFailure();
-    const repositoryRoot = discovery.repositoryRoot;
-    const approvedFiles = discovery.sources.map((source) => ({
-      path: source,
-      // Discovery supplied the canonical root and relative allow-list. Core
-      // reads each member once; the pack receives bytes only, never this root.
-      contents: new Uint8Array(
-        fs.readFileSync(path.join(repositoryRoot, source)),
-      ),
-    }));
-    const configuration: Record<string, string> = {};
-    if (command.tsconfig !== undefined) {
-      const candidate = path.resolve(repositoryRoot, command.tsconfig);
-      const relative = path.relative(repositoryRoot, candidate);
-      if (
-        relative === '' ||
-        relative.startsWith(`..${path.sep}`) ||
-        path.isAbsolute(relative)
-      )
-        throw analysisFailure();
-      configuration['typescript.tsconfig'] = fs.readFileSync(candidate, 'utf8');
-    }
-    const analysis = await typescriptPack.analyze({
-      contractVersion: 1,
-      repository: { name: 'repository', root: '.' },
-      files: approvedFiles,
-      limits: {
-        maxFiles: 10_000,
-        maxBytes: 128 * 1024 * 1024,
-        maxNodes: 1_000_000,
-        maxEdges: 1_000_000,
-        maxDiagnostics: 100_000,
-      },
-      configuration,
-    });
-    const snapshot: SnapshotV1 = {
-      ...analysis.graph,
-      completeness: analysis.completeness,
-    };
+    const typescript = await analyzeTypeScript(
+      command.root,
+      command.tsconfig,
+      services,
+    );
     let result: SnapshotWriteResult;
     try {
-      result = await services.writeSnapshot(repositoryRoot, snapshot, {
-        path: command.snapshot,
-      });
+      result = await services.writeSnapshot(
+        typescript.repositoryRoot,
+        typescript.snapshot,
+        {
+          path: command.snapshot,
+        },
+      );
     } catch (error) {
       if (error instanceof SnapshotError) throw snapshotFailure(error);
       throw analysisFailure();
@@ -848,7 +823,7 @@ async function executeAnalyze(
       kind: 'snapshot',
       schemaVersion: 1,
       snapshotPath: command.snapshot,
-      completeness: snapshot.completeness,
+      completeness: typescript.snapshot.completeness,
       digest: result.digest,
       bytes: result.bytes,
     };
@@ -857,6 +832,59 @@ async function executeAnalyze(
     if (error instanceof SnapshotError) throw snapshotFailure(error);
     throw analysisFailure();
   }
+}
+
+async function analyzeTypeScript(
+  root: string,
+  tsconfig: string | undefined,
+  services: CliServices,
+): Promise<{ readonly repositoryRoot: string; readonly snapshot: SnapshotV1 }> {
+  const discovery = await services.discoverSourceFiles(root, {
+    extensions: typescriptPack.manifest.extensions,
+  });
+  if (
+    discovery.repositoryRoot === undefined ||
+    discovery.diagnostics.length > 0
+  )
+    throw analysisFailure();
+  const repositoryRoot = discovery.repositoryRoot;
+  const approvedFiles = discovery.sources.map((source) => ({
+    path: source,
+    // Discovery supplied the canonical root and relative allow-list. Core
+    // reads each member once; the pack receives bytes only, never this root.
+    contents: new Uint8Array(
+      fs.readFileSync(path.join(repositoryRoot, source)),
+    ),
+  }));
+  const configuration: Record<string, string> = {};
+  if (tsconfig !== undefined) {
+    const candidate = path.resolve(repositoryRoot, tsconfig);
+    const relative = path.relative(repositoryRoot, candidate);
+    if (
+      relative === '' ||
+      relative.startsWith(`..${path.sep}`) ||
+      path.isAbsolute(relative)
+    )
+      throw analysisFailure();
+    configuration['typescript.tsconfig'] = fs.readFileSync(candidate, 'utf8');
+  }
+  const analysis = await typescriptPack.analyze({
+    contractVersion: 1,
+    repository: { name: 'repository', root: '.' },
+    files: approvedFiles,
+    limits: {
+      maxFiles: 10_000,
+      maxBytes: 128 * 1024 * 1024,
+      maxNodes: 1_000_000,
+      maxEdges: 1_000_000,
+      maxDiagnostics: 100_000,
+    },
+    configuration,
+  });
+  return {
+    repositoryRoot,
+    snapshot: { ...analysis.graph, completeness: analysis.completeness },
+  };
 }
 
 async function executeQuery(
