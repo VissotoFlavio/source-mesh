@@ -16,7 +16,7 @@ export interface LocalPackInstallationEntry {
   readonly version: string;
   readonly enabled: boolean;
   /** Required only when the selected pack uses a local worker. */
-  readonly workerProtocolVersion?: typeof LOCAL_WORKER_PROTOCOL_VERSION;
+  readonly workerProtocolVersion?: number;
 }
 
 export interface LocalPackInstallation {
@@ -96,7 +96,9 @@ function decode(value: unknown): DecodedInstallation | undefined {
         typeof item.enabled !== 'boolean' ||
         ids.has(item.id) ||
         (Object.hasOwn(item, 'workerProtocolVersion') &&
-          item.workerProtocolVersion !== LOCAL_WORKER_PROTOCOL_VERSION)
+          (typeof item.workerProtocolVersion !== 'number' ||
+            !Number.isSafeInteger(item.workerProtocolVersion) ||
+            item.workerProtocolVersion < 1))
       )
         return undefined;
       ids.add(item.id);
@@ -106,7 +108,7 @@ function decode(value: unknown): DecodedInstallation | undefined {
           version: item.version,
           enabled: item.enabled,
           ...(Object.hasOwn(item, 'workerProtocolVersion')
-            ? { workerProtocolVersion: LOCAL_WORKER_PROTOCOL_VERSION }
+            ? { workerProtocolVersion: item.workerProtocolVersion as number }
             : {}),
         }),
       );

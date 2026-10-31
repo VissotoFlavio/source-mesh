@@ -138,7 +138,7 @@ test('reports unavailable and incompatible installed packs before configuration 
 
 test('requires the configured local-worker protocol before accepting a worker pack', () => {
   const installed = pack('worker', '1.0.0', 'local-worker');
-  const result = resolveLocalPackInstallation(
+  const missing = resolveLocalPackInstallation(
     {
       version: 1,
       core: { packContractVersion: 1 },
@@ -147,9 +147,31 @@ test('requires the configured local-worker protocol before accepting a worker pa
     [installed],
   );
   assert.deepEqual(
-    result.diagnostics.map((item) => item.code),
+    missing.diagnostics.map((item) => item.code),
     ['pack_incompatible'],
   );
+  assert.deepEqual(missing.selection, { enabledPackIds: [] });
+
+  const incompatible = resolveLocalPackInstallation(
+    {
+      version: 1,
+      core: { packContractVersion: 1 },
+      packs: [
+        {
+          id: 'worker',
+          version: '1.0.0',
+          enabled: true,
+          workerProtocolVersion: LOCAL_WORKER_PROTOCOL_VERSION + 1,
+        },
+      ],
+    },
+    [installed],
+  );
+  assert.deepEqual(
+    incompatible.diagnostics.map((item) => item.code),
+    ['pack_incompatible'],
+  );
+  assert.deepEqual(incompatible.selection, { enabledPackIds: [] });
 
   const compatible = resolveLocalPackInstallation(
     {
