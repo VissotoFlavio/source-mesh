@@ -1,4 +1,5 @@
 import { type LanguagePack } from './packs.js';
+import { csharpPack } from './packs/csharp.js';
 import { typescriptPack } from './packs/typescript.js';
 
 /**
@@ -7,4 +8,5 @@ import { typescriptPack } from './packs/typescript.js';
  */
 export const BUNDLED_LANGUAGE_PACKS: readonly LanguagePack[] = Object.freeze([
   typescriptPack,
+  csharpPack,
 ]);

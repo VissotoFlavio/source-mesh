@@ -149,7 +149,7 @@ export interface CliIO {
 
 export interface CliServices {
   readonly discoverCSharpManifest: typeof csharpPack.discover;
-  readonly analyzeCSharpManifest?: typeof csharpPack.analyze;
+  readonly analyzeCSharpManifest?: typeof csharpPack.analyzeManifest;
   readonly extractCSharpDeclarationGraph?: typeof csharpPack.extract;
   readonly discoverSourceFiles: typeof discoverSourceFiles;
   readonly writeSnapshot: typeof writeSnapshot;
@@ -161,7 +161,7 @@ export interface CliServices {
 
 const productionServices: CliServices = {
   discoverCSharpManifest: csharpPack.discover,
-  analyzeCSharpManifest: csharpPack.analyze,
+  analyzeCSharpManifest: csharpPack.analyzeManifest,
   extractCSharpDeclarationGraph: csharpPack.extract,
   discoverSourceFiles,
   writeSnapshot,

@@ -36,6 +36,8 @@ export interface LocalWorkerRequest {
 export interface LocalWorkerResponse {
   readonly version: typeof LOCAL_WORKER_PROTOCOL_VERSION;
   readonly fragment: GraphFragment;
+  /** Pack-private, versioned data validated by the owning pack. */
+  readonly payload?: unknown;
 }
 
 export interface LocalWorkerRunOptions {
@@ -202,5 +204,6 @@ export async function runLocalWorker(
   return Object.freeze({
     version: LOCAL_WORKER_PROTOCOL_VERSION,
     fragment: value.fragment,
+    ...(Object.hasOwn(value, 'payload') ? { payload: value.payload } : {}),
   });
 }

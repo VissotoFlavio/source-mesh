@@ -22,6 +22,7 @@ export type {
 } from './local-worker.js';
 export { typescriptPack } from './packs/typescript.js';
 export { csharpPack } from './packs/csharp.js';
+export type { CSharpLanguagePack } from './packs/csharp.js';
 export type {
   TypeScriptGraphFragment,
   TypeScriptLanguagePack,
