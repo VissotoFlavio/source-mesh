@@ -5,10 +5,8 @@ import fs from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
   createGraphQueryService,
-  discoverCSharpManifest,
+  csharpPack,
   discoverSourceFiles,
-  analyzeCSharpManifest,
-  extractCSharpDeclarationGraph,
   typescriptPack,
   openValidatedSnapshot,
   writeSnapshot,
@@ -150,9 +148,9 @@ export interface CliIO {
 }
 
 export interface CliServices {
-  readonly discoverCSharpManifest: typeof discoverCSharpManifest;
-  readonly analyzeCSharpManifest?: typeof analyzeCSharpManifest;
-  readonly extractCSharpDeclarationGraph?: typeof extractCSharpDeclarationGraph;
+  readonly discoverCSharpManifest: typeof csharpPack.discover;
+  readonly analyzeCSharpManifest?: typeof csharpPack.analyze;
+  readonly extractCSharpDeclarationGraph?: typeof csharpPack.extract;
   readonly discoverSourceFiles: typeof discoverSourceFiles;
   readonly writeSnapshot: typeof writeSnapshot;
   readonly openValidatedSnapshot: typeof openValidatedSnapshot;
@@ -162,9 +160,9 @@ export interface CliServices {
 }
 
 const productionServices: CliServices = {
-  discoverCSharpManifest,
-  analyzeCSharpManifest,
-  extractCSharpDeclarationGraph,
+  discoverCSharpManifest: csharpPack.discover,
+  analyzeCSharpManifest: csharpPack.analyze,
+  extractCSharpDeclarationGraph: csharpPack.extract,
   discoverSourceFiles,
   writeSnapshot,
   openValidatedSnapshot,
