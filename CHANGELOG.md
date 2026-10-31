@@ -8,6 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- Moved C# discovery, worker, and graph extraction behind the `csharp` language
+  pack boundary while retaining deprecated compatibility exports (#57).
+
 - Added a versioned, bounded local-worker protocol with static worker selection
   and fail-closed framing for out-of-process language packs (#56).
 
