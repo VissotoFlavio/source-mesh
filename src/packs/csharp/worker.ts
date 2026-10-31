@@ -108,7 +108,7 @@ type StagingCreator = (prefix: string) => Promise<string>;
 
 const helperDll = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
-  '../../tools/sourcemesh-roslyn/bin/Release/net10.0/sourcemesh-roslyn.dll',
+  '../../../tools/sourcemesh-roslyn/bin/Release/net10.0/sourcemesh-roslyn.dll',
 );
 const dotnetHost =
   process.platform === 'win32'
