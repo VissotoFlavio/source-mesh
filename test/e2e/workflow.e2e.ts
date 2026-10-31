@@ -20,6 +20,12 @@ const csharpFixture = path.join(
   'fixtures',
   'csharp-project',
 );
+const multiPackFixture = path.join(
+  repository,
+  'test',
+  'fixtures',
+  'multi-pack-project',
+);
 const cliEntry = path.join(repository, 'dist', 'cli.js');
 const denyNetwork = path.join(repository, 'scripts', 'deny-network.mjs');
 const sourceMarker = 'E2E_SOURCE_TEXT_MARKER';
@@ -105,6 +111,27 @@ function csharpAnalyzeArgs(
     'csharp',
     '--solution',
     'Synthetic.sln',
+    '--output',
+    'json',
+  ];
+}
+
+function multiPackAnalyzeArgs(
+  root: string,
+  snapshotId = 'multi-pack-workflow',
+): string[] {
+  return [
+    'analyze',
+    '--root',
+    root,
+    '--snapshot-id',
+    snapshotId,
+    '--tsconfig',
+    'tsconfig.json',
+    '--language',
+    'csharp',
+    '--project',
+    'src/csharp/App.csproj',
     '--output',
     'json',
   ];
@@ -801,5 +828,101 @@ test(
       await readFile(snapshotPath(firstRoot, 'csharp-workflow')),
     );
     assertNoPrivateValues(noPersist.stderr, firstRoot);
+  },
+);
+
+test(
+  'built multi-pack workflow is deterministic, offline, and never fabricates cross-language relationships',
+  { skip: process.platform !== 'win32' },
+  async () => {
+    const firstRoot = await createFixtureCopy(multiPackFixture);
+    const secondRoot = await createFixtureCopy(multiPackFixture);
+    const firstAnalysis = assertCliSuccess(
+      await runSourceMesh(firstRoot, multiPackAnalyzeArgs(firstRoot)),
+    );
+    const secondAnalysis = assertCliSuccess(
+      await runSourceMesh(secondRoot, multiPackAnalyzeArgs(secondRoot)),
+    );
+    assert.equal(firstAnalysis.schemaVersion, 3);
+    assert.deepEqual(firstAnalysis.result, secondAnalysis.result);
+
+    const firstBytes = await readFile(
+      snapshotPath(firstRoot, 'multi-pack-workflow'),
+    );
+    assert.deepEqual(
+      firstBytes,
+      await readFile(snapshotPath(secondRoot, 'multi-pack-workflow')),
+    );
+    const snapshot = await openValidatedSnapshot(
+      firstRoot,
+      '.sourcemesh/snapshots/multi-pack-workflow.json',
+    );
+    assert.equal(snapshot.schemaVersion, 3);
+    if (snapshot.schemaVersion !== 3) throw new Error('Expected schema v3.');
+    assert.deepEqual(
+      snapshot.metadata.packs.map((pack) => pack.id),
+      ['csharp', 'typescript'],
+    );
+
+    const typescriptFunction = findNode(snapshot, 'function', 'invokeCsharp');
+    const csharpClass = findNode(snapshot, 'class', 'Server');
+    assert.ok('packId' in typescriptFunction);
+    assert.ok('packId' in csharpClass);
+    assert.equal(typescriptFunction.packId, 'typescript');
+    assert.equal(csharpClass.packId, 'csharp');
+    assert.equal(
+      snapshot.diagnostics.some(
+        (diagnostic) =>
+          diagnostic.code === 'relationship_unresolved' &&
+          diagnostic.path === 'src/ts/client.ts' &&
+          diagnostic.relationKind === 'calls',
+      ),
+      true,
+    );
+    const languageByNodeId = new Map(
+      snapshot.nodes.map((node) => [
+        node.id,
+        node.kind === 'repository' ? undefined : node.language,
+      ]),
+    );
+    assert.equal(
+      snapshot.edges.some((edge) => {
+        const from = languageByNodeId.get(edge.from);
+        const to = languageByNodeId.get(edge.to);
+        return from !== undefined && to !== undefined && from !== to;
+      }),
+      false,
+    );
+
+    const mcp = await startMcp(firstRoot, 'multi-pack-workflow');
+    try {
+      for (const [query, nodeId] of [
+        ['invokeCsharp', typescriptFunction.id],
+        ['Server', csharpClass.id],
+      ] as const) {
+        const search = await mcp.client.callTool({
+          name: 'searchSymbols',
+          arguments: { query, allowPartial: true },
+        });
+        assert.equal(search.isError ?? false, false);
+        assert.match(
+          JSON.stringify(search.structuredContent),
+          new RegExp(nodeId, 'u'),
+        );
+        const details = await mcp.client.callTool({
+          name: 'getSymbol',
+          arguments: { nodeId, allowPartial: true },
+        });
+        assert.equal(details.isError ?? false, false);
+        assert.match(
+          JSON.stringify(details.structuredContent),
+          new RegExp(nodeId, 'u'),
+        );
+      }
+    } finally {
+      await mcp.client.close();
+      assert.equal(mcp.transport.pid, null);
+      assert.equal(mcp.stderr(), '');
+    }
   },
 );
