@@ -14,6 +14,7 @@
   "files": [
     "dist",
     "docs/csharp-mcp-snapshot-package-guide.md",
+    "docs/local-language-pack-installation.md",
     "tools/sourcemesh-roslyn/bin/Release/net10.0/Microsoft.CodeAnalysis.CSharp.dll",
     "tools/sourcemesh-roslyn/bin/Release/net10.0/Microsoft.CodeAnalysis.dll",
     "tools/sourcemesh-roslyn/bin/Release/net10.0/sourcemesh-roslyn.deps.json",

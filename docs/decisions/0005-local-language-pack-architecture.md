@@ -167,11 +167,12 @@ repository, or writes a snapshot.
 ### Installation and offline operation
 
 Packs and workers are installed before analysis through a local, explicit,
-version-resolved process. Runtime mapping never downloads a pack, language
-runtime, compiler, SDK, package, model, or update. The registry validates the
-local pack's manifest and declared compatibility before it is enabled. A later
-installation decision will define package layout, integrity evidence, and the
-exact resolution algorithm without adding a remote runtime dependency.
+exact-version-resolved process. Runtime mapping never downloads a pack,
+language runtime, compiler, SDK, package, model, or update. The registry
+validates the local pack's manifest and declared compatibility before it is
+enabled. The closed configuration schema, source-owned bootstrap model,
+compatibility matrix, integrity/update procedure, and offline validation are
+defined in [the local language-pack installation guide](../local-language-pack-installation.md).
 
 ## Consequences
 

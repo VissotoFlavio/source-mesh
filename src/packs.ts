@@ -1,5 +1,7 @@
 import path from 'node:path';
 
+import { LOCAL_WORKER_PROTOCOL_VERSION } from './local-worker.js';
+
 import {
   discoverSourceFiles,
   type DiscoverSourceFilesOptions,
@@ -23,6 +25,7 @@ export type PackDiagnosticCode =
   | 'pack_duplicate_extension'
   | 'pack_unavailable'
   | 'pack_incompatible'
+  | 'pack_installation_invalid'
   | 'pack_selection_ambiguous';
 
 export interface LanguagePackManifest {
@@ -31,6 +34,8 @@ export interface LanguagePackManifest {
   readonly version: string;
   readonly extensions: readonly string[];
   readonly executionMode: LanguagePackExecutionMode;
+  /** Required for packs that can invoke the fixed local-worker protocol. */
+  readonly workerProtocolVersion?: typeof LOCAL_WORKER_PROTOCOL_VERSION;
   readonly capabilities: readonly LanguagePackCapability[];
 }
 
@@ -252,6 +257,9 @@ function snapshotManifest(
     version: manifest.version,
     extensions: [...manifest.extensions],
     executionMode: manifest.executionMode,
+    ...(manifest.workerProtocolVersion === undefined
+      ? {}
+      : { workerProtocolVersion: manifest.workerProtocolVersion }),
     capabilities: [...manifest.capabilities],
   };
   validateLanguagePackManifest(snapshot);
@@ -270,6 +278,11 @@ export function validateLanguagePackManifest(
     !safeText(manifest.id) ||
     !safeText(manifest.version) ||
     !modes.has(manifest.executionMode) ||
+    ((manifest.executionMode === 'local-worker' ||
+      manifest.executionMode === 'hybrid') &&
+      manifest.workerProtocolVersion !== LOCAL_WORKER_PROTOCOL_VERSION) ||
+    (manifest.executionMode === 'in-process' &&
+      manifest.workerProtocolVersion !== undefined) ||
     manifest.extensions.length === 0 ||
     !manifest.extensions.every((item) => extension.test(item)) ||
     new Set(manifest.extensions).size !== manifest.extensions.length ||

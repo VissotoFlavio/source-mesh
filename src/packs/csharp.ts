@@ -26,6 +26,7 @@ const manifest: LanguagePackManifest = {
   version: '1.0.0',
   extensions: ['.cs'],
   executionMode: 'local-worker',
+  workerProtocolVersion: LOCAL_WORKER_PROTOCOL_VERSION,
   capabilities: ['project-manifest', 'source-analysis', 'semantic-relations'],
 };
 

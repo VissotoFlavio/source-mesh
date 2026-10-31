@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- Added a closed local pack-installation resolver with exact-version selection,
+  explicit enablement, Core/manifest/worker-protocol compatibility checks, and
+  offline installation guidance (#59).
+
 - Added deterministic, offline schema-v3 composition of TypeScript/JavaScript
   and C# language packs, with MCP coverage and fail-closed cross-language
   relationship diagnostics (#58).

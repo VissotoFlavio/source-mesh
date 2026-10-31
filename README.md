@@ -57,6 +57,12 @@ is a local `npm install --global --ignore-scripts <downloaded-tarball>` step;
 runtime analysis does not restore, compile, download dependencies, update
 itself, or contact a registry.
 
+Language-pack selection is likewise local and explicit. The
+[local language-pack installation guide](docs/local-language-pack-installation.md)
+defines the closed configuration, exact-version resolution, compatibility
+matrix, and offline update validation; repository analysis never downloads or
+dynamically loads a pack.
+
 ## Verify package distribution from a checkout
 
 Maintainers build the helper from the committed offline NuGet feed and validate
