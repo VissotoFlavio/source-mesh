@@ -21,6 +21,7 @@ const forbiddenLifecycleScripts = new Set([
   'prepare',
 ]);
 const csharpMcpSnapshotGuide = 'docs/csharp-mcp-snapshot-package-guide.md';
+const localPackInstallationGuide = 'docs/local-language-pack-installation.md';
 
 function fail(code) {
   const error = new Error(code);
@@ -296,6 +297,7 @@ async function verifyPackageRoot(root, { installed = false } = {}) {
   const expectedFiles = [
     'THIRD-PARTY-NOTICES.md',
     csharpMcpSnapshotGuide,
+    localPackInstallationGuide,
     'dist',
     `${manifest.helperPath}/${manifest.helperIntegrityFile}`,
     ...manifest.helperFiles.map(
@@ -336,8 +338,11 @@ async function verifyPackageRoot(root, { installed = false } = {}) {
   const readme = await readFile(path.join(root, 'README.md'), 'utf8').catch(
     () => fail('package_readme_missing'),
   );
-  if (!readme.includes(`](${csharpMcpSnapshotGuide})`))
-    fail('package_csharp_guide_unlinked');
+  if (
+    !readme.includes(`](${csharpMcpSnapshotGuide})`) ||
+    !readme.includes(`](${localPackInstallationGuide})`)
+  )
+    fail('package_guide_unlinked');
   const guide = await readFile(
     path.join(root, ...csharpMcpSnapshotGuide.split('/')),
     'utf8',
@@ -357,6 +362,15 @@ async function verifyPackageRoot(root, { installed = false } = {}) {
     guide.includes('E2E_SECRET_VALUE_MARKER')
   )
     fail('package_csharp_guide_invalid');
+  const packGuide = await readFile(
+    path.join(root, ...localPackInstallationGuide.split('/')),
+    'utf8',
+  ).catch(() => fail('package_pack_installation_guide_missing'));
+  if (
+    !packGuide.includes('downloads a pack or package') ||
+    !packGuide.includes('exact version')
+  )
+    fail('package_pack_installation_guide_invalid');
   const notice = await readFile(
     path.join(root, 'THIRD-PARTY-NOTICES.md'),
     'utf8',
