@@ -5,12 +5,9 @@ import fs from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
   createGraphQueryService,
-  discoverCSharpManifest,
+  csharpPack,
   discoverSourceFiles,
-  analyzeCSharpManifest,
-  extractCSharpDeclarationGraph,
-  extractDeclarationGraph,
-  loadProject,
+  typescriptPack,
   openValidatedSnapshot,
   writeSnapshot,
 } from './index.js';
@@ -18,20 +15,27 @@ import { isWindowsUnsafePath } from './discovery.js';
 import type {
   FileRelationResponseV1,
   FileRelationResponseV2,
+  FileRelationResponseV3,
   CSharpManifest,
   FunctionSelectorV1,
   GetSymbolResponseV1,
   GetSymbolResponseV2,
+  GetSymbolResponseV3,
   GraphQueryService,
   GraphQueryServiceV2,
+  GraphQueryServiceV3,
   NodeSummaryV1,
   NodeSummaryV2,
+  NodeSummaryV3,
   QueryErrorV1,
   QueryErrorV2,
+  QueryErrorV3,
   QueryResponseV1,
   QueryResponseV2,
+  QueryResponseV3,
   SearchResponseV1,
   SearchResponseV2,
+  SearchResponseV3,
   SearchSymbolKindV2,
   Snapshot,
   SnapshotV1,
@@ -40,6 +44,7 @@ import type {
 import { SnapshotError } from './snapshot/types.js';
 import { isReadableSnapshotPath, snapshotPathForId } from './snapshot/path.js';
 import { runMcpStdio } from './mcp/run-stdio.js';
+import { composeMultiPackSnapshot } from './multi-pack.js';
 
 type CommandName =
   | 'analyze'
@@ -119,7 +124,7 @@ type ParsedCommand =
 
 interface SnapshotAnalyzeResult {
   readonly kind: 'snapshot';
-  readonly schemaVersion: 1 | 2;
+  readonly schemaVersion: 1 | 2 | 3;
   readonly snapshotPath: string;
   readonly completeness: SnapshotV1['completeness'];
   readonly digest: string;
@@ -144,26 +149,22 @@ export interface CliIO {
 }
 
 export interface CliServices {
-  readonly discoverCSharpManifest: typeof discoverCSharpManifest;
-  readonly analyzeCSharpManifest?: typeof analyzeCSharpManifest;
-  readonly extractCSharpDeclarationGraph?: typeof extractCSharpDeclarationGraph;
+  readonly discoverCSharpManifest: typeof csharpPack.discover;
+  readonly analyzeCSharpManifest?: typeof csharpPack.analyzeManifest;
+  readonly extractCSharpDeclarationGraph?: typeof csharpPack.extract;
   readonly discoverSourceFiles: typeof discoverSourceFiles;
-  readonly loadProject: typeof loadProject;
-  readonly extractDeclarationGraph: typeof extractDeclarationGraph;
   readonly writeSnapshot: typeof writeSnapshot;
   readonly openValidatedSnapshot: typeof openValidatedSnapshot;
   readonly createGraphQueryService: (
     snapshot: Snapshot,
-  ) => GraphQueryService | GraphQueryServiceV2;
+  ) => GraphQueryService | GraphQueryServiceV2 | GraphQueryServiceV3;
 }
 
 const productionServices: CliServices = {
-  discoverCSharpManifest,
-  analyzeCSharpManifest,
-  extractCSharpDeclarationGraph,
+  discoverCSharpManifest: csharpPack.discover,
+  analyzeCSharpManifest: csharpPack.analyzeManifest,
+  extractCSharpDeclarationGraph: csharpPack.extract,
   discoverSourceFiles,
-  loadProject,
-  extractDeclarationGraph,
   writeSnapshot,
   openValidatedSnapshot,
   createGraphQueryService,
@@ -199,10 +200,11 @@ const SEARCH_KINDS = new Set<SearchSymbolKindV2>([
 ]);
 const MEMBER_ROLES = new Set(['none', 'static', 'instance']);
 
-type QueryService = GraphQueryService | GraphQueryServiceV2;
-type QueryResponse = QueryResponseV1 | QueryResponseV2;
-type QueryError = QueryErrorV1 | QueryErrorV2;
-type NodeSummary = NodeSummaryV1 | NodeSummaryV2;
+type QueryService =
+  GraphQueryService | GraphQueryServiceV2 | GraphQueryServiceV3;
+type QueryResponse = QueryResponseV1 | QueryResponseV2 | QueryResponseV3;
+type QueryError = QueryErrorV1 | QueryErrorV2 | QueryErrorV3;
+type NodeSummary = NodeSummaryV1 | NodeSummaryV2 | NodeSummaryV3;
 
 const QUERY_MESSAGES: Record<QueryError['code'], string> = {
   invalid_request: 'The query request is invalid.',
@@ -232,7 +234,7 @@ class CliFailure extends Error {
   readonly field: string | undefined;
   readonly candidates: QueryError['candidates'];
   readonly totalCandidates: number | undefined;
-  readonly schemaVersion: 1 | 2 | undefined;
+  readonly schemaVersion: 1 | 2 | 3 | undefined;
 
   constructor(
     code: string,
@@ -242,7 +244,7 @@ class CliFailure extends Error {
     options?: {
       readonly candidates?: QueryError['candidates'];
       readonly totalCandidates?: number;
-      readonly schemaVersion?: 1 | 2;
+      readonly schemaVersion?: 1 | 2 | 3;
     },
   ) {
     super(message);
@@ -524,7 +526,6 @@ function parseArguments(argv: readonly string[]): ParsedCommand {
       if (languageValue !== 'csharp') throw invalid('language');
       if ((solutionValue === undefined) === (projectValue === undefined))
         throw invalid('selection');
-      if (tsconfig !== undefined) throw invalid('tsconfig');
     }
     if (
       sourceEncodingValue !== undefined &&
@@ -666,7 +667,10 @@ function queryOptions(command: CommonOptions): {
   };
 }
 
-function queryFailure(error: QueryError, schemaVersion?: 1 | 2): CliFailure {
+function queryFailure(
+  error: QueryError,
+  schemaVersion?: 1 | 2 | 3,
+): CliFailure {
   const exitCode: 1 | 3 =
     error.code === 'invalid_request' ||
     error.code === 'limit_exceeded' ||
@@ -753,23 +757,35 @@ async function executeAnalyze(
             : { maxDiagnostics: command.maxDiagnostics }),
         },
       );
-      const snapshot = services.extractCSharpDeclarationGraph({
+      const csharpSnapshot = services.extractCSharpDeclarationGraph({
         repositoryRoot: command.root,
         manifest: manifest.manifest,
         worker,
       });
+      const typescript =
+        command.tsconfig === undefined
+          ? undefined
+          : await analyzeTypeScript(command.root, command.tsconfig, services);
+      const snapshot =
+        typescript === undefined
+          ? csharpSnapshot
+          : composeMultiPackSnapshot(typescript.snapshot, csharpSnapshot);
       let result: SnapshotWriteResult;
       try {
-        result = await services.writeSnapshot(command.root, snapshot, {
-          path: command.snapshot,
-        });
+        result = await services.writeSnapshot(
+          typescript?.repositoryRoot ?? command.root,
+          snapshot,
+          {
+            path: command.snapshot,
+          },
+        );
       } catch (error) {
         if (error instanceof SnapshotError) throw snapshotFailure(error);
         throw analysisFailure();
       }
       return {
         kind: 'snapshot',
-        schemaVersion: 2,
+        schemaVersion: snapshot.schemaVersion,
         snapshotPath: command.snapshot,
         completeness: snapshot.completeness,
         digest: result.digest,
@@ -785,33 +801,16 @@ async function executeAnalyze(
         },
       };
     }
-    const discovery = await services.discoverSourceFiles(command.root);
-    if (
-      discovery.repositoryRoot === undefined ||
-      discovery.diagnostics.length > 0
-    )
-      throw analysisFailure();
-    const loaded = services.loadProject({
-      repositoryRoot: discovery.repositoryRoot,
-      approvedFiles: discovery.sources,
-      ...(command.tsconfig === undefined
-        ? {}
-        : { tsconfigPath: command.tsconfig }),
-    });
-    if (loaded.project === null) throw analysisFailure();
-    const graph = services.extractDeclarationGraph({
-      repositoryRoot: discovery.repositoryRoot,
-      project: loaded.project,
-    });
-    const snapshot: SnapshotV1 = {
-      ...graph,
-      completeness: loaded.diagnostics.length > 0 ? 'partial' : 'complete',
-    };
+    const typescript = await analyzeTypeScript(
+      command.root,
+      command.tsconfig,
+      services,
+    );
     let result: SnapshotWriteResult;
     try {
       result = await services.writeSnapshot(
-        discovery.repositoryRoot,
-        snapshot,
+        typescript.repositoryRoot,
+        typescript.snapshot,
         {
           path: command.snapshot,
         },
@@ -824,7 +823,7 @@ async function executeAnalyze(
       kind: 'snapshot',
       schemaVersion: 1,
       snapshotPath: command.snapshot,
-      completeness: snapshot.completeness,
+      completeness: typescript.snapshot.completeness,
       digest: result.digest,
       bytes: result.bytes,
     };
@@ -833,6 +832,59 @@ async function executeAnalyze(
     if (error instanceof SnapshotError) throw snapshotFailure(error);
     throw analysisFailure();
   }
+}
+
+async function analyzeTypeScript(
+  root: string,
+  tsconfig: string | undefined,
+  services: CliServices,
+): Promise<{ readonly repositoryRoot: string; readonly snapshot: SnapshotV1 }> {
+  const discovery = await services.discoverSourceFiles(root, {
+    extensions: typescriptPack.manifest.extensions,
+  });
+  if (
+    discovery.repositoryRoot === undefined ||
+    discovery.diagnostics.length > 0
+  )
+    throw analysisFailure();
+  const repositoryRoot = discovery.repositoryRoot;
+  const approvedFiles = discovery.sources.map((source) => ({
+    path: source,
+    // Discovery supplied the canonical root and relative allow-list. Core
+    // reads each member once; the pack receives bytes only, never this root.
+    contents: new Uint8Array(
+      fs.readFileSync(path.join(repositoryRoot, source)),
+    ),
+  }));
+  const configuration: Record<string, string> = {};
+  if (tsconfig !== undefined) {
+    const candidate = path.resolve(repositoryRoot, tsconfig);
+    const relative = path.relative(repositoryRoot, candidate);
+    if (
+      relative === '' ||
+      relative.startsWith(`..${path.sep}`) ||
+      path.isAbsolute(relative)
+    )
+      throw analysisFailure();
+    configuration['typescript.tsconfig'] = fs.readFileSync(candidate, 'utf8');
+  }
+  const analysis = await typescriptPack.analyze({
+    contractVersion: 1,
+    repository: { name: 'repository', root: '.' },
+    files: approvedFiles,
+    limits: {
+      maxFiles: 10_000,
+      maxBytes: 128 * 1024 * 1024,
+      maxNodes: 1_000_000,
+      maxEdges: 1_000_000,
+      maxDiagnostics: 100_000,
+    },
+    configuration,
+  });
+  return {
+    repositoryRoot,
+    snapshot: { ...analysis.graph, completeness: analysis.completeness },
+  };
 }
 
 async function executeQuery(
@@ -922,7 +974,8 @@ function pageLines(items: readonly NodeSummary[]): string[] {
 
 function humanQuery(command: QueryCommand, response: QueryResponse): string {
   if (response.operation === 'getSymbol') {
-    const details = response as GetSymbolResponseV1 | GetSymbolResponseV2;
+    const details = response as
+      GetSymbolResponseV1 | GetSymbolResponseV2 | GetSymbolResponseV3;
     return [
       summaryLine(details.symbol),
       `children: ${details.children.items.length}/${details.children.total}`,
@@ -932,15 +985,27 @@ function humanQuery(command: QueryCommand, response: QueryResponse): string {
   const page = response.page as
     | SearchResponseV1['page']
     | SearchResponseV2['page']
+    | SearchResponseV3['page']
     | FileRelationResponseV1['page']
-    | FileRelationResponseV2['page'];
+    | FileRelationResponseV2['page']
+    | FileRelationResponseV3['page'];
+  const items =
+    page.schemaVersion === 3 &&
+    (response.operation === 'listFileDependencies' ||
+      response.operation === 'listFileDependents' ||
+      response.operation === 'listCallers' ||
+      response.operation === 'listCallees')
+      ? (page.items as FileRelationResponseV3['page']['items']).map(
+          (item) => item.node,
+        )
+      : (page.items as readonly NodeSummary[]);
   return [
     `${command}: ${page.items.length}/${page.total}`,
-    ...pageLines(page.items),
+    ...pageLines(items),
   ].join('\n');
 }
 
-function querySchemaVersion(response: QueryResponse): 1 | 2 {
+function querySchemaVersion(response: QueryResponse): 1 | 2 | 3 {
   return response.operation === 'getSymbol'
     ? response.schemaVersion
     : response.page.schemaVersion;

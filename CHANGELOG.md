@@ -6,6 +6,56 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.0-beta.6] - 2026-10-31
+
+### Added
+
+- Added a closed local pack-installation resolver with exact-version selection,
+  explicit enablement, Core/manifest/worker-protocol compatibility checks, and
+  offline installation guidance (#59).
+
+- Added deterministic, offline schema-v3 composition of TypeScript/JavaScript
+  and C# language packs, with MCP coverage and fail-closed cross-language
+  relationship diagnostics (#58).
+
+- Moved C# discovery, worker, and graph extraction behind the `csharp` language
+  pack boundary while retaining deprecated compatibility exports (#57).
+
+- Added a versioned, bounded local-worker protocol with static worker selection
+  and fail-closed framing for out-of-process language packs (#56).
+
+- Migrated TypeScript and JavaScript analysis through the bundled language-pack
+  boundary while preserving deterministic schema-v1 snapshots (#55).
+
+- Added a reusable, offline language-pack conformance suite covering request
+  boundaries, fragment validation, determinism, diagnostics, and resource
+  limits (#54).
+
+- Added schema-v3 snapshots with deterministic language-pack provenance and
+  relation evidence, plus bounded query and MCP projections that keep legacy
+  schemas readable (#53).
+
+- Added deterministic local enabled-pack extension discovery and single-owner
+  dispatch, with fail-closed compatibility and selection diagnostics (#52).
+
+- Added deterministic offline Roslyn handoff and composition for explicit C#
+  project selections without expanding unselected project references (#116).
+
+- Added canonical, selected-only C# project manifests with validated physical
+  boundaries and unselected project-reference isolation (#115).
+
+- Defined the versioned, explicit C# project-selection contract that later
+  selected-project snapshots will use (#114).
+
+- Added the validated Core-to-pack contract, deterministic fragment boundary,
+  and local pack registry foundation (#51).
+
+- Added ADR 0005, defining the local versioned language-pack architecture,
+  Core-owned isolation, and the C# worker boundary (#50).
+
+- Added release pull-request feedback for successful and failed immutable package
+  candidate generation, with a safe link to the relevant workflow run (#108).
+
 ## [0.1.0-beta.5] - 2026-10-29
 
 ### Fixed

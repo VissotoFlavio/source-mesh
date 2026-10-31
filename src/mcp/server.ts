@@ -2,10 +2,13 @@ import { McpServer, type CallToolResult } from '@modelcontextprotocol/server';
 import type {
   GraphQueryService,
   GraphQueryServiceV2,
+  GraphQueryServiceV3,
   QueryErrorV1,
   QueryErrorV2,
+  QueryErrorV3,
   QueryResponseV1,
   QueryResponseV2,
+  QueryResponseV3,
 } from '../query.js';
 import {
   callRelationRequest,
@@ -65,7 +68,9 @@ function wireResult(value: unknown, isError = false): CallToolResult {
   return response;
 }
 
-function queryErrorResult(error: QueryErrorV1 | QueryErrorV2): CallToolResult {
+function queryErrorResult(
+  error: QueryErrorV1 | QueryErrorV2 | QueryErrorV3,
+): CallToolResult {
   const safe: Record<string, unknown> = {
     code: error.code,
     message: QUERY_ERROR_MESSAGES[error.code],
@@ -90,7 +95,13 @@ function internalError(diagnostics: McpDiagnosticSink): CallToolResult {
 }
 
 function queryResult(
-  result: QueryResponseV1 | QueryErrorV1 | QueryResponseV2 | QueryErrorV2,
+  result:
+    | QueryResponseV1
+    | QueryErrorV1
+    | QueryResponseV2
+    | QueryErrorV2
+    | QueryResponseV3
+    | QueryErrorV3,
 ): CallToolResult {
   return 'code' in result ? queryErrorResult(result) : wireResult(result);
 }
@@ -100,7 +111,13 @@ async function runTool<T>(
   input: unknown,
   execute: (
     validated: T,
-  ) => QueryResponseV1 | QueryErrorV1 | QueryResponseV2 | QueryErrorV2,
+  ) =>
+    | QueryResponseV1
+    | QueryErrorV1
+    | QueryResponseV2
+    | QueryErrorV2
+    | QueryResponseV3
+    | QueryErrorV3,
   diagnostics: McpDiagnosticSink,
 ): Promise<CallToolResult> {
   try {
@@ -116,16 +133,28 @@ async function runTool<T>(
 }
 
 export function createMcpServer(
-  queryService: GraphQueryService | GraphQueryServiceV2,
+  queryService: GraphQueryService | GraphQueryServiceV2 | GraphQueryServiceV3,
   diagnostics: McpDiagnosticSink = () => undefined,
 ): McpServer {
   const query = queryService as unknown as {
     searchSymbols: (
       request: Parameters<GraphQueryServiceV2['searchSymbols']>[0],
-    ) => QueryResponseV1 | QueryErrorV1 | QueryResponseV2 | QueryErrorV2;
+    ) =>
+      | QueryResponseV1
+      | QueryErrorV1
+      | QueryResponseV2
+      | QueryErrorV2
+      | QueryResponseV3
+      | QueryErrorV3;
     getSymbol: (
       request: Parameters<GraphQueryServiceV2['getSymbol']>[0],
-    ) => QueryResponseV1 | QueryErrorV1 | QueryResponseV2 | QueryErrorV2;
+    ) =>
+      | QueryResponseV1
+      | QueryErrorV1
+      | QueryResponseV2
+      | QueryErrorV2
+      | QueryResponseV3
+      | QueryErrorV3;
     listFileDependencies: GraphQueryService['listFileDependencies'];
     listFileDependents: GraphQueryService['listFileDependents'];
     listCallers: GraphQueryService['listCallers'];

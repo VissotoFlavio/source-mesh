@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import {
   type EdgeV1,
   type EdgeV2,
+  type EdgeV3,
   type FileNodeV1,
   type LocationV1,
   type MemberRole,
@@ -9,10 +10,17 @@ import {
   type NodeKindV2,
   type NodeV1,
   type NodeV2,
+  type NodeV3,
   type SymbolNodeV2,
 } from './graph.js';
 import { snapshotDigest } from './snapshot/codec.js';
-import type { Snapshot, SnapshotV1, SnapshotV2 } from './snapshot/types.js';
+import type {
+  Snapshot,
+  SnapshotMetadataV3,
+  SnapshotV1,
+  SnapshotV2,
+  SnapshotV3,
+} from './snapshot/types.js';
 
 export type SearchSymbolKindV1 = Exclude<
   NodeKind,
@@ -42,6 +50,15 @@ export interface SymbolSummaryV1 {
 export interface SymbolSummaryV2 extends Omit<SymbolSummaryV1, 'kind'> {
   readonly kind: SymbolKindV2;
 }
+export interface FileSummaryV3 extends FileSummaryV1 {
+  readonly packId: string;
+  readonly language: string;
+}
+export interface SymbolSummaryV3 extends SymbolSummaryV2 {
+  readonly packId: string;
+  readonly language: string;
+}
+export type NodeSummaryV3 = FileSummaryV3 | SymbolSummaryV3;
 export type NodeSummaryV2 = FileSummaryV1 | SymbolSummaryV2;
 
 export type NodeSummaryV1 = FileSummaryV1 | SymbolSummaryV1;
@@ -129,6 +146,14 @@ export interface QueryPageV2<T> {
   readonly truncated: boolean;
   readonly continuation?: string;
 }
+export interface QueryPageV3<T> {
+  readonly schemaVersion: 3;
+  readonly completeness: 'complete' | 'partial';
+  readonly items: readonly T[];
+  readonly total: number;
+  readonly truncated: boolean;
+  readonly continuation?: string;
+}
 
 export interface SearchResponseV1 {
   readonly operation: 'searchSymbols';
@@ -173,6 +198,52 @@ export interface CallRelationResponseV2 {
   readonly operation: 'listCallers' | 'listCallees';
   readonly page: QueryPageV2<SymbolSummaryV2>;
 }
+export interface RelationEvidenceSummaryV3 {
+  readonly id: string;
+  readonly kind: Exclude<EdgeV3['kind'], 'contains'>;
+  readonly packId: string;
+  readonly evidence: 'semantic' | 'syntactic' | 'inferred';
+}
+/**
+ * A relation counterpart exposes a deterministic, bounded evidence prefix.
+ * `relationshipsTotal` and `relationshipsTruncated` make omitted evidence
+ * explicit instead of allowing one counterpart to exhaust MCP transport.
+ */
+export interface FileRelationItemV3 {
+  readonly node: FileSummaryV3;
+  readonly relationships: readonly RelationEvidenceSummaryV3[];
+  readonly relationshipsTotal: number;
+  readonly relationshipsTruncated: boolean;
+}
+export interface CallRelationItemV3 {
+  readonly node: SymbolSummaryV3;
+  readonly relationships: readonly RelationEvidenceSummaryV3[];
+  readonly relationshipsTotal: number;
+  readonly relationshipsTruncated: boolean;
+}
+interface SnapshotResponseMetadataV3 {
+  readonly metadata: SnapshotMetadataV3;
+}
+export interface SearchResponseV3 extends SnapshotResponseMetadataV3 {
+  readonly operation: 'searchSymbols';
+  readonly page: QueryPageV3<SymbolSummaryV3>;
+}
+export interface GetSymbolResponseV3 extends SnapshotResponseMetadataV3 {
+  readonly operation: 'getSymbol';
+  readonly schemaVersion: 3;
+  readonly completeness: 'complete' | 'partial';
+  readonly symbol: SymbolSummaryV3;
+  readonly container?: NodeSummaryV3;
+  readonly children: QueryPageV3<NodeSummaryV3>;
+}
+export interface FileRelationResponseV3 extends SnapshotResponseMetadataV3 {
+  readonly operation: 'listFileDependencies' | 'listFileDependents';
+  readonly page: QueryPageV3<FileRelationItemV3>;
+}
+export interface CallRelationResponseV3 extends SnapshotResponseMetadataV3 {
+  readonly operation: 'listCallers' | 'listCallees';
+  readonly page: QueryPageV3<CallRelationItemV3>;
+}
 
 export type QueryResponseV1 =
   | SearchResponseV1
@@ -184,7 +255,13 @@ export type QueryResponseV2 =
   | GetSymbolResponseV2
   | FileRelationResponseV2
   | CallRelationResponseV2;
-export type QueryPage = QueryPageV1<unknown> | QueryPageV2<unknown>;
+export type QueryResponseV3 =
+  | SearchResponseV3
+  | GetSymbolResponseV3
+  | FileRelationResponseV3
+  | CallRelationResponseV3;
+export type QueryPage =
+  QueryPageV1<unknown> | QueryPageV2<unknown> | QueryPageV3<unknown>;
 
 export type QueryErrorCodeV1 =
   | 'invalid_request'
@@ -224,6 +301,9 @@ export interface QueryErrorV1 {
 export interface QueryErrorV2 extends Omit<QueryErrorV1, 'candidates'> {
   readonly candidates?: QueryPageV2<NodeSummaryV2>;
 }
+export interface QueryErrorV3 extends Omit<QueryErrorV1, 'candidates'> {
+  readonly candidates?: QueryPageV3<NodeSummaryV3>;
+}
 
 export interface GraphQueryService {
   searchSymbols(request: SearchRequestV1): QueryResponseV1 | QueryErrorV1;
@@ -253,10 +333,30 @@ export interface GraphQueryServiceV2 {
   listCallers(request: CallRelationRequestV1): QueryResponseV2 | QueryErrorV2;
   listCallees(request: CallRelationRequestV1): QueryResponseV2 | QueryErrorV2;
 }
+export interface GraphQueryServiceV3 {
+  searchSymbols(
+    request: SearchRequestV1 | SearchRequestV2,
+  ): QueryResponseV3 | QueryErrorV3;
+  getSymbol(
+    request: GetSymbolRequestV1 | GetSymbolRequestV2,
+  ): QueryResponseV3 | QueryErrorV3;
+  listFileDependencies(
+    request: FileRelationRequestV1,
+  ): QueryResponseV3 | QueryErrorV3;
+  listFileDependents(
+    request: FileRelationRequestV1,
+  ): QueryResponseV3 | QueryErrorV3;
+  listCallers(request: CallRelationRequestV1): QueryResponseV3 | QueryErrorV3;
+  listCallees(request: CallRelationRequestV1): QueryResponseV3 | QueryErrorV3;
+}
 
 const DEFAULT_LIMIT = 25;
 const MAX_LIMIT = 100;
 const MAX_CURSOR_BYTES = 4096;
+// Relation pages can contain up to 100 counterparts. Together with the V3
+// codec's response-safe text/location bounds, this deterministic prefix keeps
+// the duplicated MCP text and structured payload below its frame budget.
+export const MAX_RELATION_EVIDENCE_PER_COUNTERPART = 4;
 const NODE_ID = /^n:[0-9a-f]{64}$/;
 const SHA256 = /^[0-9a-f]{64}$/;
 const symbolKinds = new Set<SymbolKindV1>([
@@ -305,9 +405,14 @@ const messages: Record<QueryErrorCodeV1, string> = {
 };
 
 type QueryResult =
-  QueryResponseV1 | QueryResponseV2 | QueryErrorV1 | QueryErrorV2;
-type AnyNode = NodeV1 | NodeV2;
-type AnyEdge = EdgeV1 | EdgeV2;
+  | QueryResponseV1
+  | QueryResponseV2
+  | QueryResponseV3
+  | QueryErrorV1
+  | QueryErrorV2
+  | QueryErrorV3;
+type AnyNode = NodeV1 | NodeV2 | NodeV3;
+type AnyEdge = EdgeV1 | EdgeV2 | EdgeV3;
 type PathKey = readonly [0, string] | readonly [1, ''];
 type SearchSortKey = readonly [PathKey, string, string, string];
 type ChildSortKey = readonly [string, string, string];
@@ -316,7 +421,7 @@ type CallSortKey = readonly [string, PathKey, string, string];
 type SortKey = SearchSortKey | ChildSortKey | FileSortKey | CallSortKey;
 
 interface CursorEnvelope {
-  readonly schemaVersion: 1 | 2;
+  readonly schemaVersion: 1 | 2 | 3;
   readonly snapshotDigest: string;
   readonly operation: QueryRequestV1['operation'];
   readonly filterFingerprint: string;
@@ -365,7 +470,7 @@ interface NormalizedCallRelation extends NormalizedBase {
 
 interface IndexState {
   readonly snapshotDigest: string;
-  readonly schemaVersion: 1 | 2;
+  readonly schemaVersion: 1 | 2 | 3;
   readonly completeness: 'complete' | 'partial';
   readonly nodes: ReadonlyMap<string, AnyNode>;
   readonly files: readonly FileNodeV1[];
@@ -376,6 +481,8 @@ interface IndexState {
   readonly fileDependents: ReadonlyMap<string, readonly string[]>;
   readonly callees: ReadonlyMap<string, readonly string[]>;
   readonly callers: ReadonlyMap<string, readonly string[]>;
+  readonly relationByEndpoints: ReadonlyMap<string, readonly EdgeV3[]>;
+  readonly metadata?: SnapshotMetadataV3;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -492,6 +599,23 @@ function errorV2(
       : { totalCandidates: extra.totalCandidates }),
   };
 }
+function errorV3(
+  code: QueryErrorCodeV1,
+  field?: ErrorFieldV1,
+  extra?: Pick<QueryErrorV3, 'candidates' | 'totalCandidates'>,
+): QueryErrorV3 {
+  return {
+    code,
+    message: messages[code],
+    ...(field === undefined ? {} : { field }),
+    ...(extra?.candidates === undefined
+      ? {}
+      : { candidates: extra.candidates }),
+    ...(extra?.totalCandidates === undefined
+      ? {}
+      : { totalCandidates: extra.totalCandidates }),
+  };
+}
 
 function cloneLocation(location: LocationV1): LocationV1 {
   return {
@@ -517,7 +641,9 @@ function isSymbol(node: AnyNode | undefined): node is SymbolNodeV2 {
   );
 }
 
-function toSummary(node: AnyNode): NodeSummaryV1 | NodeSummaryV2 {
+function toSummary(
+  node: AnyNode,
+): NodeSummaryV1 | NodeSummaryV2 | NodeSummaryV3 {
   if (node.kind === 'file') {
     const summary: FileSummaryV1 = {
       id: node.id,
@@ -526,7 +652,11 @@ function toSummary(node: AnyNode): NodeSummaryV1 | NodeSummaryV2 {
       path: node.path,
     };
     const locations = cloneLocations(node.locations);
-    return locations === undefined ? summary : { ...summary, locations };
+    const attributed =
+      'packId' in node
+        ? { ...summary, packId: node.packId, language: node.language }
+        : summary;
+    return locations === undefined ? attributed : { ...attributed, locations };
   }
   if (node.kind === 'repository')
     throw new Error('Repository nodes are not query summaries.');
@@ -539,7 +669,11 @@ function toSummary(node: AnyNode): NodeSummaryV1 | NodeSummaryV2 {
     memberRole: node.memberRole,
   };
   const locations = cloneLocations(node.locations);
-  return locations === undefined ? summary : { ...summary, locations };
+  const attributed =
+    'packId' in node
+      ? { ...summary, packId: node.packId, language: node.language }
+      : summary;
+  return locations === undefined ? attributed : { ...attributed, locations };
 }
 
 function searchKey(node: AnyNode): SearchSortKey {
@@ -549,8 +683,8 @@ function searchKey(node: AnyNode): SearchSortKey {
 }
 
 function childKey(node: AnyNode): ChildSortKey {
-  if (node.kind === 'repository' || node.kind === 'file')
-    throw new Error('Invalid child node.');
+  if (node.kind === 'repository') throw new Error('Invalid child node.');
+  if (node.kind === 'file') return [node.kind, node.path, node.id];
   return [node.kind, node.qualifiedName, node.id];
 }
 
@@ -597,8 +731,8 @@ function paginate<T extends AnyNode>(
   key: (node: T) => SortKey,
   cursor: CursorEnvelope | undefined,
   encode: (lastSortKey: SortKey) => string,
-  schemaVersion: 1 | 2,
-): QueryPageV1<NodeSummaryV1> | QueryPageV2<NodeSummaryV2>;
+  schemaVersion: 3,
+): QueryPageV3<NodeSummaryV3>;
 function paginate<T extends AnyNode>(
   nodes: readonly T[],
   limit: number,
@@ -606,8 +740,23 @@ function paginate<T extends AnyNode>(
   key: (node: T) => SortKey,
   cursor: CursorEnvelope | undefined,
   encode: (lastSortKey: SortKey) => string,
-  schemaVersion: 1 | 2 = 1,
-): QueryPageV1<NodeSummaryV1> | QueryPageV2<NodeSummaryV2> {
+  schemaVersion: 1 | 2 | 3,
+):
+  | QueryPageV1<NodeSummaryV1>
+  | QueryPageV2<NodeSummaryV2>
+  | QueryPageV3<NodeSummaryV3>;
+function paginate<T extends AnyNode>(
+  nodes: readonly T[],
+  limit: number,
+  completeness: 'complete' | 'partial',
+  key: (node: T) => SortKey,
+  cursor: CursorEnvelope | undefined,
+  encode: (lastSortKey: SortKey) => string,
+  schemaVersion: 1 | 2 | 3 = 1,
+):
+  | QueryPageV1<NodeSummaryV1>
+  | QueryPageV2<NodeSummaryV2>
+  | QueryPageV3<NodeSummaryV3> {
   let start = 0;
   if (cursor !== undefined) {
     const position = nodes.findIndex(
@@ -630,7 +779,65 @@ function paginate<T extends AnyNode>(
   };
   return schemaVersion === 1
     ? (page as QueryPageV1<NodeSummaryV1>)
-    : (page as QueryPageV2<NodeSummaryV2>);
+    : schemaVersion === 2
+      ? (page as QueryPageV2<NodeSummaryV2>)
+      : (page as QueryPageV3<NodeSummaryV3>);
+}
+
+function paginateRelationV3<T extends AnyNode, U>(
+  nodes: readonly T[],
+  limit: number,
+  completeness: 'complete' | 'partial',
+  key: (node: T) => SortKey,
+  cursor: CursorEnvelope | undefined,
+  encode: (lastSortKey: SortKey) => string,
+  item: (node: T) => U,
+): QueryPageV3<U> {
+  let start = 0;
+  if (cursor !== undefined) {
+    const position = nodes.findIndex(
+      (node) => compareTuple(key(node), cursor.lastSortKey) === 0,
+    );
+    if (position < 0) throw new InvalidCursorError();
+    start = position + 1;
+  }
+  const selected = nodes.slice(start, start + limit);
+  const truncated = start + selected.length < nodes.length;
+  return {
+    schemaVersion: 3,
+    completeness,
+    items: selected.map(item),
+    total: nodes.length,
+    truncated,
+    ...(truncated && selected.length > 0
+      ? { continuation: encode(key(selected[selected.length - 1]!)) }
+      : {}),
+  };
+}
+
+function relationEvidence(edge: EdgeV3): RelationEvidenceSummaryV3 {
+  if (edge.kind === 'contains') throw new Error('Containment has no evidence.');
+  return {
+    id: edge.id,
+    kind: edge.kind,
+    packId: edge.packId,
+    evidence: edge.evidence,
+  };
+}
+
+function boundedRelationEvidence(edges: readonly EdgeV3[]): {
+  readonly relationships: readonly RelationEvidenceSummaryV3[];
+  readonly relationshipsTotal: number;
+  readonly relationshipsTruncated: boolean;
+} {
+  return {
+    relationships: edges
+      .slice(0, MAX_RELATION_EVIDENCE_PER_COUNTERPART)
+      .map(relationEvidence),
+    relationshipsTotal: edges.length,
+    relationshipsTruncated:
+      edges.length > MAX_RELATION_EVIDENCE_PER_COUNTERPART,
+  };
 }
 
 class InvalidCursorError extends Error {}
@@ -770,7 +977,7 @@ function cursorText(
   operation: QueryRequestV1['operation'],
   filterFingerprint: string,
   lastSortKey: SortKey,
-  schemaVersion: 1 | 2 = 1,
+  schemaVersion: 1 | 2 | 3 = 1,
 ): string {
   const normalizedSortKey = canonicalSortKey(lastSortKey, operation);
   if (normalizedSortKey === undefined) throw new Error('Invalid cursor key.');
@@ -870,7 +1077,7 @@ function parseCursor(
   snapshotDigestValue: string,
   operation: QueryRequestV1['operation'],
   filterFingerprint: string,
-  schemaVersion: 1 | 2 = 1,
+  schemaVersion: 1 | 2 | 3 = 1,
 ): CursorEnvelope | undefined {
   if (typeof value !== 'string') return undefined;
   const decoded = decodeBase64Url(value);
@@ -922,7 +1129,7 @@ function parseCursor(
 function selectorObject(
   value: unknown,
   functionSelector: boolean,
-  schemaVersion: 1 | 2 = 1,
+  schemaVersion: 1 | 2 | 3 = 1,
 ): NormalizedSelector | undefined {
   if (!isRecord(value)) return undefined;
   const allowed = [
@@ -1036,7 +1243,7 @@ function baseFields(
 
 function normalizeSearch(
   value: unknown,
-  schemaVersion: 1 | 2 = 1,
+  schemaVersion: 1 | 2 | 3 = 1,
 ):
   | { readonly normalized: NormalizedSearch; readonly error?: undefined }
   | { readonly normalized?: undefined; readonly error: QueryErrorV1 } {
@@ -1095,7 +1302,7 @@ function normalizeSearch(
 
 function normalizeGetSymbol(
   value: unknown,
-  schemaVersion: 1 | 2 = 1,
+  schemaVersion: 1 | 2 | 3 = 1,
 ):
   | { readonly normalized: NormalizedGetSymbol; readonly error?: undefined }
   | { readonly normalized?: undefined; readonly error: QueryErrorV1 } {
@@ -1164,7 +1371,7 @@ function normalizeFileRelation(
 function normalizeCallRelation(
   value: unknown,
   operation: CallRelationRequestV1['operation'],
-  schemaVersion: 1 | 2 = 1,
+  schemaVersion: 1 | 2 | 3 = 1,
 ):
   | { readonly normalized: NormalizedCallRelation; readonly error?: undefined }
   | { readonly normalized?: undefined; readonly error: QueryErrorV1 } {
@@ -1269,7 +1476,11 @@ function repositoryOwner(
 }
 
 function buildState(snapshot: Snapshot): IndexState {
-  if (snapshot.schemaVersion !== 1 && snapshot.schemaVersion !== 2)
+  if (
+    snapshot.schemaVersion !== 1 &&
+    snapshot.schemaVersion !== 2 &&
+    snapshot.schemaVersion !== 3
+  )
     throw new UnsupportedSchemaError();
   if (
     (snapshot.completeness !== 'complete' &&
@@ -1307,6 +1518,8 @@ function buildState(snapshot: Snapshot): IndexState {
   const fileDependents = new Map<string, Set<string>>();
   const callees = new Map<string, Set<string>>();
   const callers = new Map<string, Set<string>>();
+  const relationByEndpoints = new Map<string, EdgeV3[]>();
+  const relationKey = (from: string, to: string) => `${from}\u0000${to}`;
   const addRelation = (
     map: Map<string, Set<string>>,
     from: string,
@@ -1317,6 +1530,12 @@ function buildState(snapshot: Snapshot): IndexState {
     map.set(from, list);
   };
   for (const edge of snapshot.edges as readonly AnyEdge[]) {
+    if (snapshot.schemaVersion === 3 && edge.kind !== 'contains') {
+      const key = relationKey(edge.from, edge.to);
+      const entries = relationByEndpoints.get(key) ?? [];
+      entries.push(edge as EdgeV3);
+      relationByEndpoints.set(key, entries);
+    }
     if (edge.kind === 'imports' || edge.kind === 'exports') {
       const from = nodes.get(edge.from);
       const to = nodes.get(edge.to);
@@ -1327,6 +1546,12 @@ function buildState(snapshot: Snapshot): IndexState {
       if (fromFile !== undefined && toFile !== undefined) {
         addRelation(fileDependencies, fromFile, toFile);
         addRelation(fileDependents, toFile, fromFile);
+        if (snapshot.schemaVersion === 3) {
+          const key = relationKey(fromFile, toFile);
+          const entries = relationByEndpoints.get(key) ?? [];
+          entries.push(edge as EdgeV3);
+          relationByEndpoints.set(key, entries);
+        }
       }
     } else if (edge.kind === 'calls') {
       const from = nodes.get(edge.from);
@@ -1374,6 +1599,13 @@ function buildState(snapshot: Snapshot): IndexState {
     fileDependents: sortRelationMap(fileDependents, fileKey),
     callees: sortRelationMap(callees, callKey),
     callers: sortRelationMap(callers, callKey),
+    relationByEndpoints: new Map(
+      [...relationByEndpoints.entries()].map(([key, edges]) => [
+        key,
+        edges.sort((left, right) => ordinal(left.id, right.id)),
+      ]),
+    ),
+    ...(snapshot.schemaVersion === 3 ? { metadata: snapshot.metadata } : {}),
   };
 }
 
@@ -1393,11 +1625,14 @@ export function createGraphQueryService(
   snapshot: SnapshotV2,
 ): GraphQueryServiceV2;
 export function createGraphQueryService(
-  snapshot: Snapshot,
-): GraphQueryService | GraphQueryServiceV2;
+  snapshot: SnapshotV3,
+): GraphQueryServiceV3;
 export function createGraphQueryService(
   snapshot: Snapshot,
-): GraphQueryService | GraphQueryServiceV2 {
+): GraphQueryService | GraphQueryServiceV2 | GraphQueryServiceV3;
+export function createGraphQueryService(
+  snapshot: Snapshot,
+): GraphQueryService | GraphQueryServiceV2 | GraphQueryServiceV3 {
   let state: IndexState | undefined;
   let stateError: QueryErrorV1 | undefined;
   try {
@@ -1478,6 +1713,12 @@ export function createGraphQueryService(
           ),
         state!.schemaVersion,
       );
+      if (state!.schemaVersion === 3)
+        return {
+          operation: 'searchSymbols',
+          metadata: state!.metadata!,
+          page: page as QueryPageV3<SymbolSummaryV3>,
+        };
       return {
         operation: 'searchSymbols',
         page: page as QueryPageV1<SymbolSummaryV1>,
@@ -1551,21 +1792,26 @@ export function createGraphQueryService(
             ),
           state!.schemaVersion,
         );
-        return state!.schemaVersion === 2
-          ? errorV2('ambiguous', 'selector', {
-              candidates: candidates as QueryPageV2<NodeSummaryV2>,
+        return state!.schemaVersion === 3
+          ? errorV3('ambiguous', 'selector', {
+              candidates: candidates as QueryPageV3<NodeSummaryV3>,
               totalCandidates: sortedMatches.length,
             })
-          : error('ambiguous', 'selector', {
-              candidates: candidates as QueryPageV1<NodeSummaryV1>,
-              totalCandidates: sortedMatches.length,
-            });
+          : state!.schemaVersion === 2
+            ? errorV2('ambiguous', 'selector', {
+                candidates: candidates as QueryPageV2<NodeSummaryV2>,
+                totalCandidates: sortedMatches.length,
+              })
+            : error('ambiguous', 'selector', {
+                candidates: candidates as QueryPageV1<NodeSummaryV1>,
+                totalCandidates: sortedMatches.length,
+              });
       }
       const symbol = sortedMatches[0]!;
       const parent = state!.parentByChild.get(symbol.id);
       const children = sortNodes(
         (state!.childrenByParent.get(symbol.id) ?? []).filter((node) =>
-          state!.schemaVersion === 2
+          state!.schemaVersion !== 1
             ? node.kind !== 'repository'
             : isSymbol(node),
         ),
@@ -1589,6 +1835,7 @@ export function createGraphQueryService(
       );
       return {
         operation: 'getSymbol',
+        ...(state!.schemaVersion === 3 ? { metadata: state!.metadata! } : {}),
         schemaVersion: state!.schemaVersion,
         completeness: state!.completeness,
         symbol: toSummary(symbol) as SymbolSummaryV1,
@@ -1596,7 +1843,9 @@ export function createGraphQueryService(
           ? { container: toSummary(parent) }
           : {}),
         children: childrenPage as
-          QueryPageV1<SymbolSummaryV1> | QueryPageV2<NodeSummaryV2>,
+          | QueryPageV1<SymbolSummaryV1>
+          | QueryPageV2<NodeSummaryV2>
+          | QueryPageV3<NodeSummaryV3>,
       } as unknown as QueryResult;
     } catch (errorValue) {
       return errorValue instanceof InvalidCursorError
@@ -1629,6 +1878,36 @@ export function createGraphQueryService(
         .filter((node): node is Extract<AnyNode, { kind: 'file' }> =>
           isFile(node),
         );
+      if (state!.schemaVersion === 3) {
+        const page = paginateRelationV3(
+          nodes,
+          normalized.limit,
+          state!.completeness,
+          fileKey,
+          cursor as CursorEnvelope | undefined,
+          (lastSortKey) =>
+            cursorText(
+              state!.snapshotDigest,
+              normalized.operation,
+              fingerprint(normalized),
+              lastSortKey,
+              3,
+            ),
+          (node) => {
+            const [from, to] =
+              operation === 'listFileDependencies'
+                ? [source.id, node.id]
+                : [node.id, source.id];
+            return {
+              node: toSummary(node) as FileSummaryV3,
+              ...boundedRelationEvidence(
+                state!.relationByEndpoints.get(`${from}\u0000${to}`) ?? [],
+              ),
+            };
+          },
+        );
+        return { operation, metadata: state!.metadata!, page };
+      }
       const page = paginate(
         nodes,
         normalized.limit,
@@ -1712,15 +1991,20 @@ export function createGraphQueryService(
             ),
           state!.schemaVersion,
         );
-        return state!.schemaVersion === 2
-          ? errorV2('ambiguous', 'function', {
-              candidates: candidates as QueryPageV2<NodeSummaryV2>,
+        return state!.schemaVersion === 3
+          ? errorV3('ambiguous', 'function', {
+              candidates: candidates as QueryPageV3<NodeSummaryV3>,
               totalCandidates: matches.length,
             })
-          : error('ambiguous', 'function', {
-              candidates: candidates as QueryPageV1<NodeSummaryV1>,
-              totalCandidates: matches.length,
-            });
+          : state!.schemaVersion === 2
+            ? errorV2('ambiguous', 'function', {
+                candidates: candidates as QueryPageV2<NodeSummaryV2>,
+                totalCandidates: matches.length,
+              })
+            : error('ambiguous', 'function', {
+                candidates: candidates as QueryPageV1<NodeSummaryV1>,
+                totalCandidates: matches.length,
+              });
       }
       const source = matches[0]!;
       const ids =
@@ -1731,6 +2015,36 @@ export function createGraphQueryService(
         .map((id) => state!.nodes.get(id))
         .filter((node): node is AnyNode => isSymbol(node));
       const sorted = sortNodes(nodes, callKey);
+      if (state!.schemaVersion === 3) {
+        const page = paginateRelationV3(
+          sorted,
+          normalized.limit,
+          state!.completeness,
+          callKey,
+          cursor as CursorEnvelope | undefined,
+          (lastSortKey) =>
+            cursorText(
+              state!.snapshotDigest,
+              normalized.operation,
+              fingerprint(normalized),
+              lastSortKey,
+              3,
+            ),
+          (node) => {
+            const [from, to] =
+              operation === 'listCallers'
+                ? [node.id, source.id]
+                : [source.id, node.id];
+            return {
+              node: toSummary(node) as SymbolSummaryV3,
+              ...boundedRelationEvidence(
+                state!.relationByEndpoints.get(`${from}\u0000${to}`) ?? [],
+              ),
+            };
+          },
+        );
+        return { operation, metadata: state!.metadata!, page };
+      }
       const page = paginate(
         sorted,
         normalized.limit,
@@ -1768,6 +2082,20 @@ export function createGraphQueryService(
       listCallees: (request: CallRelationRequestV1) =>
         callRelation(request, 'listCallees'),
     } as GraphQueryService;
+  }
+  if (snapshot.schemaVersion === 3) {
+    return {
+      searchSymbols,
+      getSymbol,
+      listFileDependencies: (request: FileRelationRequestV1) =>
+        relation(request, 'listFileDependencies'),
+      listFileDependents: (request: FileRelationRequestV1) =>
+        relation(request, 'listFileDependents'),
+      listCallers: (request: CallRelationRequestV1) =>
+        callRelation(request, 'listCallers'),
+      listCallees: (request: CallRelationRequestV1) =>
+        callRelation(request, 'listCallees'),
+    } as GraphQueryServiceV3;
   }
   return {
     searchSymbols,

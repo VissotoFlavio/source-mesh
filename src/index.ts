@@ -1,5 +1,67 @@
 export const SOURCE_MESH_NAME = 'SourceMesh';
 
+export {
+  LANGUAGE_PACK_CONTRACT_VERSION,
+  LanguagePackRegistry,
+  validateLanguagePackManifest,
+} from './packs.js';
+export { BUNDLED_LANGUAGE_PACKS } from './bundled-packs.js';
+export {
+  LOCAL_PACK_INSTALLATION_VERSION,
+  resolveLocalPackInstallation,
+} from './pack-installation.js';
+export type {
+  LocalPackInstallation,
+  LocalPackInstallationDiagnosticCode,
+  LocalPackInstallationEntry,
+  LocalPackInstallationResult,
+} from './pack-installation.js';
+export {
+  LOCAL_WORKER_MAX_MESSAGE_BYTES,
+  LOCAL_WORKER_MAX_STDERR_BYTES,
+  LOCAL_WORKER_PROTOCOL_VERSION,
+  LocalWorkerError,
+  LocalWorkerRegistry,
+  runLocalWorker,
+} from './local-worker.js';
+export type {
+  LocalWorkerDefinition,
+  LocalWorkerRequest,
+  LocalWorkerResponse,
+  LocalWorkerRunOptions,
+} from './local-worker.js';
+export { typescriptPack } from './packs/typescript.js';
+export { csharpPack } from './packs/csharp.js';
+export type { CSharpLanguagePack } from './packs/csharp.js';
+export type {
+  TypeScriptGraphFragment,
+  TypeScriptLanguagePack,
+} from './packs/typescript.js';
+export type {
+  AnalysisLimits,
+  AnalysisRequest,
+  ApprovedFile,
+  EnabledPackDiscoveryResult,
+  GraphFragment,
+  LanguagePack,
+  LanguagePackCapability,
+  LanguagePackExecutionMode,
+  LanguagePackManifest,
+  LanguagePackSelection,
+  PackAnalysisResult,
+  PackBoundaryDiagnostic,
+  PackDiscoveryPlan,
+  PackDiagnostic,
+  PackDiagnosticCode,
+  PackDispatchResult,
+  PackEdge,
+  PackExtensionOwner,
+  PackFileDispatch,
+  PackNode,
+  PackRegistrationResult,
+  RelationConfidence,
+} from './packs.js';
+
 export { extractDeclarationGraph } from './extractor.js';
 export {
   digest,
@@ -16,6 +78,7 @@ export {
 export type {
   DeclarationGraph,
   DeclarationGraphV2,
+  DeclarationGraphV3,
   DiagnosticV1,
   DiagnosticV2,
   EdgeKindV1,
@@ -23,6 +86,7 @@ export type {
   GraphDiagnosticCode,
   EdgeV1,
   EdgeV2,
+  EdgeV3,
   FileNodeV1,
   FileNodeV2,
   LocationV1,
@@ -31,6 +95,9 @@ export type {
   NodeKindV2,
   NodeV1,
   NodeV2,
+  NodeV3,
+  RelationEvidence,
+  PackAttribution,
   PositionV1,
   RepositoryNodeV1,
   RepositoryNodeV2,
@@ -70,12 +137,25 @@ export type {
   DiscoveryStats,
 } from './discovery.js';
 export {
+  discoverCSharpExplicitProjectManifest,
   discoverCSharpManifest,
   discoverCSharpProjectManifest,
 } from './csharp/discovery.js';
+export {
+  createCSharpExplicitProjectSelection,
+  compareCSharpUtf8Ordinal,
+  CSHARP_EXPLICIT_PROJECT_SELECTION_VERSION,
+} from './csharp/contracts.js';
 export type {
+  CSharpExplicitProjectSelection,
+  CSharpExplicitProjectSelectionDiagnostic,
+  CSharpExplicitProjectSelectionDiagnosticCode,
+  CSharpExplicitProjectSelectionResult,
   CSharpDiscoveryDiagnostic,
   CSharpDiscoverySelection,
+  CSharpExplicitProjectManifest,
+  CSharpExplicitProjectManifestResult,
+  CSharpAnalysisManifest,
   CSharpManifest,
   CSharpManifestResult,
   CSharpProjectManifest,
@@ -120,6 +200,8 @@ export {
 } from './project-loader.js';
 
 export {
+  MAX_PACK_METADATA_BYTES,
+  MAX_PACK_PROVENANCE_TEXT_BYTES,
   decode,
   decodeSnapshot,
   encode,
@@ -142,6 +224,10 @@ export type {
   Snapshot,
   SnapshotV1,
   SnapshotV2,
+  SnapshotV3,
+  SnapshotMetadataV3,
+  SnapshotPackMetadata,
+  SnapshotPackCapability,
   SnapshotWriteRequest,
   SnapshotWriteResult,
 } from './snapshot/types.js';
@@ -156,43 +242,56 @@ export type {
   ProjectRootExtension,
 } from './project-loader.js';
 
-export { createGraphQueryService } from './query.js';
+export {
+  createGraphQueryService,
+  MAX_RELATION_EVIDENCE_PER_COUNTERPART,
+} from './query.js';
 export type {
   CallRelationRequestV1,
   CallRelationResponseV1,
   CallRelationResponseV2,
+  CallRelationResponseV3,
   ErrorFieldV1,
   FileRelationRequestV1,
   FileRelationResponseV1,
   FileRelationResponseV2,
+  FileRelationResponseV3,
   FileSummaryV1,
   FunctionSelectorV1,
   GetSymbolRequestV1,
   GetSymbolRequestV2,
   GetSymbolResponseV1,
   GetSymbolResponseV2,
+  GetSymbolResponseV3,
   GraphQueryService,
   GraphQueryServiceV2,
+  GraphQueryServiceV3,
   NodeSummaryV1,
   NodeSummaryV2,
+  NodeSummaryV3,
   QueryErrorCodeV1,
   QueryErrorV1,
   QueryPageV1,
   QueryRequestV1,
   QueryResponseV1,
   QueryResponseV2,
+  QueryResponseV3,
   SearchRequestV1,
   SearchRequestV2,
   SearchResponseV1,
   SearchResponseV2,
+  SearchResponseV3,
   SearchSymbolKindV1,
   SymbolKindV1,
   SymbolSelectorV1,
   SymbolSelectorV2,
   SymbolSummaryV1,
   SymbolSummaryV2,
+  SymbolSummaryV3,
   QueryErrorV2,
+  QueryErrorV3,
   QueryPageV2,
+  QueryPageV3,
   SearchSymbolKindV2,
   SymbolKindV2,
 } from './query.js';

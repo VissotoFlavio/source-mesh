@@ -9,17 +9,28 @@ import { Client, InMemoryTransport } from '@modelcontextprotocol/client';
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 import {
   createGraphQueryService,
+  decodeSnapshot,
+  edgeIdV2,
+  encodeSnapshot,
   fileId,
+  fileIdV2,
+  MAX_PACK_PROVENANCE_TEXT_BYTES,
+  MAX_RELATION_EVIDENCE_PER_COUNTERPART,
+  nodeIdV2,
   openValidatedSnapshot,
+  repositoryIdV2,
   type GraphQueryService,
   type GraphQueryServiceV2,
+  type GraphQueryServiceV3,
   type QueryResponseV1,
+  type SnapshotV3,
 } from '../src/index.js';
 import { main } from '../src/cli.js';
 import {
   MCP_INITIALIZATION_INSTRUCTIONS,
   MCP_MAX_MESSAGE_BYTES,
   MCP_TOOL_NAMES,
+  TOOL_SCHEMAS,
   validateToolInput,
 } from '../src/mcp/contracts.js';
 import { createMcpServer } from '../src/mcp/server.js';
@@ -68,7 +79,8 @@ function capture(): {
 
 async function createSyntheticRepository(): Promise<{
   readonly root: string;
-  readonly service: GraphQueryService | GraphQueryServiceV2;
+  readonly service:
+    GraphQueryService | GraphQueryServiceV2 | GraphQueryServiceV3;
   readonly callerId: string;
   readonly targetId: string;
 }> {
@@ -781,7 +793,7 @@ processTest(
 
     await writeFile(
       path.join(root, '.sourcemesh', 'graph.json'),
-      '{"schemaVersion":3}\n',
+      '{"schemaVersion":4}\n',
       'utf8',
     );
     const unsupported = spawnRawServer(root, [
@@ -894,4 +906,299 @@ test('MCP input contracts admit v2 container kind filters', async () => {
     kind: 'project',
   });
   assert.equal('issues' in result, false);
+});
+
+test('MCP search output requires metadata for schema-v3 pages', async () => {
+  const v3Page = {
+    schemaVersion: 3,
+    completeness: 'complete',
+    items: [],
+    total: 0,
+    truncated: false,
+  };
+  const missingMetadata = await TOOL_SCHEMAS.searchSymbols.output[
+    '~standard'
+  ].validate({ operation: 'searchSymbols', page: v3Page });
+  assert.equal('issues' in missingMetadata, true);
+  const withMetadata = await TOOL_SCHEMAS.searchSymbols.output[
+    '~standard'
+  ].validate({
+    operation: 'searchSymbols',
+    metadata: { verification: 'unverified', packs: [] },
+    page: v3Page,
+  });
+  assert.equal('issues' in withMetadata, false);
+});
+
+test('MCP transports bounded v3 metadata without an internal error', async () => {
+  const metadata = {
+    verification: 'unverified' as const,
+    packs: [
+      {
+        id: 'large-pack-a',
+        language: 'language-a',
+        version: 'v'.repeat(1024),
+        capabilities: [],
+      },
+      {
+        id: 'large-pack-b',
+        language: 'language-b',
+        version: 'v'.repeat(1024),
+        capabilities: [],
+      },
+      {
+        id: 'large-pack-c',
+        language: 'language-c',
+        version: 'v'.repeat(1024),
+        capabilities: [],
+      },
+      {
+        id: 'large-pack-d',
+        language: 'language-d',
+        version: 'v'.repeat(1024),
+        capabilities: [],
+      },
+    ],
+  };
+  const response = {
+    operation: 'searchSymbols' as const,
+    metadata,
+    page: {
+      schemaVersion: 3 as const,
+      completeness: 'complete' as const,
+      items: [],
+      total: 0,
+      truncated: false,
+    },
+  };
+  const service = {
+    searchSymbols: () => response,
+    getSymbol: () => response,
+    listFileDependencies: () => response,
+    listFileDependents: () => response,
+    listCallers: () => response,
+    listCallees: () => response,
+  } as unknown as GraphQueryServiceV3;
+  const [serverTransport, clientTransport] =
+    InMemoryTransport.createLinkedPair();
+  const server = createMcpServer(service);
+  const client = new Client({
+    name: 'SourceMesh bounded metadata integration test',
+    version: '0.0.0',
+  });
+  await server.connect(serverTransport);
+  await client.connect(clientTransport);
+  try {
+    const result = await client.callTool({
+      name: 'searchSymbols',
+      arguments: { query: 'missing' },
+    });
+    assert.equal(result.isError ?? false, false);
+    assert.deepEqual(result.structuredContent, response);
+  } finally {
+    await client.close();
+    await server.close();
+  }
+});
+
+test('MCP transports maximal escaped v3 pages without an internal error', async () => {
+  const escapedText = '"'.repeat(MAX_PACK_PROVENANCE_TEXT_BYTES);
+  const packId = escapedText;
+  const language = escapedText;
+  const maximumSymbolText = (index: number) =>
+    `t${String(index).padStart(3, '0')}${escapedText.slice(0, 60)}`;
+  const maximumPath = (index: number) =>
+    `${'"'.repeat(60)}${String(index).padStart(4, '0')}`;
+  const repository = {
+    id: repositoryIdV2(),
+    kind: 'repository' as const,
+    root: '.' as const,
+    name: 'repository',
+  };
+  const project = {
+    id: nodeIdV2(
+      'project',
+      'SourceMesh.csproj',
+      `${repository.id}#scope=root`,
+      'SourceMesh',
+      'SourceMesh',
+      'none',
+    ),
+    kind: 'project' as const,
+    name: 'SourceMesh',
+    path: 'SourceMesh.csproj',
+    qualifiedName: 'SourceMesh',
+    memberRole: 'none' as const,
+  };
+  const attributed = <T extends { readonly kind: string }>(node: T) =>
+    node.kind === 'repository' ? node : { ...node, packId, language };
+  const source = {
+    id: fileIdV2('src/source.ts'),
+    kind: 'file' as const,
+    name: 'source.ts',
+    path: 'src/source.ts',
+  };
+  const sourceRoot = {
+    id: nodeIdV2(
+      'module',
+      source.path,
+      `${source.id}#scope=root`,
+      'source-root',
+      'source-root',
+      'none',
+    ),
+    kind: 'module' as const,
+    name: 'source-root',
+    path: source.path,
+    qualifiedName: 'source-root',
+    memberRole: 'none' as const,
+  };
+  const sourceModules = Array.from({ length: 100 }, (_, index) => ({
+    id: nodeIdV2(
+      'namespace',
+      source.path,
+      `${sourceRoot.id}#scope=module:${sourceRoot.qualifiedName}`,
+      maximumSymbolText(index),
+      maximumSymbolText(index),
+      'none',
+    ),
+    kind: 'namespace' as const,
+    name: maximumSymbolText(index),
+    path: source.path,
+    qualifiedName: maximumSymbolText(index),
+    memberRole: 'none' as const,
+    locations: [
+      {
+        path: source.path,
+        start: { line: 1, column: 1 },
+        end: { line: 1, column: 2 },
+      },
+    ],
+  }));
+  const targets = Array.from({ length: 100 }, (_, targetIndex) => {
+    const path = maximumPath(targetIndex);
+    const file = {
+      id: fileIdV2(path),
+      kind: 'file' as const,
+      name: maximumSymbolText(targetIndex),
+      path,
+      locations: [
+        {
+          path,
+          start: { line: 1, column: 1 },
+          end: { line: 1, column: 2 },
+        },
+      ],
+    };
+    const modules = Array.from(
+      { length: MAX_RELATION_EVIDENCE_PER_COUNTERPART },
+      (_, moduleIndex) => ({
+        id: nodeIdV2(
+          'module',
+          file.path,
+          `${file.id}#scope=root`,
+          maximumSymbolText(moduleIndex),
+          maximumSymbolText(moduleIndex),
+          'none',
+        ),
+        kind: 'module' as const,
+        name: maximumSymbolText(moduleIndex),
+        path: file.path,
+        qualifiedName: maximumSymbolText(moduleIndex),
+        memberRole: 'none' as const,
+        locations: [
+          {
+            path: file.path,
+            start: { line: 1, column: 1 },
+            end: { line: 1, column: 2 },
+          },
+        ],
+      }),
+    );
+    return { file, modules };
+  });
+  const contains = (
+    from: { readonly id: string },
+    to: { readonly id: string },
+  ) => ({
+    id: edgeIdV2('contains', from.id, to.id),
+    kind: 'contains' as const,
+    from: from.id,
+    to: to.id,
+    resolutionStatus: 'resolved' as const,
+  });
+  const snapshot: SnapshotV3 = {
+    schemaVersion: 3,
+    completeness: 'complete',
+    repository: { root: '.', name: 'repository' },
+    metadata: {
+      verification: 'unverified',
+      packs: [
+        {
+          id: packId,
+          language,
+          version: 'v'.repeat(1024),
+          capabilities: [],
+        },
+      ],
+    },
+    nodes: [
+      repository,
+      project,
+      source,
+      sourceRoot,
+      ...sourceModules,
+      ...targets.flatMap(({ file, modules }) => [file, ...modules]),
+    ].map(attributed) as SnapshotV3['nodes'],
+    edges: [
+      contains(repository, project),
+      contains(project, source),
+      contains(source, sourceRoot),
+      ...sourceModules.map((module) => contains(sourceRoot, module)),
+      ...targets.flatMap(({ file, modules }) => [
+        contains(project, file),
+        ...modules.map((module) => contains(file, module)),
+        ...modules.map((target) => ({
+          id: edgeIdV2('imports', sourceRoot.id, target.id),
+          kind: 'imports' as const,
+          from: sourceRoot.id,
+          to: target.id,
+          resolutionStatus: 'resolved' as const,
+          packId,
+          evidence: 'syntactic' as const,
+        })),
+      ]),
+    ],
+    diagnostics: [],
+  };
+  const decoded = decodeSnapshot(encodeSnapshot(snapshot), 3) as SnapshotV3;
+  const [serverTransport, clientTransport] =
+    InMemoryTransport.createLinkedPair();
+  const server = createMcpServer(createGraphQueryService(decoded));
+  const client = new Client({
+    name: 'SourceMesh repeated provenance transport test',
+    version: '0.0.0',
+  });
+  await server.connect(serverTransport);
+  await client.connect(clientTransport);
+  try {
+    const search = await client.callTool({
+      name: 'searchSymbols',
+      arguments: { query: 't', limit: 100 },
+    });
+    assert.equal(search.isError ?? false, false);
+    const details = await client.callTool({
+      name: 'getSymbol',
+      arguments: { nodeId: sourceRoot.id, limit: 100 },
+    });
+    assert.equal(details.isError ?? false, false);
+    const dependencies = await client.callTool({
+      name: 'listFileDependencies',
+      arguments: { fileId: source.id, limit: 100 },
+    });
+    assert.equal(dependencies.isError ?? false, false);
+  } finally {
+    await client.close();
+    await server.close();
+  }
 });

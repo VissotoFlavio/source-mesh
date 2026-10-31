@@ -57,6 +57,12 @@ is a local `npm install --global --ignore-scripts <downloaded-tarball>` step;
 runtime analysis does not restore, compile, download dependencies, update
 itself, or contact a registry.
 
+Language-pack selection is likewise local and explicit. The
+[local language-pack installation guide](docs/local-language-pack-installation.md)
+defines the closed configuration, exact-version resolution, compatibility
+matrix, and offline update validation; repository analysis never downloads or
+dynamically loads a pack.
+
 ## Verify package distribution from a checkout
 
 Maintainers build the helper from the committed offline NuGet feed and validate
@@ -204,7 +210,7 @@ are in [docs/mvp-validation.md](docs/mvp-validation.md).
 SourceMesh is pre-release. Package publication, releases, hosted processing, and
 compatibility changes require separate authorization and issue-backed work.
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for the development workflow, [the technical baseline](docs/decisions/0001-technical-baseline.md) for the current stack decision, and [the source graph MVP architecture](docs/decisions/0002-source-graph-mvp-architecture.md) for the accepted graph and query contracts.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the development workflow, [the technical baseline](docs/decisions/0001-technical-baseline.md) for the current stack decision, [the source graph MVP architecture](docs/decisions/0002-source-graph-mvp-architecture.md) for the accepted graph and query contracts, and [the local language-pack architecture](docs/decisions/0005-local-language-pack-architecture.md) for the approved extensibility and isolation model.
 
 ## License
 

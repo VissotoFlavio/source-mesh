@@ -31,9 +31,12 @@ creates `npm pack` output from the captured SHA. The workflow computes a
 SHA-256 checksum and publishes the tarball plus `<tarball>.sha256` in the
 GitHub Pre-release `v<version>`, with the tag targeting that exact SHA.
 
-The workflow summary contains only the version, SHA, gate outcomes, digest, and
-asset URLs. It must never contain source snapshots, analyzed repository data,
-credentials, absolute private paths, or raw command output.
+The workflow summary and the outcome comment on the triggering release pull
+request contain only the version, SHA, gate outcomes, digest, asset URLs, and
+workflow run URL. They must never contain source snapshots, analyzed repository
+data, credentials, absolute private paths, or raw command output. A successful
+comment identifies the exact candidate and both release assets; a failed comment
+contains only a concise stage status and the workflow run URL.
 
 ## Recovery
 
@@ -48,4 +51,6 @@ If publication stops after creating a draft release, investigate the recorded
 SHA and uploaded asset names. Do not delete or replace it automatically. An
 authorized release owner may either complete the matching candidate manually or
 follow the incident procedure and prepare a new version. Do not reuse a version
-for different content.
+for different content. When the pull-request outcome comment reports a failure,
+use its workflow run URL to inspect the authorized workflow logs before taking
+recovery action; the comment intentionally does not expose failure output.

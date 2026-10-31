@@ -146,6 +146,11 @@ jobs:
       contents: write
       issues: read
       pull-requests: read
+    outputs:
+      tarball_sha256: ${{ steps.publication.outputs.tarball_sha256 }}
+      release_url: ${{ steps.publication.outputs.release_url }}
+      tarball_url: ${{ steps.publication.outputs.tarball_url }}
+      checksum_url: ${{ steps.publication.outputs.checksum_url }}
     steps:
       - name: Check out trusted default branch
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -192,6 +197,7 @@ jobs:
           path: ${{ runner.temp }}/package-candidate
 
       - name: Publish immutable pre-release assets
+        id: publication
         env:
           GH_TOKEN: ${{ github.token }}
           HEAD_SHA: ${{ needs.validate.outputs.head_sha }}
@@ -277,3 +283,66 @@ jobs:
             echo "- Release: ${release_url}"
             echo "- Assets: https://github.com/${REPOSITORY}/releases/download/${TAG}/${tarball_name} and https://github.com/${REPOSITORY}/releases/download/${TAG}/${checksum_name}"
           } >> "$GITHUB_STEP_SUMMARY"
+
+          {
+            echo "tarball_sha256=${digest}"
+            echo "release_url=${release_url}"
+            echo "tarball_url=https://github.com/${REPOSITORY}/releases/download/${TAG}/${tarball_name}"
+            echo "checksum_url=https://github.com/${REPOSITORY}/releases/download/${TAG}/${checksum_name}"
+          } >> "$GITHUB_OUTPUT"
+
+  feedback:
+    if: >-
+      always() &&
+      github.event.issue.pull_request != null &&
+      github.event.comment.body == '/generate-candidate' &&
+      github.event.comment.author_association == 'OWNER'
+    needs:
+      - validate
+      - build
+      - publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: read
+    steps:
+      - name: Check out trusted default branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+
+      - name: Post candidate outcome to the triggering pull request
+        env:
+          BUILD_RESULT: ${{ needs.build.result }}
+          CHECKSUM_URL: ${{ needs.publish.outputs.checksum_url }}
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ needs.validate.outputs.head_sha }}
+          PUBLISH_RESULT: ${{ needs.publish.result }}
+          PULL_REQUEST_NUMBER: ${{ github.event.issue.number }}
+          RELEASE_URL: ${{ needs.publish.outputs.release_url }}
+          REPOSITORY: ${{ github.repository }}
+          TARBALL_SHA256: ${{ needs.publish.outputs.tarball_sha256 }}
+          TARBALL_URL: ${{ needs.publish.outputs.tarball_url }}
+          VALIDATE_RESULT: ${{ needs.validate.result }}
+          VERSION: ${{ needs.validate.outputs.version }}
+          WORKFLOW_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          comment_file="$RUNNER_TEMP/candidate-feedback.md"
+          node scripts/format-release-candidate-feedback.mjs \
+            --validate-result "$VALIDATE_RESULT" \
+            --build-result "$BUILD_RESULT" \
+            --publish-result "$PUBLISH_RESULT" \
+            --version "$VERSION" \
+            --head-sha "$HEAD_SHA" \
+            --tarball-sha256 "$TARBALL_SHA256" \
+            --release-url "$RELEASE_URL" \
+            --tarball-url "$TARBALL_URL" \
+            --checksum-url "$CHECKSUM_URL" \
+            --workflow-url "$WORKFLOW_URL" > "$comment_file"
+          gh api --method POST \
+            "repos/${REPOSITORY}/issues/${PULL_REQUEST_NUMBER}/comments" \
+            -F body="$(<"$comment_file")" > /dev/null

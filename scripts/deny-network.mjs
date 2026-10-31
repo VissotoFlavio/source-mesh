@@ -47,6 +47,7 @@ const fixedRoslynHelpers = new Set([
     helperRelativePath,
   ),
 ]);
+const fixedCSharpBridges = new Set();
 const cliEntry = process.argv[1];
 if (
   cliEntry !== undefined &&
@@ -54,6 +55,9 @@ if (
 ) {
   fixedRoslynHelpers.add(
     path.resolve(path.dirname(path.dirname(cliEntry)), helperRelativePath),
+  );
+  fixedCSharpBridges.add(
+    path.resolve(path.dirname(cliEntry), 'packs', 'csharp', 'bridge.js'),
   );
 }
 const originalSpawn = childProcess.spawn;
@@ -74,8 +78,27 @@ function isFixedRoslynSpawn(command, args, options) {
   );
 }
 
+function isFixedCSharpBridgeSpawn(command, args, options) {
+  return (
+    command === process.execPath &&
+    Array.isArray(args) &&
+    args.length === 1 &&
+    fixedCSharpBridges.has(args[0]) &&
+    options !== null &&
+    typeof options === 'object' &&
+    options.shell === false &&
+    Array.isArray(options.stdio) &&
+    options.stdio.length === 3 &&
+    options.stdio.every((entry) => entry === 'pipe')
+  );
+}
+
 function guardedSpawn(command, args, options) {
-  if (!isFixedRoslynSpawn(command, args, options)) denyNetworkAccess();
+  if (
+    !isFixedRoslynSpawn(command, args, options) &&
+    !isFixedCSharpBridgeSpawn(command, args, options)
+  )
+    denyNetworkAccess();
   return originalSpawn.call(childProcess, command, args, options);
 }
 
