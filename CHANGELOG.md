@@ -13,6 +13,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Changed
 
+- Granted the candidate-feedback workflow permission to comment on its
+  triggering pull request (#135).
+
 - Extended the C# MCP handover and beta acceptance guidance for explicit
   selected-project snapshots, including separate application/test boundaries
   and offline validation coverage (#118).
