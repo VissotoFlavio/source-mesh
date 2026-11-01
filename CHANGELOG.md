@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- Added repeatable C# `--project` CLI selection for one explicit, immutable
+  selected-project snapshot, with application/test boundary guidance (#117).
+
 ## [0.1.0-beta.6] - 2026-10-31
 
 ### Added

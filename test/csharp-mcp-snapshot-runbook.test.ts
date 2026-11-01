@@ -26,7 +26,10 @@ test('C# MCP snapshot runbook documents the bounded generic flow', async () => {
     content,
     /--language csharp --project <relative-project-path> --snapshot-id csharp-<run-id>/u,
   );
-  assert.match(content, /exactly one repository-relative selector/u);
+  assert.match(content, /exactly one repository-relative selection mode/u);
+  assert.match(content, /repeat\s+`--project`/u);
+  assert.match(content, /external or unresolved boundary/u);
+  assert.match(content, /Create a separate snapshot[\s\S]*tests/u);
   assert.match(content, /Creation is create-only/u);
   assert.match(content, /same repository root and snapshot path/u);
   assert.match(content, /UTF-8 is the normal source policy/u);
@@ -50,7 +53,10 @@ test('installed C# MCP snapshot guide gives a generic user and AI-host flow', as
     content,
     /--language csharp --project <relative-project-path> --snapshot-id csharp-<run-id>/u,
   );
-  assert.match(content, /exactly one repository-relative selector/u);
+  assert.match(content, /exactly one repository-relative selection mode/u);
+  assert.match(content, /repeat `--project`/u);
+  assert.match(content, /external or unresolved boundaries/u);
+  assert.match(content, /Create test snapshots separately/u);
   assert.match(content, /Creation is create-only/u);
   assert.match(content, /UTF-8 is the normal source policy/u);
   assert.match(content, /maximum of 4096\s+compiler diagnostics/u);

@@ -62,10 +62,11 @@ repository.
 
 ## Create a C# snapshot
 
-Choose exactly one repository-relative selector: a solution or a project. Do
-not rely on automatic solution discovery. Choose a fresh lowercase ASCII
-snapshot ID (letters, digits, and hyphens; starting with a letter; 1–64
-characters).
+Choose exactly one repository-relative selection mode: a legacy solution, an
+intentionally single project, or an explicit set of projects. Do not rely on
+automatic solution discovery or combine `--solution` with `--project`. Choose
+a fresh lowercase ASCII snapshot ID (letters, digits, and hyphens; starting
+with a letter; 1–64 characters).
 
 ```powershell
 sourcemesh analyze --root <repository-root> --language csharp --solution <relative-solution-path> --snapshot-id csharp-<run-id>
@@ -76,6 +77,20 @@ For an intentionally single-project target, use `--project` instead:
 ```powershell
 sourcemesh analyze --root <repository-root> --language csharp --project <relative-project-path> --snapshot-id csharp-<run-id>
 ```
+
+For a bounded application or other multi-project snapshot, repeat `--project`
+for every root-relative `.csproj` in the intended source boundary. Project
+order does not affect the resulting snapshot. References to projects omitted
+from the selection remain external or unresolved boundaries; SourceMesh does
+not analyze their source implicitly.
+
+```powershell
+sourcemesh analyze --root <repository-root> --language csharp --project src/App/App.csproj --project src/Domain/Domain.csproj --snapshot-id csharp-app-<run-id>
+```
+
+Create test snapshots separately with their own selected projects and snapshot
+ID. Folder names do not change project membership, and MCP can only query an
+already-created selected snapshot.
 
 The ID deterministically maps to
 `.sourcemesh/snapshots/csharp-<run-id>.json`. Creation is create-only and

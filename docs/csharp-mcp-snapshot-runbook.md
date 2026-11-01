@@ -10,8 +10,9 @@ prerelease package, use
 
 ## Create a snapshot
 
-Choose exactly one repository-relative selector: a solution or a project. Do
-not rely on automatic solution discovery.
+Choose exactly one repository-relative selection mode: a legacy solution, an
+intentionally single project, or an explicit set of projects. Do not rely on
+automatic solution discovery and do not combine `--solution` with `--project`.
 
 ```sh
 node dist/cli.js analyze --root <repository-root> --language csharp --solution <relative-solution-path> --snapshot-id csharp-<run-id>
@@ -22,6 +23,19 @@ For an intentionally single-project target, use `--project` instead:
 ```sh
 node dist/cli.js analyze --root <repository-root> --language csharp --project <relative-project-path> --snapshot-id csharp-<run-id>
 ```
+
+For an application or other bounded multi-project snapshot, repeat
+`--project` for every selected root-relative `.csproj`. Project order has no
+meaning. SourceMesh analyzes only this selected set; a reference to an
+unselected project remains an external or unresolved boundary.
+
+```sh
+node dist/cli.js analyze --root <repository-root> --language csharp --project src/App/App.csproj --project src/Domain/Domain.csproj --snapshot-id csharp-app-<run-id>
+```
+
+Create a separate snapshot with its own selected `--project` values and ID for
+tests. SourceMesh never infers test membership from directory names or merges
+the source sets of separate snapshots.
 
 Each analysis requires a new lowercase ASCII snapshot ID (letters, digits, and
 hyphens; starting with a letter; 1–64 characters). It deterministically maps to
