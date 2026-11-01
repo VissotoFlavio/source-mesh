@@ -350,7 +350,8 @@ async function verifyPackageRoot(root, { installed = false } = {}) {
   const normalizedGuide = guide.replace(/\s+/gu, ' ');
   for (const phrase of [
     'Generate the snapshot before configuring or starting MCP.',
-    'exactly one repository-relative selector',
+    'exactly one repository-relative selection mode',
+    'repeat `--project`',
     'UTF-8 is the normal source policy.',
     'maximum of 4096 compiler diagnostics',
   ]) {
