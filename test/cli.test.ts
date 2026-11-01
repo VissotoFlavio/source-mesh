@@ -483,73 +483,77 @@ test('csharp analyze rejects equivalent repeated project selections before disco
   assert.match(io.stderrValue, /arguments are invalid/u);
 });
 
-test('csharp CLI creates deterministic snapshots for an explicit project set', async () => {
-  const root = fs.mkdtempSync(
-    path.join(process.cwd(), '.sourcemesh-cli-csharp-'),
-  );
-  fs.cpSync(
-    path.join(process.cwd(), 'test', 'fixtures', 'csharp-project'),
-    root,
-    {
-      recursive: true,
-    },
-  );
-  try {
-    for (const [snapshotId, projects] of [
-      ['csharp-set-first', ['App.csproj', 'Library.csproj']],
-      ['csharp-set-second', ['Library.csproj', 'App.csproj']],
-    ] as const) {
-      const io = capture();
-      assert.equal(
-        await main(
-          [
-            'analyze',
-            '--root',
-            root,
-            '--snapshot-id',
-            snapshotId,
-            '--language',
-            'csharp',
-            ...projects.flatMap((project) => ['--project', project]),
-            '--output',
-            'json',
-          ],
-          undefined,
-          io,
-        ),
-        0,
+test(
+  'csharp CLI creates deterministic snapshots for an explicit project set',
+  { skip: process.platform !== 'win32' },
+  async () => {
+    const root = fs.mkdtempSync(
+      path.join(process.cwd(), '.sourcemesh-cli-csharp-'),
+    );
+    fs.cpSync(
+      path.join(process.cwd(), 'test', 'fixtures', 'csharp-project'),
+      root,
+      {
+        recursive: true,
+      },
+    );
+    try {
+      for (const [snapshotId, projects] of [
+        ['csharp-set-first', ['App.csproj', 'Library.csproj']],
+        ['csharp-set-second', ['Library.csproj', 'App.csproj']],
+      ] as const) {
+        const io = capture();
+        assert.equal(
+          await main(
+            [
+              'analyze',
+              '--root',
+              root,
+              '--snapshot-id',
+              snapshotId,
+              '--language',
+              'csharp',
+              ...projects.flatMap((project) => ['--project', project]),
+              '--output',
+              'json',
+            ],
+            undefined,
+            io,
+          ),
+          0,
+        );
+        assert.equal(io.stderrValue, '');
+      }
+
+      const firstPath = path.join(
+        root,
+        '.sourcemesh',
+        'snapshots',
+        'csharp-set-first.json',
       );
-      assert.equal(io.stderrValue, '');
+      const secondPath = path.join(
+        root,
+        '.sourcemesh',
+        'snapshots',
+        'csharp-set-second.json',
+      );
+      assert.deepEqual(fs.readFileSync(firstPath), fs.readFileSync(secondPath));
+
+      const snapshot = await openValidatedSnapshot(
+        root,
+        '.sourcemesh/snapshots/csharp-set-first.json',
+      );
+      assert.deepEqual(
+        snapshot.nodes
+          .flatMap((node) => (node.kind === 'project' ? [node.path] : []))
+          .sort(),
+        ['App.csproj', 'Library.csproj'],
+      );
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
     }
-
-    const firstPath = path.join(
-      root,
-      '.sourcemesh',
-      'snapshots',
-      'csharp-set-first.json',
-    );
-    const secondPath = path.join(
-      root,
-      '.sourcemesh',
-      'snapshots',
-      'csharp-set-second.json',
-    );
-    assert.deepEqual(fs.readFileSync(firstPath), fs.readFileSync(secondPath));
-
-    const snapshot = await openValidatedSnapshot(
-      root,
-      '.sourcemesh/snapshots/csharp-set-first.json',
-    );
-    assert.deepEqual(
-      snapshot.nodes
-        .flatMap((node) => (node.kind === 'project' ? [node.path] : []))
-        .sort(),
-      ['App.csproj', 'Library.csproj'],
-    );
-  } finally {
-    fs.rmSync(root, { recursive: true, force: true });
-  }
-});
+  },
+);
 
 test('csharp analyze writes a v2 versioned create-only snapshot', async () => {
   const manifest = {
