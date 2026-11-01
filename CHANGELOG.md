@@ -11,6 +11,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Added repeatable C# `--project` CLI selection for one explicit, immutable
   selected-project snapshot, with application/test boundary guidance (#117).
 
+### Changed
+
+- Extended the C# MCP handover and beta acceptance guidance for explicit
+  selected-project snapshots, including separate application/test boundaries
+  and offline validation coverage (#118).
+
 ## [0.1.0-beta.6] - 2026-10-31
 
 ### Added

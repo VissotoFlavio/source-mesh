@@ -310,6 +310,10 @@ processTest(
         MCP_INITIALIZATION_INSTRUCTIONS,
         /must create the snapshot before starting this server/u,
       );
+      assert.match(
+        MCP_INITIALIZATION_INSTRUCTIONS,
+        /repeatable relative --project options/u,
+      );
       assert.equal(
         /[A-Za-z]:[\\/]/u.test(MCP_INITIALIZATION_INSTRUCTIONS),
         false,

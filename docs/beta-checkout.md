@@ -39,8 +39,10 @@ payload. Do not restore from another feed or compile the helper during runtime.
 
 ## Analyze before starting MCP
 
-Use an explicit relative solution or project selector and a fresh snapshot ID.
-The output is always the create-only
+Choose exactly one explicit selection mode and a fresh snapshot ID: a legacy
+relative solution, an intentionally single relative project, or a bounded set
+of relative C# projects supplied with repeatable `--project` options. The
+output is always the create-only
 `.sourcemesh/snapshots/<id>.json`; `--overwrite` is not supported.
 
 Node 24 requires a `file:///` URI for an absolute preload path. Resolve it once
@@ -56,6 +58,15 @@ For an intentionally single-project target, replace `--solution` with
 the C# selector. Use `--source-encoding windows-1252` only when a target is
 known to require it, and choose `--max-diagnostics 1..100000` only when the
 default diagnostic budget is insufficient.
+
+For an approved local application subset, repeat `--project` once for each
+chosen root-relative `.csproj`; ordering does not affect the snapshot. Omitted
+project references remain external or unresolved boundaries and are not
+analyzed implicitly. Create a separate snapshot ID and selection for tests.
+
+```powershell
+node --import $offlineGuardUri .\dist\cli.js analyze --root <repository-root> --language csharp --project <application-project-a.csproj> --project <application-project-b.csproj> --snapshot-id csharp-app-<run-id>
+```
 
 ## Start the local MCP process
 
