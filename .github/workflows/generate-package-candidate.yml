@@ -305,7 +305,7 @@ jobs:
     permissions:
       contents: read
       issues: write
-      pull-requests: read
+      pull-requests: write
     steps:
       - name: Check out trusted default branch
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
