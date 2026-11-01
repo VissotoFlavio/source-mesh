@@ -4,8 +4,10 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
+  createCSharpExplicitProjectSelection,
   createGraphQueryService,
   csharpPack,
+  discoverCSharpExplicitProjectManifest,
   discoverSourceFiles,
   typescriptPack,
   openValidatedSnapshot,
@@ -16,7 +18,8 @@ import type {
   FileRelationResponseV1,
   FileRelationResponseV2,
   FileRelationResponseV3,
-  CSharpManifest,
+  CSharpAnalysisManifest,
+  CSharpExplicitProjectSelection,
   FunctionSelectorV1,
   GetSymbolResponseV1,
   GetSymbolResponseV2,
@@ -76,6 +79,7 @@ interface AnalyzeCommand {
   readonly language?: 'csharp';
   readonly solution?: string;
   readonly project?: string;
+  readonly explicitProjectSelection?: CSharpExplicitProjectSelection;
   readonly sourceEncoding?: 'windows-1252';
   readonly maxDiagnostics?: number;
   readonly output: OutputFormat;
@@ -138,7 +142,7 @@ interface SnapshotAnalyzeResult {
 
 interface CSharpManifestAnalyzeResult {
   readonly kind: 'csharp-manifest';
-  readonly manifest: CSharpManifest;
+  readonly manifest: CSharpAnalysisManifest;
 }
 
 type AnalyzeResult = SnapshotAnalyzeResult | CSharpManifestAnalyzeResult;
@@ -150,6 +154,7 @@ export interface CliIO {
 
 export interface CliServices {
   readonly discoverCSharpManifest: typeof csharpPack.discover;
+  readonly discoverCSharpExplicitProjectManifest: typeof discoverCSharpExplicitProjectManifest;
   readonly analyzeCSharpManifest?: typeof csharpPack.analyzeManifest;
   readonly extractCSharpDeclarationGraph?: typeof csharpPack.extract;
   readonly discoverSourceFiles: typeof discoverSourceFiles;
@@ -162,6 +167,7 @@ export interface CliServices {
 
 const productionServices: CliServices = {
   discoverCSharpManifest: csharpPack.discover,
+  discoverCSharpExplicitProjectManifest,
   analyzeCSharpManifest: csharpPack.analyzeManifest,
   extractCSharpDeclarationGraph: csharpPack.extract,
   discoverSourceFiles,
@@ -334,7 +340,7 @@ function helpText(command?: CommandName): string {
     ].join('\n');
   const usage: Record<CommandName, string> = {
     analyze:
-      'sourcemesh analyze --root <path> --snapshot-id <id> [--tsconfig <relative>] [--language csharp --solution <relative>|--project <relative> [--source-encoding windows-1252] [--max-diagnostics <1..100000>]] [--output human|json]',
+      'sourcemesh analyze --root <path> --snapshot-id <id> [--tsconfig <relative>] [--language csharp --solution <relative>|--project <relative> [--project <relative> ...] [--source-encoding windows-1252] [--max-diagnostics <1..100000>]] [--output human|json]',
     mcp: 'sourcemesh mcp --root <path> --snapshot <relative>',
     symbol:
       'sourcemesh symbol --root <path> --snapshot <relative> --query <text> [--kind <kind>] [--path <relative>] [--container-id <node-id>] [--limit <1..100>] [--cursor <token>] [--allow-partial] [--output human|json]',
@@ -478,20 +484,22 @@ function parseArguments(argv: readonly string[]): ParsedCommand {
   const command = commandValue as CommandName;
   const kinds = optionKinds(command);
   const values = new Map<string, string | true>();
+  const projectValues: string[] = [];
   for (let index = 1; index < argv.length; index += 1) {
     const option = argv[index]!;
     if (option === '--help') throw invalid('help');
     const kind = kinds.get(option);
     if (kind === undefined)
       throw invalid(option.startsWith('--') ? 'option' : 'command');
-    if (values.has(option)) throw invalid(option);
+    if (option !== '--project' && values.has(option)) throw invalid(option);
     if (kind === 'flag') {
       values.set(option, true);
       continue;
     }
     const value = argv[index + 1];
     if (value === undefined || value.startsWith('--')) throw invalid(option);
-    values.set(option, value);
+    if (option === '--project') projectValues.push(value);
+    else values.set(option, value);
     index += 1;
   }
 
@@ -511,20 +519,21 @@ function parseArguments(argv: readonly string[]): ParsedCommand {
         : normalizeRelativePath(tsconfigValue, 'tsconfig');
     const languageValue = valueOf(values, '--language');
     const solutionValue = valueOf(values, '--solution');
-    const projectValue = valueOf(values, '--project');
+    const projectValue =
+      projectValues.length === 1 ? projectValues[0] : undefined;
     const sourceEncodingValue = valueOf(values, '--source-encoding');
     const maxDiagnosticsValue = valueOf(values, '--max-diagnostics');
     if (languageValue === undefined) {
       if (
         solutionValue !== undefined ||
-        projectValue !== undefined ||
+        projectValues.length > 0 ||
         sourceEncodingValue !== undefined ||
         maxDiagnosticsValue !== undefined
       )
         throw invalid('language');
     } else {
       if (languageValue !== 'csharp') throw invalid('language');
-      if ((solutionValue === undefined) === (projectValue === undefined))
+      if ((solutionValue === undefined) === (projectValues.length === 0))
         throw invalid('selection');
     }
     if (
@@ -552,6 +561,15 @@ function parseArguments(argv: readonly string[]): ParsedCommand {
       projectValue === undefined
         ? undefined
         : normalizeRelativePath(projectValue, 'project');
+    const explicitProjectSelection =
+      projectValues.length < 2
+        ? undefined
+        : createCSharpExplicitProjectSelection(projectValues);
+    if (
+      explicitProjectSelection !== undefined &&
+      'diagnostic' in explicitProjectSelection
+    )
+      throw invalid('selection');
     return {
       command,
       root,
@@ -560,6 +578,9 @@ function parseArguments(argv: readonly string[]): ParsedCommand {
       ...(languageValue === undefined ? {} : { language: 'csharp' as const }),
       ...(solution === undefined ? {} : { solution }),
       ...(project === undefined ? {} : { project }),
+      ...(explicitProjectSelection === undefined
+        ? {}
+        : { explicitProjectSelection: explicitProjectSelection.selection }),
       ...(sourceEncodingValue === undefined
         ? {}
         : { sourceEncoding: sourceEncodingValue }),
@@ -732,12 +753,20 @@ async function executeAnalyze(
 ): Promise<AnalyzeResult> {
   try {
     if (command.language === 'csharp') {
-      const manifest = await services.discoverCSharpManifest(command.root, {
-        ...(command.solution === undefined
-          ? {}
-          : { solution: command.solution }),
-        ...(command.project === undefined ? {} : { project: command.project }),
-      });
+      const manifest =
+        command.explicitProjectSelection === undefined
+          ? await services.discoverCSharpManifest(command.root, {
+              ...(command.solution === undefined
+                ? {}
+                : { solution: command.solution }),
+              ...(command.project === undefined
+                ? {}
+                : { project: command.project }),
+            })
+          : await services.discoverCSharpExplicitProjectManifest(
+              command.root,
+              command.explicitProjectSelection,
+            );
       if (manifest.manifest === undefined || manifest.diagnostics.length > 0)
         throw analysisFailure();
       if (
