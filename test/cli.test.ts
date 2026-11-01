@@ -9,6 +9,7 @@ import { main } from '../src/cli.js';
 import type {
   DeclarationGraph,
   CallRelationResponseV1,
+  CSharpExplicitProjectManifest,
   FileRelationResponseV1,
   GetSymbolResponseV1,
   GraphQueryService,
@@ -67,6 +68,7 @@ function queryResponse(): QueryResponseV1 {
 function injectedServices(overrides: Partial<CliServices> = {}): CliServices {
   return {
     discoverCSharpManifest: async () => ({ diagnostics: [] }),
+    discoverCSharpExplicitProjectManifest: async () => ({ diagnostics: [] }),
     discoverSourceFiles: async () => ({
       repositoryRoot: '/selected/root',
       sources: [],
@@ -397,6 +399,161 @@ test('csharp analyze uses the injected manifest discovery service', async () => 
   assert.equal(failureIO.stdoutValue, '');
   assert.equal(JSON.parse(failureIO.stderrValue).error.code, 'analysis_failed');
 });
+
+test('csharp analyze sends a repeatable project selection to its explicit boundary', async () => {
+  let legacyCalls = 0;
+  let explicitCalls = 0;
+  const manifest = {
+    language: 'csharp' as const,
+    selection: {
+      version: 1 as const,
+      kind: 'explicit-projects' as const,
+      projects: ['src/Alpha/Alpha.csproj', 'src/Zebra/Zebra.csproj'],
+    },
+    projects: [],
+  } satisfies CSharpExplicitProjectManifest;
+  const io = capture();
+  assert.equal(
+    await main(
+      [
+        'analyze',
+        '--root',
+        '/repo',
+        '--snapshot-id',
+        'csharp-selection',
+        '--language',
+        'csharp',
+        '--project',
+        'src/Zebra/Zebra.csproj',
+        '--project',
+        'src/Alpha/Alpha.csproj',
+        '--output',
+        'json',
+      ],
+      injectedServices({
+        discoverCSharpManifest: async () => {
+          legacyCalls += 1;
+          return { diagnostics: [] };
+        },
+        discoverCSharpExplicitProjectManifest: async (root, selection) => {
+          explicitCalls += 1;
+          assert.equal(root, '/repo');
+          assert.deepEqual(selection, manifest.selection);
+          return { manifest, diagnostics: [] };
+        },
+      }),
+      io,
+    ),
+    0,
+  );
+  assert.equal(legacyCalls, 0);
+  assert.equal(explicitCalls, 1);
+  assert.equal(JSON.parse(io.stdoutValue).result.kind, 'csharp-manifest');
+});
+
+test('csharp analyze rejects equivalent repeated project selections before discovery', async () => {
+  let discovered = false;
+  const io = capture();
+  assert.equal(
+    await main(
+      [
+        'analyze',
+        '--root',
+        '/repo',
+        '--snapshot-id',
+        'duplicate-selection',
+        '--language',
+        'csharp',
+        '--project',
+        'src/App/App.csproj',
+        '--project',
+        'src\\App\\App.csproj',
+      ],
+      injectedServices({
+        discoverCSharpExplicitProjectManifest: async () => {
+          discovered = true;
+          return { diagnostics: [] };
+        },
+      }),
+      io,
+    ),
+    2,
+  );
+  assert.equal(discovered, false);
+  assert.match(io.stderrValue, /arguments are invalid/u);
+});
+
+test(
+  'csharp CLI creates deterministic snapshots for an explicit project set',
+  { skip: process.platform !== 'win32' },
+  async () => {
+    const root = fs.mkdtempSync(
+      path.join(process.cwd(), '.sourcemesh-cli-csharp-'),
+    );
+    fs.cpSync(
+      path.join(process.cwd(), 'test', 'fixtures', 'csharp-project'),
+      root,
+      {
+        recursive: true,
+      },
+    );
+    try {
+      for (const [snapshotId, projects] of [
+        ['csharp-set-first', ['App.csproj', 'Library.csproj']],
+        ['csharp-set-second', ['Library.csproj', 'App.csproj']],
+      ] as const) {
+        const io = capture();
+        assert.equal(
+          await main(
+            [
+              'analyze',
+              '--root',
+              root,
+              '--snapshot-id',
+              snapshotId,
+              '--language',
+              'csharp',
+              ...projects.flatMap((project) => ['--project', project]),
+              '--output',
+              'json',
+            ],
+            undefined,
+            io,
+          ),
+          0,
+        );
+        assert.equal(io.stderrValue, '');
+      }
+
+      const firstPath = path.join(
+        root,
+        '.sourcemesh',
+        'snapshots',
+        'csharp-set-first.json',
+      );
+      const secondPath = path.join(
+        root,
+        '.sourcemesh',
+        'snapshots',
+        'csharp-set-second.json',
+      );
+      assert.deepEqual(fs.readFileSync(firstPath), fs.readFileSync(secondPath));
+
+      const snapshot = await openValidatedSnapshot(
+        root,
+        '.sourcemesh/snapshots/csharp-set-first.json',
+      );
+      assert.deepEqual(
+        snapshot.nodes
+          .flatMap((node) => (node.kind === 'project' ? [node.path] : []))
+          .sort(),
+        ['App.csproj', 'Library.csproj'],
+      );
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  },
+);
 
 test('csharp analyze writes a v2 versioned create-only snapshot', async () => {
   const manifest = {
