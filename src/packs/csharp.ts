@@ -29,7 +29,7 @@ const manifest: LanguagePackManifest = {
   extensions: ['.cs'],
   executionMode: 'local-worker',
   workerProtocolVersion: LOCAL_WORKER_PROTOCOL_VERSION,
-  capabilities: ['project-manifest', 'source-analysis', 'semantic-relations'],
+  capabilities: ['project-manifest', 'source-analysis'],
 };
 
 const bridge = fileURLToPath(

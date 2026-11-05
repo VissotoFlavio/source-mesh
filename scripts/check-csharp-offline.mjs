@@ -7,10 +7,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
-import {
-  analyzeCSharpManifest,
-  CSharpWorkerError,
-} from '../src/csharp/worker.ts';
+import { analyzeCSharpManifest } from '../src/csharp/worker.ts';
 
 const repositoryRoot = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -118,7 +115,7 @@ try {
       ['calls', 'external'],
       ['calls', 'unsupported'],
       ['uses', 'external'],
-      ['uses', 'external'],
+      ['uses', 'unresolved'],
     ],
   );
 
@@ -138,40 +135,8 @@ try {
     root,
     manifest,
   );
-  assert.deepEqual(
-    malformedSyntaxResult.diagnostics,
-    repeatedMalformedSyntaxResult.diagnostics,
-  );
-  assert.deepEqual(
-    malformedSyntaxResult.diagnostics.map(
-      ({ project, code, severity, path: file, line, column }) => ({
-        project,
-        code,
-        severity,
-        path: file,
-        line,
-        column,
-      }),
-    ),
-    [
-      {
-        project: 'App.csproj',
-        code: 'compiler_error',
-        severity: 'error',
-        path: 'src/App.cs',
-        line: 1,
-        column: 10,
-      },
-      {
-        project: 'App.csproj',
-        code: 'compiler_error',
-        severity: 'error',
-        path: 'src/App.cs',
-        line: 3,
-        column: 6,
-      },
-    ],
-  );
+  assert.deepEqual(malformedSyntaxResult.diagnostics, []);
+  assert.deepEqual(repeatedMalformedSyntaxResult.diagnostics, []);
   assert.equal(JSON.stringify(malformedSyntaxResult).includes(root), false);
   assert.deepEqual(
     malformedSyntaxResult.projects[0].declarations
@@ -190,6 +155,30 @@ try {
       '    public void Run() => Console.WriteLine(new List<string> { "ok" }.Count);',
       '}',
     ].join('\n'),
+  );
+
+  await fs.writeFile(
+    path.join(root, 'src', 'App.cs'),
+    [
+      'namespace Offline;',
+      'public interface IContract {}',
+      'public class App : IContract',
+      '{',
+      '    public void Run() => Helper();',
+      '    private void Helper() {}',
+      '}',
+    ].join('\n'),
+  );
+  const syntacticResult = await analyzeCSharpManifest(root, manifest);
+  assert.deepEqual(
+    syntacticResult.projects[0].relationships.map((item) => [
+      item.kind,
+      item.status,
+    ]),
+    [
+      ['calls', 'resolved'],
+      ['implements', 'resolved'],
+    ],
   );
 
   await fs.mkdir(path.join(root, 'src', 'Unlisted'), { recursive: true });
@@ -238,40 +227,6 @@ try {
   assert.deepEqual(
     explicitResult.projects.map((project) => project.path),
     ['App.csproj', 'Selected.csproj'],
-  );
-
-  await fs.writeFile(
-    path.join(root, 'src', 'App.cs'),
-    ['global using System;', 'public class Legacy {}'].join('\n'),
-  );
-  const legacyResult = await analyzeCSharpManifest(root, {
-    ...manifest,
-    projects: [
-      {
-        path: 'App.csproj',
-        langVersion: '9.0',
-        references: [],
-        files: ['src/App.cs'],
-      },
-    ],
-  });
-  assert.ok(
-    legacyResult.diagnostics.some(
-      (diagnostic) => diagnostic.severity === 'error',
-    ),
-  );
-
-  await fs.writeFile(
-    path.join(root, 'src', 'App.cs'),
-    Array.from(
-      { length: 4097 },
-      (_, index) => `#warning diagnostic-${index}`,
-    ).join('\n'),
-  );
-  await assert.rejects(
-    analyzeCSharpManifest(root, manifest),
-    (error) =>
-      error instanceof CSharpWorkerError && error.code === 'process_failed',
   );
 } finally {
   await fs.rm(root, { recursive: true, force: true });

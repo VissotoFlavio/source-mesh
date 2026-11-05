@@ -10,11 +10,12 @@ import {
   type DiagnosticV2,
   type EdgeKindV2,
   type EdgeV2,
+  type EdgeV3,
   type LocationV1,
   type NodeKindV2,
   type NodeV2,
 } from '../../graph.js';
-import type { SnapshotV2 } from '../../snapshot/types.js';
+import type { SnapshotV3 } from '../../snapshot/types.js';
 import type {
   CSharpAnalysisManifest,
   CSharpManifest,
@@ -215,7 +216,7 @@ function relationDiagnostic(
 
 export function extractCSharpDeclarationGraph(
   request: ExtractCSharpDeclarationGraphRequest,
-): SnapshotV2 {
+): SnapshotV3 {
   // The root is intentionally not used in identity construction. All paths
   // reaching this adapter have already crossed the contained discovery gate.
   void request.repositoryRoot;
@@ -509,21 +510,46 @@ export function extractCSharpDeclarationGraph(
   const diagnostics = [...pendingDiagnostics.values()]
     .map((item) => ({ ...item, id: diagnosticId(item) }) as DiagnosticV2)
     .sort((left, right) => ordinal(left.id, right.id));
-  const completeness = diagnostics.some(
+  const completeness: SnapshotV3['completeness'] = diagnostics.some(
     (diagnostic) => diagnostic.severity === 'error',
   )
     ? 'partial'
     : 'complete';
-  return {
-    schemaVersion: 2,
+  const snapshot = {
+    schemaVersion: 2 as const,
     completeness,
-    repository: { root: '.', name: repository.name },
+    repository: { root: '.' as const, name: repository.name },
     nodes: nodes.sort(
       (left, right) =>
         ordinal(left.kind, right.kind) || ordinal(left.id, right.id),
     ),
     edges,
     diagnostics,
+  };
+  return {
+    ...snapshot,
+    schemaVersion: 3,
+    metadata: {
+      verification: 'unverified',
+      packs: [
+        {
+          id: 'csharp',
+          language: 'csharp',
+          version: '1.0.0',
+          capabilities: ['project-manifest', 'source-analysis'],
+        },
+      ],
+    },
+    nodes: snapshot.nodes.map((node) =>
+      node.kind === 'repository'
+        ? node
+        : { ...node, packId: 'csharp', language: 'csharp' },
+    ),
+    edges: snapshot.edges.map((edge): EdgeV3 =>
+      edge.kind === 'contains'
+        ? (edge as EdgeV3)
+        : { ...edge, packId: 'csharp', evidence: 'syntactic' as const },
+    ),
   };
 }
 

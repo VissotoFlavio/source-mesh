@@ -26,13 +26,17 @@ test(
         {
           path: 'src/App.cs',
           contents: new TextEncoder().encode(
-            'namespace WorkerIntegration; public class App { public void Run() {} }\n',
+            [
+              'namespace WorkerIntegration;',
+              'public interface IContract {}',
+              'public class App : IContract { public void Run() => Helper(); private void Helper() {} }',
+            ].join('\n'),
           ),
         },
       ],
       limits: {
         maxFiles: 1,
-        maxBytes: 128,
+        maxBytes: 1024,
         maxNodes: 32,
         maxEdges: 32,
         maxDiagnostics: 32,
@@ -43,6 +47,12 @@ test(
     assert.deepEqual(result.diagnostics, []);
     assert.equal(result.fragment?.pack.id, 'csharp');
     assert.ok(result.fragment?.nodes.some((node) => node.name === 'App'));
+    assert.equal(
+      result.fragment?.edges.some(
+        (edge) => edge.kind === 'calls' && edge.confidence === 'syntactic',
+      ),
+      true,
+    );
   },
 );
 

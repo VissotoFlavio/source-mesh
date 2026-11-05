@@ -104,7 +104,7 @@ function worker(
   };
 }
 
-test('C# extraction emits a codec-valid v2 graph and preserves unresolved boundaries', () => {
+test('C# extraction emits a codec-valid v3 graph with syntactic evidence and preserves unresolved boundaries', () => {
   const snapshot = extractCSharpDeclarationGraph({
     repositoryRoot: 'C:/one',
     manifest,
@@ -122,7 +122,7 @@ test('C# extraction emits a codec-valid v2 graph and preserves unresolved bounda
     ]),
   });
 
-  assert.equal(snapshot.schemaVersion, 2);
+  assert.equal(snapshot.schemaVersion, 3);
   assert.equal(snapshot.completeness, 'complete');
   assert.deepEqual(
     snapshot.nodes.map((node) => node.kind),
@@ -147,6 +147,7 @@ test('C# extraction emits a codec-valid v2 graph and preserves unresolved bounda
     ),
     true,
   );
+  assert.equal(snapshot.metadata.packs[0]?.id, 'csharp');
   assert.doesNotThrow(() => encodeSnapshot(snapshot));
 });
 
@@ -210,7 +211,7 @@ test('C# explicit selections compose one deterministic snapshot without adding e
   );
 });
 
-test('C# compiler diagnostics remain visible to analysis callers without making a structurally complete graph partial', () => {
+test('C# extraction does not make a structurally complete graph partial for legacy worker diagnostics', () => {
   const snapshot = extractCSharpDeclarationGraph({
     repositoryRoot: 'C:/one',
     manifest,

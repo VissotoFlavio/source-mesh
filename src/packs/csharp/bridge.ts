@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 import type { GraphFragment } from '../../packs.js';
-import type { SnapshotV2 } from '../../snapshot/types.js';
+import type { SnapshotV3 } from '../../snapshot/types.js';
 import type { CSharpAnalysisManifest } from './contracts.js';
 import { extractCSharpDeclarationGraph } from './extractor.js';
 import {
@@ -93,7 +93,7 @@ async function input(): Promise<unknown> {
 }
 
 function fragment(
-  snapshot: SnapshotV2,
+  snapshot: SnapshotV3,
   paths: ReadonlySet<string>,
 ): GraphFragment {
   const nodes = snapshot.nodes
@@ -121,7 +121,7 @@ function fragment(
         kind: edge.kind,
         from: edge.from,
         to: edge.to,
-        confidence: 'semantic' as const,
+        confidence: 'syntactic' as const,
       })),
     diagnostics: snapshot.diagnostics
       .filter(

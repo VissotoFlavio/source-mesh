@@ -10,9 +10,8 @@ import {
   type NodeV3,
 } from './graph.js';
 import type { LanguagePackManifest } from './packs.js';
-import { csharpPack } from './packs/csharp.js';
 import { typescriptPack } from './packs/typescript.js';
-import type { SnapshotV1, SnapshotV2, SnapshotV3 } from './snapshot/types.js';
+import type { SnapshotV1, SnapshotV3 } from './snapshot/types.js';
 
 function ordinal(left: string, right: string): number {
   return Buffer.from(left, 'utf8').compare(Buffer.from(right, 'utf8'));
@@ -31,7 +30,6 @@ function metadata(
 }
 
 const TYPESCRIPT_PACK = metadata(typescriptPack.manifest, 'typescript');
-const CSHARP_PACK = metadata(csharpPack.manifest, 'csharp');
 
 function parentScope(
   node: Exclude<NodeV2['kind'], 'repository'>,
@@ -103,12 +101,12 @@ function assertUnique(
  */
 export function composeMultiPackSnapshot(
   typescript: SnapshotV1,
-  csharp: SnapshotV2,
+  csharp: SnapshotV3,
 ): SnapshotV3 {
   const csharpRepository = csharp.nodes.find(
     (
       node,
-    ): node is Extract<SnapshotV2['nodes'][number], { kind: 'repository' }> =>
+    ): node is Extract<SnapshotV3['nodes'][number], { kind: 'repository' }> =>
       node.kind === 'repository',
   );
   const typescriptRepository = typescript.nodes.find(
@@ -248,25 +246,16 @@ export function composeMultiPackSnapshot(
     return { ...converted, id: diagnosticId(converted) };
   });
 
-  const csharpNodes = csharp.nodes.filter(
-    (
-      node,
-    ): node is Exclude<SnapshotV2['nodes'][number], { kind: 'repository' }> =>
-      node.kind !== 'repository',
-  );
+  const csharpNodes = csharp.nodes.filter((node) => node.kind !== 'repository');
   const nodes = [
     csharpRepository,
     v3Node(project, TYPESCRIPT_PACK),
     ...[...typescriptNodes.entries()]
       .filter(([id]) => id !== typescriptRepository.id)
       .map(([, node]) => v3Node(node, TYPESCRIPT_PACK)),
-    ...csharpNodes.map((node) => v3Node(node, CSHARP_PACK)),
+    ...csharpNodes,
   ];
-  const csharpEdges = csharp.edges.map((edge) =>
-    edge.kind === 'contains'
-      ? edge
-      : { ...edge, packId: CSHARP_PACK.id, evidence: 'semantic' as const },
-  );
+  const csharpEdges = csharp.edges;
   const edges = [...typescriptEdges, ...csharpEdges];
   const diagnostics = [...typescriptDiagnostics, ...csharp.diagnostics];
   assertUnique(nodes, 'nodes');
@@ -282,7 +271,7 @@ export function composeMultiPackSnapshot(
     repository: { root: '.', name: csharp.repository.name },
     metadata: {
       verification: 'unverified',
-      packs: [CSHARP_PACK, TYPESCRIPT_PACK],
+      packs: [...csharp.metadata.packs, TYPESCRIPT_PACK],
     },
     nodes: nodes.sort(
       (left, right) =>

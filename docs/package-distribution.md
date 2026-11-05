@@ -20,7 +20,7 @@ npm run package:check
 `package:check` runs `npm pack` to create a real tarball, verifies its payload,
 and installs it into a fresh consumer directory with an empty npm cache using
 `npm install --offline --ignore-scripts`. The installed binary then analyzes
-`test/fixtures/csharp-project`, writes a schema-v2 create-only snapshot, and
+`test/fixtures/csharp-project`, writes a schema-v3 create-only snapshot, and
 serves one MCP stdio query. The analysis and MCP child process accept only the
 fixed installed helper invocation under `scripts/deny-network.mjs`; no other
 network or subprocess path is permitted by the check.

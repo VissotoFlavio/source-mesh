@@ -34,8 +34,11 @@ test('C# MCP snapshot runbook documents the bounded generic flow', async () => {
   assert.match(content, /same repository root and snapshot path/u);
   assert.match(content, /UTF-8 is the normal source policy/u);
   assert.match(content, /it is not an automatic fallback/u);
-  assert.match(content, /maximum of 4096\s+compiler diagnostics/u);
-  assert.match(content, /from `1` to `100000`/u);
+  assert.match(content, /without restoring packages, compiling the target/u);
+  assert.match(
+    content,
+    /external or unresolved targets remain graph diagnostics/u,
+  );
   assert.equal(/[A-Za-z]:[\\/]/u.test(content), false);
   assert.equal(content.includes('E2E_SOURCE_TEXT_MARKER'), false);
   assert.equal(content.includes('E2E_SECRET_VALUE_MARKER'), false);
@@ -59,8 +62,11 @@ test('installed C# MCP snapshot guide gives a generic user and AI-host flow', as
   assert.match(content, /Create test snapshots separately/u);
   assert.match(content, /Creation is create-only/u);
   assert.match(content, /UTF-8 is the normal source policy/u);
-  assert.match(content, /maximum of 4096\s+compiler diagnostics/u);
-  assert.match(content, /from `1` to `100000`/u);
+  assert.match(content, /without restoring packages, compiling the target/u);
+  assert.match(
+    content,
+    /external or unresolved targets remain graph diagnostics/u,
+  );
   assert.match(content, /npm install --global --ignore-scripts/u);
   assert.match(content, /npm uninstall --global/u);
   assert.match(content, /"command": "<absolute-node-path>"/u);

@@ -4,6 +4,11 @@ SourceMesh is an experimental, local-first project for building a deterministic 
 
 The local CLI can analyze an explicitly selected TypeScript/JavaScript or C#/.NET repository into a contained snapshot and query symbols, files, and direct call relationships without a hosted service.
 
+C# analysis is syntax-only: it parses only the selected local source files and
+never restores packages, compiles, or executes the target. Resolved C# graph
+relationships carry syntactic evidence; targets that cannot be proved local are
+reported as external or unresolved diagnostics instead of guessed edges.
+
 ## Privacy boundary
 
 SourceMesh repository analysis is required to run locally and without runtime network access. SourceMesh itself must not transmit source code, file paths, graph data, derived metadata, prompts, or analysis results through telemetry, logging, analytics, tracing, error reporting, hosted language models, or visualization services.
