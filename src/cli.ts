@@ -7,6 +7,7 @@ import {
   createCSharpExplicitProjectSelection,
   createGraphQueryService,
   csharpPack,
+  CSharpWorkerError,
   discoverCSharpExplicitProjectManifest,
   discoverSourceFiles,
   typescriptPack,
@@ -277,6 +278,14 @@ function analysisFailure(): CliFailure {
   return new CliFailure(
     'analysis_failed',
     'The analysis could not be completed.',
+    1,
+  );
+}
+
+function sourceEncodingFailure(relativePath: string): CliFailure {
+  return new CliFailure(
+    'source_encoding_invalid',
+    `Source file is not valid UTF-8: ${relativePath}. Use --source-encoding windows-1252 if appropriate.`,
     1,
   );
 }
@@ -859,6 +868,12 @@ async function executeAnalyze(
   } catch (error) {
     if (error instanceof CliFailure) throw error;
     if (error instanceof SnapshotError) throw snapshotFailure(error);
+    if (
+      error instanceof CSharpWorkerError &&
+      error.code === 'source_encoding_invalid' &&
+      error.relativePath !== undefined
+    )
+      throw sourceEncodingFailure(error.relativePath);
     throw analysisFailure();
   }
 }

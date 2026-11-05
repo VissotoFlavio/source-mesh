@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- Report the repository-relative C# source file when it is not valid UTF-8,
+  with guidance for the explicit Windows-1252 compatibility mode (#138).
+
 ## [0.1.0-beta.7] - 2026-10-31
 
 ### Added

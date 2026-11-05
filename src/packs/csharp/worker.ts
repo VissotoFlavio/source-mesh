@@ -70,7 +70,9 @@ export class CSharpWorkerError extends Error {
       | 'input_invalid'
       | 'process_failed'
       | 'protocol_invalid'
-      | 'resource_limit',
+      | 'resource_limit'
+      | 'source_encoding_invalid',
+    readonly relativePath?: string,
   ) {
     super('The local C# analysis helper could not complete.');
     this.name = 'CSharpWorkerError';
