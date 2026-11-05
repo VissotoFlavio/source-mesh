@@ -15,6 +15,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- Supported bounded long C# paths and qualified names in schema-v3 snapshots,
+  including chunked local-worker responses and explicit partial-result handling
+  when a declaration exceeds the transport budget (#148).
+
 - Report the repository-relative C# source file when it is not valid UTF-8,
   with guidance for the explicit Windows-1252 compatibility mode (#138).
 

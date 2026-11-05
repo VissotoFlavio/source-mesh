@@ -58,7 +58,10 @@ export const MAX_PACK_PROVENANCE_TEXT_BYTES = 64;
 // to the new V3 response fields and the V2 graph values V3 exposes again.
 // Text rejects JSON control characters so its serialized form cannot expand
 // beyond the small, documented escape overhead for quotes and backslashes.
-export const MAX_V3_QUERY_TEXT_BYTES = 64;
+// V3 node summaries are repeated across query and MCP response pages. This
+// leaves a generous margin below the 1 MiB MCP frame budget for 100 results
+// while accommodating real C# paths and qualified symbols.
+export const MAX_V3_NODE_TEXT_BYTES = 256;
 export const MAX_V3_QUERY_LOCATIONS_PER_NODE = 1;
 const MAX_V3_METADATA_TEXT_BYTES = 1024;
 const kinds = new Set<NodeKind>([
@@ -272,14 +275,14 @@ function locationsV2(value: unknown): readonly LocationV1[] | undefined {
   return locations(value, true);
 }
 function validateV3QueryNodeFields(node: Record<string, unknown>): void {
-  transportText(node.name, 'v3 node name', MAX_V3_QUERY_TEXT_BYTES);
+  transportText(node.name, 'v3 node name', MAX_V3_NODE_TEXT_BYTES);
   if (node.kind === 'repository') return;
-  transportText(node.path, 'v3 node path', MAX_V3_QUERY_TEXT_BYTES);
+  transportText(node.path, 'v3 node path', MAX_V3_NODE_TEXT_BYTES);
   if (node.kind !== 'file')
     transportText(
       node.qualifiedName,
       'v3 node qualified name',
-      MAX_V3_QUERY_TEXT_BYTES,
+      MAX_V3_NODE_TEXT_BYTES,
     );
   if (node.locations === undefined) return;
   const rawLocations = array(node.locations, 'v3 node locations');
@@ -289,7 +292,7 @@ function validateV3QueryNodeFields(node: Record<string, unknown>): void {
   );
   for (const rawLocation of rawLocations) {
     const item = object(rawLocation, 'v3 node location');
-    transportText(item.path, 'v3 node location path', MAX_V3_QUERY_TEXT_BYTES);
+    transportText(item.path, 'v3 node location path', MAX_V3_NODE_TEXT_BYTES);
   }
 }
 function id(value: unknown, prefix: 'n' | 'e' | 'd'): string {
