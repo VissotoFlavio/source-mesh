@@ -181,6 +181,29 @@ try {
     ],
   );
 
+  await fs.writeFile(
+    path.join(root, 'src', 'App.cs'),
+    [
+      'namespace Offline;',
+      'public class App',
+      '{',
+      '    public void Run() => Helper();',
+      '}',
+      'public class Other',
+      '{',
+      '    private void Helper() {}',
+      '}',
+    ].join('\n'),
+  );
+  const crossTypeCallResult = await analyzeCSharpManifest(root, manifest);
+  assert.deepEqual(
+    crossTypeCallResult.projects[0].relationships.map((item) => [
+      item.kind,
+      item.status,
+    ]),
+    [['calls', 'unresolved']],
+  );
+
   await fs.mkdir(path.join(root, 'src', 'Unlisted'), { recursive: true });
   await fs.writeFile(
     path.join(root, 'src', 'Unlisted', 'Unlisted.csproj'),

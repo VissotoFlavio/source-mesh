@@ -440,6 +440,18 @@ internal static class Program
         return null;
     }
 
+    static SymbolResult? FindContainingType(ProjectAnalysis analysis, SyntaxNode node)
+    {
+        for (SyntaxNode? current = node; current is not null; current = current.Parent)
+            if (analysis.Symbols.TryGetValue(current, out var result) && result.Kind is "class" or "interface" or "type")
+                return result;
+        return null;
+    }
+
+    static bool IsFunctionMemberOf(SymbolResult function, SymbolResult type) =>
+        function.Kind == "function" &&
+        function.QualifiedName.StartsWith($"{type.QualifiedName}.", StringComparison.Ordinal);
+
     static (string Status, SymbolResult? Target) Resolve(
         IReadOnlyList<SymbolResult> allSymbols,
         string name,
@@ -525,8 +537,11 @@ internal static class Program
                 if (node is InvocationExpressionSyntax invocation)
                 {
                     var source = FindFunction(analysis, node) ?? module;
-                    if (invocation.Expression is IdentifierNameSyntax identifier)
-                        SyntacticRelationship(analysis, allSymbols, "calls", source, identifier.Identifier.ValueText, node, target => target.Kind == "function");
+                    var containingType = FindContainingType(analysis, node);
+                    if (invocation.Expression is IdentifierNameSyntax identifier && containingType is not null)
+                        SyntacticRelationship(analysis, allSymbols, "calls", source, identifier.Identifier.ValueText, node, target => IsFunctionMemberOf(target, containingType));
+                    else if (invocation.Expression is IdentifierNameSyntax)
+                        Relationship(analysis, "calls", "unresolved", source, null, node);
                     else
                         Relationship(analysis, "calls", "external", source, null, node);
                 }
