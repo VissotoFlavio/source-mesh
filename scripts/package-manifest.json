@@ -3,7 +3,7 @@
   "dotnetFramework": "net10.0",
   "helperPath": "tools/sourcemesh-roslyn/bin/Release/net10.0",
   "helperIntegrityFile": "sourcemesh-roslyn.integrity.json",
-  "helperPayloadBytes": 17090191,
+  "helperPayloadBytes": 17090703,
   "maxTarballBytes": 26214400,
   "bundledDependencies": ["@modelcontextprotocol/server", "typescript"],
   "bundledPackages": [
@@ -54,7 +54,7 @@
     },
     {
       "path": "sourcemesh-roslyn.dll",
-      "bytes": 66048
+      "bytes": 66560
     },
     {
       "path": "sourcemesh-roslyn.runtimeconfig.json",
