@@ -48,6 +48,11 @@ automation may explicitly pass a positive `timeoutMs` within Node's timer range;
 users can cancel a local command normally instead of being failed by an arbitrary
 default timeout.
 
+The helper uses Roslyn syntax trees only. It does not restore packages, load
+target references, create a compilation, or execute analyzed code. Its local
+relationships are conservative syntactic observations; unknown targets are
+returned as sanitized relationship outcomes for the Node boundary.
+
 The package remains framework-dependent: a consumer must have .NET 10 installed
 at `C:\Program Files\dotnet\dotnet.exe`. Consumer installation uses
 `npm install --offline --ignore-scripts`; it never restores, compiles, downloads,

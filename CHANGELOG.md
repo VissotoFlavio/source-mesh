@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Changed
+
+- Replaced C# compilation-backed extraction with deterministic local syntax-tree
+  analysis. C# snapshots now use schema v3 provenance and mark resolved local
+  relationships as syntactic evidence; package references, target compilation,
+  and compiler diagnostics no longer gate snapshot creation (#140).
+
 ### Fixed
 
 - Report the repository-relative C# source file when it is not valid UTF-8,

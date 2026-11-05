@@ -353,7 +353,7 @@ async function verifyPackageRoot(root, { installed = false } = {}) {
     'exactly one repository-relative selection mode',
     'repeat `--project`',
     'UTF-8 is the normal source policy.',
-    'maximum of 4096 compiler diagnostics',
+    'without restoring packages, compiling the target, or reporting compiler diagnostics',
   ]) {
     if (!normalizedGuide.includes(phrase)) fail('package_csharp_guide_invalid');
   }

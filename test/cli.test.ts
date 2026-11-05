@@ -17,7 +17,7 @@ import type {
   QueryResponseV1,
   SearchResponseV1,
   Snapshot,
-  SnapshotV2,
+  SnapshotV3,
 } from '../src/index.js';
 
 function capture(): CliIO & {
@@ -555,14 +555,14 @@ test(
   },
 );
 
-test('csharp analyze writes a v2 versioned create-only snapshot', async () => {
+test('csharp analyze writes a v3 versioned create-only snapshot', async () => {
   const manifest = {
     language: 'csharp' as const,
     selection: { kind: 'project' as const, path: 'App.csproj' },
     projects: [{ path: 'App.csproj', references: [], files: ['App.cs'] }],
   };
-  const snapshot: SnapshotV2 = {
-    schemaVersion: 2,
+  const snapshot: SnapshotV3 = {
+    schemaVersion: 3,
     completeness: 'complete',
     repository: { root: '.', name: 'repository' },
     nodes: [
@@ -575,8 +575,9 @@ test('csharp analyze writes a v2 versioned create-only snapshot', async () => {
     ],
     edges: [],
     diagnostics: [],
+    metadata: { verification: 'unverified', packs: [] },
   };
-  for (const snapshotId of ['csharp-v2']) {
+  for (const snapshotId of ['csharp-v3']) {
     let writes = 0;
     const io = capture();
     assert.equal(
@@ -603,8 +604,8 @@ test('csharp analyze writes a v2 versioned create-only snapshot', async () => {
           extractCSharpDeclarationGraph: () => snapshot,
           writeSnapshot: async (_root, value, options) => {
             writes += 1;
-            assert.equal(value.schemaVersion, 2);
-            assert.equal(options.path, '.sourcemesh/snapshots/csharp-v2.json');
+            assert.equal(value.schemaVersion, 3);
+            assert.equal(options.path, '.sourcemesh/snapshots/csharp-v3.json');
             return {
               path: '/repo/.sourcemesh/result.json',
               digest: 'b'.repeat(64),
@@ -618,18 +619,18 @@ test('csharp analyze writes a v2 versioned create-only snapshot', async () => {
     );
     assert.equal(writes, 1);
     assert.equal(io.stderrValue, '');
-    assert.equal(JSON.parse(io.stdoutValue).schemaVersion, 2);
+    assert.equal(JSON.parse(io.stdoutValue).schemaVersion, 3);
   }
 });
 
-test('csharp analyze forwards public compiler options and reports compiler diagnostics', async () => {
+test('csharp analyze forwards its source-encoding option without compiler diagnostics', async () => {
   const manifest = {
     language: 'csharp' as const,
     selection: { kind: 'project' as const, path: 'App.csproj' },
     projects: [{ path: 'App.csproj', references: [], files: ['App.cs'] }],
   };
-  const snapshot: SnapshotV2 = {
-    schemaVersion: 2,
+  const snapshot: SnapshotV3 = {
+    schemaVersion: 3,
     completeness: 'complete',
     repository: { root: '.', name: 'repository' },
     nodes: [
@@ -642,6 +643,7 @@ test('csharp analyze forwards public compiler options and reports compiler diagn
     ],
     edges: [],
     diagnostics: [],
+    metadata: { verification: 'unverified', packs: [] },
   };
   let receivedOptions: unknown;
   const io = capture();
@@ -659,8 +661,6 @@ test('csharp analyze forwards public compiler options and reports compiler diagn
         'App.csproj',
         '--source-encoding',
         'windows-1252',
-        '--max-diagnostics',
-        '100000',
         '--output',
         'json',
       ],
@@ -670,18 +670,7 @@ test('csharp analyze forwards public compiler options and reports compiler diagn
           receivedOptions = options;
           return {
             projects: [],
-            diagnostics: [
-              {
-                project: 'App.csproj',
-                code: 'compiler_error',
-                severity: 'error',
-              },
-              {
-                project: 'App.csproj',
-                code: 'compiler_warning',
-                severity: 'warning',
-              },
-            ],
+            diagnostics: [],
           };
         },
         extractCSharpDeclarationGraph: () => snapshot,
@@ -692,7 +681,6 @@ test('csharp analyze forwards public compiler options and reports compiler diagn
   );
   assert.deepEqual(receivedOptions, {
     sourceEncoding: 'windows-1252',
-    maxDiagnostics: 100_000,
   });
   assert.deepEqual(JSON.parse(io.stdoutValue).result, {
     snapshotPath: '.sourcemesh/snapshots/csharp-options.json',
@@ -701,7 +689,6 @@ test('csharp analyze forwards public compiler options and reports compiler diagn
     bytes: 12,
     handover:
       'Start a new MCP process with --snapshot .sourcemesh/snapshots/csharp-options.json; existing MCP processes remain pinned to their original snapshot.',
-    compilerDiagnostics: { total: 2, errors: 1, warnings: 1 },
   });
 });
 

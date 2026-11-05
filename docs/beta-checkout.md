@@ -56,8 +56,9 @@ node --import $offlineGuardUri .\dist\cli.js analyze --root <repository-root> --
 For an intentionally single-project target, replace `--solution` with
 `--project <relative-project-path>`. For a TypeScript/JavaScript target, omit
 the C# selector. Use `--source-encoding windows-1252` only when a target is
-known to require it, and choose `--max-diagnostics 1..100000` only when the
-default diagnostic budget is insufficient.
+known to require it. The C# helper parses only the selected local source files;
+it does not restore packages, compile the target, or report compiler
+diagnostics.
 
 For an approved local application subset, repeat `--project` once for each
 chosen root-relative `.csproj`; ordering does not affect the snapshot. Omitted

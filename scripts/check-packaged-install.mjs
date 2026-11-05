@@ -361,7 +361,7 @@ try {
     'json',
   ];
   const analysis = await runCli(cli, analyzeArgs(initialSnapshotId), consumer);
-  assert.equal(analysis.schemaVersion, 2);
+  assert.equal(analysis.schemaVersion, 3);
   assert.equal(analysis.result?.snapshotPath, initialSnapshotPath);
   const snapshot = path.join(fixture, ...initialSnapshotPath.split('/'));
   const snapshotBytes = await readFile(snapshot);
@@ -388,7 +388,7 @@ try {
   const handoverSnapshotId = 'package-handover';
   const handoverSnapshotPath = `.sourcemesh/snapshots/${handoverSnapshotId}.json`;
   const handover = await runCli(cli, analyzeArgs(handoverSnapshotId), consumer);
-  assert.equal(handover.schemaVersion, 2);
+  assert.equal(handover.schemaVersion, 3);
   assert.equal(handover.result?.snapshotPath, handoverSnapshotPath);
   await verifyMcp(cli, fixture, consumer, initialSnapshotPath);
   await verifyMcp(cli, fixture, consumer, handoverSnapshotPath);
