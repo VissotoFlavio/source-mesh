@@ -55,10 +55,11 @@ async function embeddedResources(
   for (const tag of projectSource.matchAll(/<EmbeddedResource\s+[^>]*>/gu)) {
     const include = /\bInclude\s*=\s*"([^"]+)"/u.exec(tag[0])?.[1];
     if (include === undefined) continue;
+    const portableInclude = include.replaceAll(/[/\\]/gu, path.sep);
     const absolute = path.resolve(
       sourceRoot,
       path.dirname(projectPath),
-      include,
+      portableInclude,
     );
     const relative = path.relative(sourceRoot, absolute);
     if (
