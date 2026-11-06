@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- Added an optional, host-agnostic SourceMesh MCP skill for safe incremental
+  graph queries; it is versioned separately from the distributed package (#156).
+
 ### Changed
 
 - Reworked the public README around installed-package onboarding, the local

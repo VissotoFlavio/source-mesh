@@ -115,7 +115,10 @@ Use an incremental query flow:
 Do not infer compilation success, NuGet/package resolution, external calls,
 dynamic dispatch, or relationships that the snapshot does not explicitly
 return. An optional, separately installed agent skill may provide this operating
-guidance in `SKILL.md` form, but no skill is required to use MCP.
+guidance in `SKILL.md` form, but no skill is required to use MCP. The
+[SourceMesh skill](https://github.com/VissotoFlavio/source-mesh/blob/develop/skills/sourcemesh/SKILL.md)
+is versioned separately from the package and can be installed according to the
+host's own skill-installation rules.
 
 ## Maintainer workflow
 

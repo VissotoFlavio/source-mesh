@@ -153,6 +153,14 @@ async function runCli(cli, args, cwd) {
   return JSON.parse(result.stdout);
 }
 
+function responsePage(result) {
+  assert.ok(result.structuredContent);
+  const page = result.structuredContent.page;
+  assert.ok(page && typeof page === 'object');
+  assert.ok(Array.isArray(page.items));
+  return page;
+}
+
 async function verifyMcp(cli, root, cwd, snapshot) {
   let stderr = '';
   const env = cleanEnvironment();
@@ -203,12 +211,49 @@ async function verifyMcp(cli, root, cwd, snapshot) {
       client.getInstructions()?.includes(csharpMcpSnapshotGuide),
       true,
     );
-    const result = await client.callTool({
+    const search = await client.callTool({
       name: 'searchSymbols',
-      arguments: { query: 'Entry' },
+      arguments: { query: 'Application', limit: 1 },
     });
-    assert.equal(result.isError ?? false, false);
-    assert.ok(result.structuredContent);
+    assert.equal(search.isError ?? false, false);
+    const searchPage = responsePage(search);
+    const symbolId = searchPage.items[0]?.id;
+    assert.equal(typeof symbolId, 'string');
+    const details = await client.callTool({
+      name: 'getSymbol',
+      arguments: { nodeId: symbolId },
+    });
+    assert.equal(details.isError ?? false, false);
+    assert.ok(details.structuredContent);
+    const detailedSymbolId = details.structuredContent.symbol?.id;
+    assert.equal(detailedSymbolId, symbolId);
+    const callees = await client.callTool({
+      name: 'listCallees',
+      arguments: {
+        function: { name: 'Run', containerId: detailedSymbolId },
+      },
+    });
+    assert.equal(callees.isError ?? false, false);
+    assert.ok(callees.structuredContent);
+    const firstPage = await client.callTool({
+      name: 'searchSymbols',
+      arguments: { query: 'FormatValue', limit: 1 },
+    });
+    assert.equal(firstPage.isError ?? false, false);
+    const first = responsePage(firstPage);
+    assert.equal(first.truncated, true);
+    assert.equal(typeof first.continuation, 'string');
+    const secondPage = await client.callTool({
+      name: 'searchSymbols',
+      arguments: {
+        query: 'FormatValue',
+        limit: 1,
+        cursor: first.continuation,
+      },
+    });
+    assert.equal(secondPage.isError ?? false, false);
+    const second = responsePage(secondPage);
+    assert.notEqual(second.items[0]?.id, first.items[0]?.id);
   } finally {
     await client.close().catch(() => undefined);
   }
@@ -291,6 +336,14 @@ try {
     /Generate the snapshot before configuring or starting\s+MCP\./u,
   );
   assert.equal(/[A-Za-z]:[\\/]/u.test(installedGuide), false);
+  const installedReadme = await readFile(
+    path.join(installed, 'README.md'),
+    'utf8',
+  );
+  assert.match(
+    installedReadme,
+    /https:\/\/github\.com\/VissotoFlavio\/source-mesh\/blob\/develop\/skills\/sourcemesh\/SKILL\.md/u,
+  );
   await command(process.execPath, [
     path.join(repository, 'scripts', 'check-package.mjs'),
     '--root',
