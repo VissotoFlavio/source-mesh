@@ -10,9 +10,7 @@
   "manifest": {
     "id": "external-csharp-medium",
     "fixture": "external-csharp-medium",
-    "languages": [
-      "csharp"
-    ]
+    "languages": ["csharp"]
   },
   "scenarios": [
     {
