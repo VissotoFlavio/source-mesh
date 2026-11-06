@@ -41,6 +41,18 @@ async function fileTree(
 
 test('benchmark manifests reject duplicate scenario ids and invalid analyses', () => {
   validateBenchmarkManifest(OFFICIAL_SYNTHETIC_MANIFEST);
+  assert.doesNotThrow(() =>
+    validateBenchmarkManifest({
+      ...OFFICIAL_SYNTHETIC_MANIFEST,
+      scenarios: [
+        {
+          ...OFFICIAL_SYNTHETIC_MANIFEST.scenarios[0],
+          id: 'feature-investigation',
+          category: 'feature-investigation',
+        },
+      ],
+    }),
+  );
   assert.throws(() =>
     validateBenchmarkManifest({
       ...OFFICIAL_SYNTHETIC_MANIFEST,
@@ -193,6 +205,9 @@ test('external C# staging copies only the explicit selection into a temporary ro
     await assert.doesNotReject(() =>
       fs.access(path.join(staged.root, 'Library.csproj')),
     );
+    await assert.doesNotReject(() =>
+      fs.access(path.join(staged.root, 'data', 'resource.json')),
+    );
   } finally {
     await staged.cleanup();
   }
@@ -232,11 +247,14 @@ test('external C# public reports retain only sanitized aggregate data', () => {
     tokenMetrics: [],
     limitations: [],
   } satisfies BenchmarkReport;
-  const sanitized = JSON.stringify(sanitizeExternalReport(report));
+  const sanitized = JSON.stringify(
+    sanitizeExternalReport(report, 'feature-investigation'),
+  );
   assert.equal(sanitized.includes('private-manifest'), false);
   assert.equal(sanitized.includes('private-fixture'), false);
   assert.equal(sanitized.includes('private-fixture-commit'), false);
   assert.equal(sanitized.includes('baselineQueryMs'), false);
   assert.equal(sanitized.includes('warmQueryMs'), false);
   assert.match(sanitized, /external-csharp-medium/u);
+  assert.match(sanitized, /feature-investigation/u);
 });

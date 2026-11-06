@@ -112,3 +112,90 @@ import-only protocol and requires separate authorization for hosted models.
 Append `--diagnostics` while investigating a failed run. It writes bounded
 stage, exit-code, and sanitized diagnostic-code events to stderr; it never
 prints target paths, source content, queries, or expected values.
+
+## Observed external C# result
+
+The public [five-run report](../benchmarks/results/external-csharp-medium-rerun.json)
+records an explicitly selected, single external C# application project under
+the generic label `external-csharp-medium`. It contains no target source,
+identifiers, absolute paths, prompts, or detailed local scenario records.
+
+| Measurement                    |          Median |
+| ------------------------------ | --------------: |
+| File discovery                 |   2,273.7962 ms |
+| Analysis and snapshot creation |   5,887.1876 ms |
+| MCP initialization             |   1,665.9437 ms |
+| Warm SourceMesh query          |       1.6218 ms |
+| Snapshot size                  | 4,758,563 bytes |
+
+The documented textual baseline examined 202 files and used 203 operations per
+scenario. SourceMesh used one query operation after preparation. Across the 20
+scenario runs, both strategies had recall 1.0; baseline precision was 1.0 and
+SourceMesh precision was 0.875 because one query produced a false positive.
+No token metrics were collected. These host-specific observations do not prove
+an end-to-end workflow or token improvement; the snapshot and MCP preparation
+costs remain part of any comparison.
+
+## Real-world feature investigation
+
+This additional external C# observation models the first, structural phase of a
+real feature investigation: discover an anonymous public listing candidate,
+then locate its application component, persistence abstraction, data component,
+and response contract. The private target was inspected statically to establish
+ground truth before measurement. The API alone cannot prove which frontend page
+uses a route, so the result is deliberately described as a candidate public
+listing flow rather than a confirmed screen integration.
+
+The baseline used the same documented textual-search and file-reading workflow
+as the official suite. The augmented workflow used `searchSymbols` on a local
+MCP snapshot, then required normal file reading for filters, ordering,
+pagination, and data-transformation rules. The public report does not include
+target identifiers, paths, code, prompts, or detailed answers.
+
+The generic, illustrative shape was:
+
+```text
+Public endpoint -> application component -> persistence abstraction/data component -> response
+```
+
+The [five-run sanitized report](../benchmarks/results/feature-investigation-external-csharp.json)
+contains five independent structural-discovery scenarios. It uses an explicitly
+selected four-project boundary and therefore correctly labels MCP results as
+`partial`: project references outside that explicit boundary were not expanded.
+That status means the graph must not be treated as a complete execution or
+impact graph.
+
+| Measurement                    |           Median |
+| ------------------------------ | ---------------: |
+| File discovery                 |   12,350.1832 ms |
+| Analysis and snapshot creation |   36,396.1607 ms |
+| MCP initialization             |    6,652.1584 ms |
+| Warm SourceMesh query          |        2.7389 ms |
+| Snapshot size                  | 49,307,597 bytes |
+
+Each baseline scenario examined 941 files and used 942 operations; each
+SourceMesh scenario used one warm query after preparation. Both returned the
+independently verified structural target in all 25 scenario runs (precision and
+recall 1.0). This does not establish an end-to-end developer or agent speedup:
+the cold preparation cost is substantial, business rules still required source
+reading, and no hosted model or token telemetry was used.
+
+## False-positive investigation
+
+The earlier external observation had SourceMesh precision 0.875 and recall 1.0.
+The local, ignored diagnostic reproduces the affected case: a broad
+`searchSymbols` query returned the exact target and one additional symbol whose
+name contains the query text. The snapshot was complete for its selected
+single-project boundary.
+
+The evidence classifies this as a **query/filtering** limitation, not a C#
+extraction or relationship-resolution failure: `searchSymbols` intentionally
+matches substrings of names and qualified names for discovery. A versioned
+synthetic test now records that behavior. It was not observed in the five
+feature-investigation targets, but users should make an exact selection after a
+broad discovery query and must not infer a unique result from substring search.
+
+Recommended follow-up: design an explicit exact-name search mode (or an
+equivalent client-side selection convention), retain broad search for discovery,
+and add regression coverage before changing the public query contract. No
+analyzer-resolution behavior was changed in this benchmark PR.

@@ -3,6 +3,7 @@ import {
   lstat,
   mkdir,
   mkdtemp,
+  readFile,
   realpath,
   rm,
 } from 'node:fs/promises';
@@ -42,10 +43,41 @@ async function copyRegularFile(
   await copyFile(source, destination);
 }
 
+async function embeddedResources(
+  sourceRoot: string,
+  projectPath: string,
+): Promise<readonly string[]> {
+  const projectSource = await readFile(
+    path.join(sourceRoot, projectPath),
+    'utf8',
+  );
+  const resources: string[] = [];
+  for (const tag of projectSource.matchAll(/<EmbeddedResource\s+[^>]*>/gu)) {
+    const include = /\bInclude\s*=\s*"([^"]+)"/u.exec(tag[0])?.[1];
+    if (include === undefined) continue;
+    const portableInclude = include.replaceAll(/[/\\]/gu, path.sep);
+    const absolute = path.resolve(
+      sourceRoot,
+      path.dirname(projectPath),
+      portableInclude,
+    );
+    const relative = path.relative(sourceRoot, absolute);
+    if (
+      relative === '' ||
+      path.isAbsolute(relative) ||
+      relative.split(path.sep).includes('..')
+    )
+      throw invalidSelection();
+    resources.push(relative.replaceAll(path.sep, '/'));
+  }
+  return resources;
+}
+
 /**
  * Builds a disposable, source-only copy of one explicit C# selection. It uses
- * the same discovery boundary as analysis, then copies only approved .cs and
- * .csproj files. No target-repository path is ever used as an output path.
+ * the same discovery boundary as analysis, then copies approved `.cs`,
+ * `.csproj`, and explicitly declared embedded-resource files. No target
+ * repository path is ever used as an output path.
  */
 export async function stageExternalCSharpProject(
   selectionInput: ExternalCSharpSelection,
@@ -75,6 +107,8 @@ export async function stageExternalCSharpProject(
       approved.add(project.path);
       for (const reference of project.references) approved.add(reference);
       for (const file of project.files) approved.add(file);
+      for (const resource of await embeddedResources(sourceRoot, project.path))
+        approved.add(resource);
     }
     for (const relativePath of [...approved].sort())
       await copyRegularFile(sourceRoot, stagedRoot, relativePath);
