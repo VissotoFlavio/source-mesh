@@ -47,6 +47,8 @@ const csharpFixture = path.join(
   'csharp-project',
 );
 const csharpMcpSnapshotGuide = 'docs/csharp-mcp-snapshot-package-guide.md';
+const sourcemeshSkillUrl =
+  'https://github.com/VissotoFlavio/source-mesh/blob/d510d70ad21f3808637d0b403d42ac0528a7f59d/skills/sourcemesh/SKILL.md';
 
 function cleanEnvironment(overrides = {}) {
   return {
@@ -342,7 +344,11 @@ try {
   );
   assert.match(
     installedReadme,
-    /https:\/\/github\.com\/VissotoFlavio\/source-mesh\/blob\/develop\/skills\/sourcemesh\/SKILL\.md/u,
+    new RegExp(sourcemeshSkillUrl.replaceAll('.', '\\.'), 'u'),
+  );
+  assert.equal(
+    installedReadme.includes('/blob/develop/skills/sourcemesh/SKILL.md'),
+    false,
   );
   await command(process.execPath, [
     path.join(repository, 'scripts', 'check-package.mjs'),
