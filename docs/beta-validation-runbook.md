@@ -25,10 +25,10 @@ flow in [the installed-package guide](csharp-mcp-snapshot-package-guide.md) or
 [the checkout guide](beta-checkout.md). Before starting:
 
 1. Confirm the target is local, approved, and quiescent.
-2. Choose exactly one selection mode: a legacy relative solution, an
-   intentionally single relative project, or a bounded set of relative C#
-   projects supplied with repeatable `--project` options. Do not combine
-   `--solution` and `--project`, and do not infer membership from folders.
+2. Choose exactly one selection mode: a relative solution or an exact set of
+   one or more relative C# projects supplied with repeatable `--project`
+   options. Do not combine `--solution` and `--project`, and do not infer
+   membership from folders.
 3. Choose a new snapshot ID and confirm the derived file does not already
    exist. Never delete or overwrite a snapshot to make a test pass.
 4. Start MCP only after `analyze` exits successfully, using the same root and

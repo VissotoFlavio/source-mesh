@@ -9,6 +9,8 @@ import { Client } from '@modelcontextprotocol/client';
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 import { discoverSourceFiles } from '../discovery.js';
 import { discoverCSharpManifest } from '../csharp/discovery.js';
+import { createCSharpExplicitProjectSelection } from '../csharp/contracts.js';
+import { discoverCSharpExplicitProjectManifest } from '../csharp/discovery.js';
 import { openValidatedSnapshot } from '../snapshot/bootstrap.js';
 import type { Snapshot } from '../snapshot/types.js';
 import {
@@ -28,6 +30,11 @@ interface ProcessResult {
   readonly stderr: string;
 }
 
+export type BenchmarkDiagnostic = (
+  event: string,
+  details: Readonly<Record<string, number | string>>,
+) => void;
+
 interface MeasuredStrategy {
   readonly result: StrategyResult;
   readonly elapsedMs: number;
@@ -37,7 +44,39 @@ export interface RunBenchmarkOptions {
   readonly repository: string;
   readonly manifest: BenchmarkManifest;
   readonly runs: number;
+  readonly fixtureRoot?: string;
   readonly tokenMetrics?: BenchmarkReport['tokenMetrics'];
+  readonly onDiagnostic?: BenchmarkDiagnostic;
+}
+
+function diagnostic(
+  options: RunBenchmarkOptions,
+  event: string,
+  details: Readonly<Record<string, number | string>> = {},
+): void {
+  options.onDiagnostic?.(event, details);
+}
+
+function childDiagnosticCodes(stderr: string): string {
+  const codes = new Set<string>();
+  for (const line of stderr.split(/\r?\n/u)) {
+    const diagnosticMatch = /^\[diagnostic\] [a-z.]+: ([a-z_,-]+)$/u.exec(line);
+    if (diagnosticMatch?.[1] !== undefined) codes.add(diagnosticMatch[1]);
+    try {
+      const parsed: unknown = JSON.parse(line);
+      const code =
+        parsed !== null && typeof parsed === 'object'
+          ? (parsed as { readonly error?: { readonly code?: unknown } }).error
+              ?.code
+          : undefined;
+      if (typeof code === 'string' && /^[a-z_]{1,64}$/u.test(code))
+        codes.add(code);
+    } catch {
+      // Child stderr is untrusted; only recognized, bounded diagnostic codes
+      // are surfaced to the caller.
+    }
+  }
+  return [...codes].sort().join(',') || 'unclassified';
 }
 
 function failureResult(
@@ -48,6 +87,7 @@ function failureResult(
 ): StrategyResult {
   return {
     elapsedMs,
+    preparationOperations: 0,
     operations,
     filesExamined: 0,
     returnedBytes: 0,
@@ -61,11 +101,12 @@ function failureResult(
 function result(
   scenario: BenchmarkScenario,
   metrics: Omit<StrategyResult, 'accuracy' | 'status'>,
+  status: StrategyResult['status'] = 'complete',
 ): StrategyResult {
   return {
     ...metrics,
     accuracy: calculateAccuracy(scenario.expected.values, metrics.values),
-    status: 'complete',
+    status,
   };
 }
 
@@ -92,6 +133,8 @@ async function analyzeFixture(
   root: string,
   snapshotId: string,
   manifest: BenchmarkManifest,
+  diagnostics: RunBenchmarkOptions['onDiagnostic'],
+  run: number,
 ): Promise<void> {
   const cli = path.join(repository, 'dist', 'cli.js');
   const denyNetwork = path.join(repository, 'scripts', 'deny-network.mjs');
@@ -104,13 +147,31 @@ async function analyzeFixture(
     root,
     '--snapshot-id',
     snapshotId,
+    ...(diagnostics === undefined ? [] : ['--diagnostics']),
     ...(manifest.analysis.language === 'typescript'
       ? ['--tsconfig', manifest.analysis.tsconfig]
-      : ['--language', 'csharp', '--solution', manifest.analysis.solution]),
+      : [
+          '--language',
+          'csharp',
+          ...(manifest.analysis.solution === undefined
+            ? manifest.analysis.projects!.flatMap((project) => [
+                '--project',
+                project,
+              ])
+            : ['--solution', manifest.analysis.solution]),
+        ]),
     '--output',
     'json',
   ]);
-  if (execution.code !== 0) throw new Error('SourceMesh analysis failed.');
+  if (execution.code !== 0) {
+    const codes = childDiagnosticCodes(execution.stderr);
+    diagnostics?.('analysis.failed', {
+      run,
+      exitCode: execution.code === null ? 'signal' : execution.code,
+      codes,
+    });
+    throw new Error(`SourceMesh analysis failed (${codes}).`);
+  }
 }
 
 function pageItems(value: unknown): readonly Record<string, unknown>[] {
@@ -215,13 +276,20 @@ async function sourceMeshScenario(
     const elapsedMs = performance.now() - started;
     return {
       elapsedMs,
-      result: result(scenario, {
-        elapsedMs,
-        operations,
-        filesExamined: 0,
-        returnedBytes: Buffer.byteLength(JSON.stringify(responses)),
-        values,
-      }),
+      result: result(
+        scenario,
+        {
+          elapsedMs,
+          preparationOperations: scenario.strategy.startsWith('list-file-')
+            ? 1
+            : 0,
+          operations,
+          filesExamined: 0,
+          returnedBytes: Buffer.byteLength(JSON.stringify(responses)),
+          values,
+        },
+        snapshot.completeness === 'partial' ? 'partial' : 'complete',
+      ),
     };
   } catch {
     const elapsedMs = performance.now() - started;
@@ -330,6 +398,7 @@ async function baselineScenario(
       elapsedMs,
       result: result(scenario, {
         elapsedMs,
+        preparationOperations: 0,
         operations: files.length + 1,
         filesExamined: files.length,
         returnedBytes: Buffer.byteLength(JSON.stringify(values)),
@@ -411,24 +480,46 @@ export async function runBenchmark(
     options.runs > 20
   )
     throw new TypeError('runs');
-  const fixture = path.resolve(options.repository, options.manifest.fixture);
+  const fixture =
+    options.fixtureRoot ??
+    path.resolve(options.repository, options.manifest.fixture);
   const fixtureInfo = await stat(fixture);
   if (!fixtureInfo.isDirectory())
     throw new Error('Benchmark fixture is missing.');
   const samples: TimingSample[] = [];
-  let scenarioResults: readonly ScenarioRun[] = [];
+  const scenarioRuns: ScenarioRun[][] = [];
   for (let run = 1; run <= options.runs; run += 1) {
     const root = await mkdtemp(path.join(os.tmpdir(), 'sourcemesh-benchmark-'));
     try {
       await cp(fixture, root, { recursive: true });
+      diagnostic(options, 'fixture.copied', { run });
       const discoveryStarted = performance.now();
       if (options.manifest.analysis.language === 'typescript')
         await discoverSourceFiles(root);
-      else
+      else if (options.manifest.analysis.solution !== undefined)
         await discoverCSharpManifest(root, {
           solution: options.manifest.analysis.solution,
         });
+      else {
+        const selection = createCSharpExplicitProjectSelection(
+          options.manifest.analysis.projects!,
+        );
+        if (selection.selection === undefined)
+          throw new Error('Benchmark C# project selection is invalid.');
+        const discovered = await discoverCSharpExplicitProjectManifest(
+          root,
+          selection.selection,
+        );
+        if (discovered.manifest === undefined) {
+          const codes =
+            discovered.diagnostics.map((item) => item.code).join(',') ||
+            'failed';
+          diagnostic(options, 'csharp.discovery.failed', { run, codes });
+          throw new Error(`Benchmark C# project discovery failed (${codes}).`);
+        }
+      }
       const discoveryMs = performance.now() - discoveryStarted;
+      diagnostic(options, 'discovery.completed', { run });
       const snapshotId = `benchmark-${run}`;
       const analysisStarted = performance.now();
       await analyzeFixture(
@@ -436,14 +527,18 @@ export async function runBenchmark(
         root,
         snapshotId,
         options.manifest,
+        options.onDiagnostic,
+        run,
       );
       const analysisAndSnapshotMs = performance.now() - analysisStarted;
       const snapshotPath = `.sourcemesh/snapshots/${snapshotId}.json`;
       const bytes = await readFile(path.join(root, snapshotPath));
       const snapshot = await openValidatedSnapshot(root, snapshotPath);
+      diagnostic(options, 'snapshot.completed', { run });
       const initializationStarted = performance.now();
       const mcp = await startMcp(options.repository, root, snapshotPath);
       const mcpInitializationMs = performance.now() - initializationStarted;
+      diagnostic(options, 'mcp.connected', { run });
       try {
         const current: ScenarioRun[] = [];
         const baselineQueryMs: number[] = [];
@@ -463,7 +558,7 @@ export async function runBenchmark(
             sourceMesh: sourceMesh.result,
           });
         }
-        scenarioResults = current;
+        scenarioRuns.push(current);
         samples.push({
           run,
           discoveryMs,
@@ -475,7 +570,6 @@ export async function runBenchmark(
         });
       } finally {
         await mcp.client.close();
-        await mcp.transport.close();
       }
     } finally {
       await rm(root, { recursive: true, force: true });
@@ -484,6 +578,7 @@ export async function runBenchmark(
   const languages = [
     ...new Set(options.manifest.scenarios.map((item) => item.language)),
   ];
+  const scenarioResults = scenarioRuns.at(-1) ?? [];
   return {
     schemaVersion: 1,
     benchmark: 'SourceMesh official synthetic benchmark',
@@ -495,8 +590,9 @@ export async function runBenchmark(
       languages,
     },
     runs: samples,
+    scenarioRuns,
     scenarios: scenarioResults,
-    summaries: summarizeRuns(samples, scenarioResults),
+    summaries: summarizeRuns(samples, scenarioRuns.flat()),
     tokenMetrics: options.tokenMetrics ?? [],
     limitations: [
       'Timing is host-specific and is not a latency SLO or a production-capacity claim.',

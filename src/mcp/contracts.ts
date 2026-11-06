@@ -32,7 +32,7 @@ export const MCP_INITIALIZATION_INSTRUCTIONS = [
   'SourceMesh serves one existing validated local snapshot through bounded read-only queries.',
   'Do not request repository analysis, snapshot creation, deletion, or writes through this MCP server.',
   'A local operator or shell agent must create the snapshot before starting this server; the server never analyzes repositories or writes snapshots.',
-  'For C#, choose exactly one selection mode: a legacy relative --solution, one relative --project, or repeatable relative --project options for an explicit selected-project snapshot.',
+  'For C#, choose exactly one selection mode: a relative --solution or one or more repeatable relative --project options for an explicit selected-project snapshot.',
   'Snapshot creation is create-only. After a later analysis, start a new MCP process with its explicitly selected snapshot; a running server never reloads snapshots.',
   'See docs/csharp-mcp-snapshot-package-guide.md in this installed package for prerelease installation, MCP-host configuration, source-encoding, and diagnostic-budget guidance.',
 ].join(' ');

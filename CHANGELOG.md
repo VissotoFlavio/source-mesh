@@ -12,6 +12,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   JSON/CSV reporting, optional imported token telemetry, and benchmark
   methodology/highlights documentation (#161).
 
+- Added an opt-in external C# benchmark mode with isolated source staging,
+  sanitized public reports, local diagnostics, and no target-repository writes
+  (#163).
+
+### Changed
+
+- Made every C# `--project` selection exact, including a single project, and
+  removed the implicit project-reference expansion mode (#163).
+
 ## [0.1.0] - 2026-11-06
 
 ### Added

@@ -57,10 +57,18 @@ export function summarizeRuns(
       median(runs.map((run) => run.snapshotBytes)),
     ),
     'baseline.operations.mean': numeric(
-      mean(baselineResults.map((result) => result.operations)),
+      mean(
+        baselineResults.map(
+          (result) => result.operations + result.preparationOperations,
+        ),
+      ),
     ),
     'sourceMesh.operations.mean': numeric(
-      mean(sourceMeshResults.map((result) => result.operations)),
+      mean(
+        sourceMeshResults.map(
+          (result) => result.operations + result.preparationOperations,
+        ),
+      ),
     ),
     'baseline.precision.mean': numeric(
       mean(baselineResults.map((result) => result.accuracy.precision ?? 0)),
@@ -92,6 +100,7 @@ export function renderCsv(report: BenchmarkReport): string {
       'status',
       'elapsedMs',
       'operations',
+      'preparationOperations',
       'filesExamined',
       'returnedBytes',
       'expected',
@@ -115,6 +124,7 @@ export function renderCsv(report: BenchmarkReport): string {
         result.status,
         result.elapsedMs,
         result.operations,
+        result.preparationOperations,
         result.filesExamined,
         result.returnedBytes,
         result.accuracy.expected,

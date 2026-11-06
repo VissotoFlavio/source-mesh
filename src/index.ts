@@ -143,7 +143,6 @@ export type {
 export {
   discoverCSharpExplicitProjectManifest,
   discoverCSharpManifest,
-  discoverCSharpProjectManifest,
 } from './csharp/discovery.js';
 export {
   createCSharpExplicitProjectSelection,

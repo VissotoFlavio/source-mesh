@@ -361,11 +361,15 @@ test('analyze rejects unsafe snapshot IDs before invoking services', async () =>
   }
 });
 
-test('csharp analyze uses the injected manifest discovery service', async () => {
+test('csharp analyze uses the injected explicit manifest discovery service', async () => {
   let calls = 0;
   const manifest = {
     language: 'csharp' as const,
-    selection: { kind: 'project' as const, path: 'App.csproj' },
+    selection: {
+      version: 1 as const,
+      kind: 'explicit-projects' as const,
+      projects: ['App.csproj'],
+    },
     projects: [
       {
         path: 'App.csproj',
@@ -391,10 +395,10 @@ test('csharp analyze uses the injected manifest discovery service', async () => 
         'json',
       ],
       injectedServices({
-        discoverCSharpManifest: async (root, selection) => {
+        discoverCSharpExplicitProjectManifest: async (root, selection) => {
           calls += 1;
           assert.equal(root, '/repo');
-          assert.deepEqual(selection, { project: 'App.csproj' });
+          assert.deepEqual(selection, manifest.selection);
           return { manifest, diagnostics: [] };
         },
       }),
@@ -425,7 +429,7 @@ test('csharp analyze uses the injected manifest discovery service', async () => 
         'json',
       ],
       injectedServices({
-        discoverCSharpManifest: async () => ({
+        discoverCSharpExplicitProjectManifest: async () => ({
           diagnostics: [
             {
               code: 'path_invalid' as const,
@@ -443,7 +447,47 @@ test('csharp analyze uses the injected manifest discovery service', async () => 
   assert.equal(JSON.parse(failureIO.stderrValue).error.code, 'analysis_failed');
 });
 
-test('csharp analyze sends a repeatable project selection to its explicit boundary', async () => {
+test('csharp diagnostics report a sanitized discovery code only when requested', async () => {
+  const io = capture();
+  assert.equal(
+    await main(
+      [
+        'analyze',
+        '--root',
+        '/repo',
+        '--snapshot-id',
+        'csharp-diagnostics',
+        '--language',
+        'csharp',
+        '--project',
+        'App.csproj',
+        '--diagnostics',
+        '--output',
+        'json',
+      ],
+      injectedServices({
+        discoverCSharpExplicitProjectManifest: async () => ({
+          diagnostics: [
+            {
+              code: 'path_invalid' as const,
+              severity: 'error' as const,
+              message: 'The selected C# path is invalid.',
+            },
+          ],
+        }),
+      }),
+      io,
+    ),
+    1,
+  );
+  assert.match(
+    io.stderrValue,
+    /^\[diagnostic\] csharp\.discovery: path_invalid$/mu,
+  );
+  assert.equal(io.stderrValue.includes('/repo'), false);
+});
+
+test('csharp analyze sends every project selection to its explicit boundary', async () => {
   let legacyCalls = 0;
   let explicitCalls = 0;
   const manifest = {
@@ -492,6 +536,54 @@ test('csharp analyze sends a repeatable project selection to its explicit bounda
   assert.equal(legacyCalls, 0);
   assert.equal(explicitCalls, 1);
   assert.equal(JSON.parse(io.stdoutValue).result.kind, 'csharp-manifest');
+});
+
+test('csharp analyze supports one exact project without expanding references', async () => {
+  let legacyCalls = 0;
+  let explicitCalls = 0;
+  const manifest = {
+    language: 'csharp' as const,
+    selection: {
+      version: 1 as const,
+      kind: 'explicit-projects' as const,
+      projects: ['src/Api/Api.csproj'],
+    },
+    projects: [],
+  } satisfies CSharpExplicitProjectManifest;
+  const io = capture();
+  assert.equal(
+    await main(
+      [
+        'analyze',
+        '--root',
+        '/repo',
+        '--snapshot-id',
+        'single-explicit-project',
+        '--language',
+        'csharp',
+        '--project',
+        'src/Api/Api.csproj',
+        '--output',
+        'json',
+      ],
+      injectedServices({
+        discoverCSharpManifest: async () => {
+          legacyCalls += 1;
+          return { diagnostics: [] };
+        },
+        discoverCSharpExplicitProjectManifest: async (root, selection) => {
+          explicitCalls += 1;
+          assert.equal(root, '/repo');
+          assert.deepEqual(selection, manifest.selection);
+          return { manifest, diagnostics: [] };
+        },
+      }),
+      io,
+    ),
+    0,
+  );
+  assert.equal(legacyCalls, 0);
+  assert.equal(explicitCalls, 1);
 });
 
 test('csharp analyze rejects equivalent repeated project selections before discovery', async () => {
@@ -601,7 +693,11 @@ test(
 test('csharp analyze writes a v3 versioned create-only snapshot', async () => {
   const manifest = {
     language: 'csharp' as const,
-    selection: { kind: 'project' as const, path: 'App.csproj' },
+    selection: {
+      version: 1 as const,
+      kind: 'explicit-projects' as const,
+      projects: ['App.csproj'],
+    },
     projects: [{ path: 'App.csproj', references: [], files: ['App.cs'] }],
   };
   const snapshot: SnapshotV3 = {
@@ -639,7 +735,10 @@ test('csharp analyze writes a v3 versioned create-only snapshot', async () => {
           'json',
         ],
         injectedServices({
-          discoverCSharpManifest: async () => ({ manifest, diagnostics: [] }),
+          discoverCSharpExplicitProjectManifest: async () => ({
+            manifest,
+            diagnostics: [],
+          }),
           analyzeCSharpManifest: async () => ({
             projects: [],
             diagnostics: [],
@@ -669,7 +768,11 @@ test('csharp analyze writes a v3 versioned create-only snapshot', async () => {
 test('csharp analyze forwards its source-encoding option without compiler diagnostics', async () => {
   const manifest = {
     language: 'csharp' as const,
-    selection: { kind: 'project' as const, path: 'App.csproj' },
+    selection: {
+      version: 1 as const,
+      kind: 'explicit-projects' as const,
+      projects: ['App.csproj'],
+    },
     projects: [{ path: 'App.csproj', references: [], files: ['App.cs'] }],
   };
   const snapshot: SnapshotV3 = {
@@ -708,7 +811,10 @@ test('csharp analyze forwards its source-encoding option without compiler diagno
         'json',
       ],
       injectedServices({
-        discoverCSharpManifest: async () => ({ manifest, diagnostics: [] }),
+        discoverCSharpExplicitProjectManifest: async () => ({
+          manifest,
+          diagnostics: [],
+        }),
         analyzeCSharpManifest: async (_root, _manifest, options) => {
           receivedOptions = options;
           return {

@@ -67,17 +67,18 @@ repository.
 
 ## Create a C# snapshot
 
-Choose exactly one repository-relative selection mode: a legacy solution, an
-intentionally single project, or an explicit set of projects. Do not rely on
-automatic solution discovery or combine `--solution` with `--project`. Choose
-a fresh lowercase ASCII snapshot ID (letters, digits, and hyphens; starting
-with a letter; 1–64 characters).
+Choose exactly one repository-relative selection mode: a solution or an exact
+set of one or more projects. Do not rely on automatic solution discovery or
+combine `--solution` with `--project`. Choose a fresh lowercase ASCII snapshot
+ID (letters, digits, and hyphens; starting with a letter; 1–64 characters).
 
 ```powershell
 sourcemesh analyze --root <repository-root> --language csharp --solution <relative-solution-path> --snapshot-id csharp-<run-id>
 ```
 
-For an intentionally single-project target, use `--project` instead:
+For an exact project selection, use `--project` once for every selected
+project. A single `--project` is also exact: `ProjectReference`s not included
+in the command remain external or unresolved boundaries.
 
 ```powershell
 sourcemesh analyze --root <repository-root> --language csharp --project <relative-project-path> --snapshot-id csharp-<run-id>
@@ -85,9 +86,8 @@ sourcemesh analyze --root <repository-root> --language csharp --project <relativ
 
 For a bounded application or other multi-project snapshot, repeat `--project`
 for every root-relative `.csproj` in the intended source boundary. Project
-order does not affect the resulting snapshot. References to projects omitted
-from the selection remain external or unresolved boundaries; SourceMesh does
-not analyze their source implicitly.
+order does not affect the resulting snapshot. SourceMesh does not analyze
+omitted project references implicitly.
 
 ```powershell
 sourcemesh analyze --root <repository-root> --language csharp --project src/App/App.csproj --project src/Domain/Domain.csproj --snapshot-id csharp-app-<run-id>

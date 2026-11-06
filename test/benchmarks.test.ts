@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { promises as fs } from 'node:fs';
 import { test } from 'node:test';
 import {
   BENCHMARK_SCHEMA_VERSION,
@@ -11,7 +12,9 @@ import {
   summarizeRuns,
   validateImportedTokenMetrics,
 } from '../src/benchmarks/report.js';
+import { stageExternalCSharpProject } from '../src/benchmarks/external-csharp.js';
 import { OFFICIAL_SYNTHETIC_MANIFEST } from '../src/benchmarks/scenarios.js';
+import path from 'node:path';
 
 test('benchmark manifests reject duplicate scenario ids and invalid analyses', () => {
   validateBenchmarkManifest(OFFICIAL_SYNTHETIC_MANIFEST);
@@ -112,11 +115,13 @@ test('token metrics require a declared source and CSV keeps failures visible', (
     },
     manifest: { id: 'test', fixture: 'fixture', languages: ['typescript'] },
     runs: [],
+    scenarioRuns: [],
     scenarios: [
       {
         scenarioId: 'sample',
         baseline: {
           elapsedMs: 1,
+          preparationOperations: 0,
           operations: 1,
           filesExamined: 1,
           returnedBytes: 1,
@@ -127,6 +132,7 @@ test('token metrics require a declared source and CSV keeps failures visible', (
         },
         sourceMesh: {
           elapsedMs: 1,
+          preparationOperations: 0,
           operations: 1,
           filesExamined: 0,
           returnedBytes: 1,
@@ -141,4 +147,29 @@ test('token metrics require a declared source and CSV keeps failures visible', (
     limitations: [],
   } satisfies BenchmarkReport;
   assert.match(renderCsv(report), /"failed, safely"/u);
+});
+
+test('external C# staging copies only the explicit selection into a temporary root', async () => {
+  const source = path.join(process.cwd(), 'test', 'fixtures', 'csharp-project');
+  await assert.rejects(
+    () =>
+      stageExternalCSharpProject({
+        targetRoot: source,
+        projects: ['../outside.csproj'],
+      }),
+    /path_invalid/u,
+  );
+  const staged = await stageExternalCSharpProject({
+    targetRoot: source,
+    projects: ['App.csproj'],
+  });
+  try {
+    assert.notEqual(staged.root, source);
+    assert.deepEqual(staged.projects, ['App.csproj']);
+    await assert.doesNotReject(() =>
+      fs.access(path.join(staged.root, 'Library.csproj')),
+    );
+  } finally {
+    await staged.cleanup();
+  }
 });

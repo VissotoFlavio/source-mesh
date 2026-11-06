@@ -10,17 +10,18 @@ import {
 } from '../src/csharp/worker.js';
 import { discoverCSharpExplicitProjectManifest } from '../src/csharp/discovery.js';
 import { createCSharpExplicitProjectSelection } from '../src/csharp/contracts.js';
-import type {
-  CSharpExplicitProjectManifest,
-  CSharpManifest,
-} from '../src/csharp/contracts.js';
+import type { CSharpExplicitProjectManifest } from '../src/csharp/contracts.js';
 
 let root = '';
 let helper = '';
 let host = '';
-const manifest: CSharpManifest = {
+const manifest: CSharpExplicitProjectManifest = {
   language: 'csharp',
-  selection: { kind: 'project', path: 'App.csproj' },
+  selection: {
+    version: 1,
+    kind: 'explicit-projects',
+    projects: ['App.csproj'],
+  },
   projects: [
     {
       path: 'App.csproj',
@@ -493,7 +494,7 @@ test('C# worker sanitizes temporary staging failures', async () => {
 });
 
 test('C# worker rejects duplicate references and Windows-unsafe logical paths', async () => {
-  const duplicateReferences: CSharpManifest = {
+  const duplicateReferences: CSharpExplicitProjectManifest = {
     ...manifest,
     projects: [
       {
@@ -518,7 +519,13 @@ test('C# worker rejects duplicate references and Windows-unsafe logical paths', 
   await assert.rejects(
     analyzeCSharpManifestForTest(
       root,
-      { ...manifest, selection: { kind: 'project', path: 'C:App.csproj' } },
+      {
+        ...manifest,
+        selection: {
+          ...manifest.selection,
+          projects: ['C:App.csproj'],
+        },
+      },
       runner(''),
       helper,
       host,
@@ -534,7 +541,7 @@ test('C# worker uses an opaque flat staging layout for nested logical paths', as
     path.join(root, 'nested', 'input', 'App.cs'),
     'class Nested {}',
   );
-  const nestedManifest: CSharpManifest = {
+  const nestedManifest: CSharpExplicitProjectManifest = {
     ...manifest,
     projects: [{ ...manifest.projects[0]!, files: ['nested/input/App.cs'] }],
   };
@@ -681,9 +688,13 @@ test('C# worker rejects oversized frames, unsorted diagnostics, and repeated sou
 
 test('C# worker uses ordinal ordering and a trusted host outside the staged cwd', async () => {
   await fs.writeFile(path.join(root, 'dotnet.exe'), 'staged decoy');
-  const unicode: CSharpManifest = {
+  const unicode: CSharpExplicitProjectManifest = {
     ...manifest,
-    selection: { kind: 'project', path: 'z.csproj' },
+    selection: {
+      version: 1,
+      kind: 'explicit-projects',
+      projects: ['z.csproj', 'ä.csproj'],
+    },
     projects: [
       { path: 'z.csproj', references: [], files: ['src/App.cs'] },
       { path: 'ä.csproj', references: [], files: ['src/App.cs'] },

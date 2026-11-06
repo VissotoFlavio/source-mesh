@@ -45,7 +45,6 @@ import {
   type CSharpManifest,
   type CSharpManifestResult,
   type CSharpProjectManifest,
-  type CSharpSelectionKind,
   type CSharpSolutionManifest,
   type DiscoverCSharpManifestOptions,
 } from './contracts.js';
@@ -1281,21 +1280,12 @@ export async function discoverCSharpManifest(
 ): Promise<CSharpManifestResult> {
   if (isRemoteRoot(repositoryRoot)) return failureResult('path_invalid');
   const solution = selection.solution;
-  const project = selection.project;
-  if ((solution === undefined) === (project === undefined))
-    return failureResult('invalid_selection');
-  const selected = solution ?? project!;
-  const normalized = normalizeRelativePath(selected);
+  if (solution === undefined) return failureResult('invalid_selection');
+  const normalized = normalizeRelativePath(solution);
   if (normalized === undefined) return failureResult('path_invalid');
   if (isPathOverBudget(normalized))
     return failureResult('resource_limit', normalized);
-  const kind: CSharpSelectionKind =
-    solution === undefined ? 'project' : 'solution';
-  if (
-    kind === 'project'
-      ? !isProjectPath(normalized)
-      : !isSolutionPath(normalized)
-  )
+  if (!isSolutionPath(normalized))
     return failureResult('invalid_selection', normalized);
   try {
     const filesystem = options.filesystem ?? createDefaultDiscoveryFileSystem();
@@ -1320,35 +1310,26 @@ export async function discoverCSharpManifest(
     };
     const selectedEntry = await inspectContainedFile(state, normalized, 'file');
     const canonicalSelection = selectedEntry.canonicalPath;
-    let solutionProjects: readonly string[] | undefined;
-    if (kind === 'solution') {
-      solutionProjects = await parseSolution(state, normalized);
-      if (solutionProjects.length > CSHARP_MAX_SOLUTION_PROJECTS)
-        throw new CSharpFailure('resource_limit', normalized);
+    const solutionProjects = await parseSolution(state, normalized);
+    if (solutionProjects.length > CSHARP_MAX_SOLUTION_PROJECTS)
+      throw new CSharpFailure('resource_limit', normalized);
+    const canonicalProjects = new Map<string, string>();
+    for (const item of solutionProjects) {
+      const requested = resolveLiteral(
+        projectDirectory(canonicalSelection),
+        item,
+        canonicalSelection,
+      );
+      if (!isProjectPath(requested))
+        throw new CSharpFailure('unsupported_construct', requested);
+      const entry = await inspectContainedFile(state, requested, 'file');
+      canonicalProjects.set(
+        pathIdentityKey(entry.canonicalPath),
+        entry.canonicalPath,
+      );
     }
-    let allowedSolutionProjects: ReadonlySet<string> | undefined;
-    let pending: string[];
-    if (kind === 'solution') {
-      const canonicalProjects = new Map<string, string>();
-      for (const item of solutionProjects ?? []) {
-        const requested = resolveLiteral(
-          projectDirectory(canonicalSelection),
-          item,
-          canonicalSelection,
-        );
-        if (!isProjectPath(requested))
-          throw new CSharpFailure('unsupported_construct', requested);
-        const entry = await inspectContainedFile(state, requested, 'file');
-        canonicalProjects.set(
-          pathIdentityKey(entry.canonicalPath),
-          entry.canonicalPath,
-        );
-      }
-      allowedSolutionProjects = new Set(canonicalProjects.keys());
-      pending = [...canonicalProjects.values()];
-    } else {
-      pending = [canonicalSelection];
-    }
+    const allowedSolutionProjects = new Set(canonicalProjects.keys());
+    const pending = [...canonicalProjects.values()];
     const projects = new Map<string, CSharpProjectManifest>();
     for (let index = 0; index < pending.length; index += 1) {
       const requestedProject = pending[index]!;
@@ -1366,8 +1347,7 @@ export async function discoverCSharpManifest(
       projects.set(projectKey, parsed.manifest);
       for (const reference of parsed.references) {
         if (
-          (kind === 'project' ||
-            allowedSolutionProjects?.has(pathIdentityKey(reference))) &&
+          allowedSolutionProjects.has(pathIdentityKey(reference)) &&
           !projects.has(pathIdentityKey(reference)) &&
           !pending.some(
             (candidate) =>
@@ -1384,15 +1364,11 @@ export async function discoverCSharpManifest(
     );
     const manifest: CSharpManifest = Object.freeze({
       language: 'csharp',
-      selection: Object.freeze({ kind, path: canonicalSelection }),
-      ...(kind === 'solution'
-        ? {
-            solution: Object.freeze({
-              path: canonicalSelection,
-              projects: freezeArray(orderedProjects.map((item) => item.path)),
-            } satisfies CSharpSolutionManifest),
-          }
-        : {}),
+      selection: Object.freeze({ kind: 'solution', path: canonicalSelection }),
+      solution: Object.freeze({
+        path: canonicalSelection,
+        projects: freezeArray(orderedProjects.map((item) => item.path)),
+      } satisfies CSharpSolutionManifest),
       projects: freezeArray(orderedProjects),
     });
     return Object.freeze({ manifest, diagnostics: freezeArray([]) });
@@ -1402,8 +1378,6 @@ export async function discoverCSharpManifest(
     return failureResult('io_error', normalized);
   }
 }
-
-export const discoverCSharpProjectManifest = discoverCSharpManifest;
 
 /**
  * Constructs a manifest for exactly the projects named by the explicit v1
