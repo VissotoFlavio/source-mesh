@@ -4,6 +4,7 @@ import process from 'node:process';
 import { pathToFileURL } from 'node:url';
 import {
   validateBenchmarkManifest,
+  type BenchmarkCategory,
   type BenchmarkManifest,
 } from './contracts.js';
 import { stageExternalCSharpProject } from './external-csharp.js';
@@ -224,7 +225,15 @@ export async function main(
         renderJson(report),
         'utf8',
       );
-      const sanitized = sanitizeExternalReport(report);
+      const categories = new Set(
+        manifest.scenarios.map((item) => item.category),
+      );
+      const sanitized = sanitizeExternalReport(
+        report,
+        categories.size === 1
+          ? ([...categories][0] as BenchmarkCategory)
+          : undefined,
+      );
       await mkdir(path.dirname(path.join(process.cwd(), parsed.output)), {
         recursive: true,
       });
@@ -274,6 +283,7 @@ export async function main(
 
 export function sanitizeExternalReport(
   report: Awaited<ReturnType<typeof runBenchmark>>,
+  category?: BenchmarkCategory,
 ) {
   const sanitizeStrategy = (
     result: (typeof report.scenarios)[number]['baseline'],
@@ -299,6 +309,7 @@ export function sanitizeExternalReport(
       id: 'external-csharp-medium',
       fixture: 'external-csharp-medium',
       languages: ['csharp'],
+      ...(category === undefined ? {} : { category }),
     },
     scenarios: report.scenarios.map((scenario, index) => ({
       scenarioId: `scenario-${index + 1}`,

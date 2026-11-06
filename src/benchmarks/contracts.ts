@@ -2,7 +2,10 @@ export const BENCHMARK_SCHEMA_VERSION = 1 as const;
 
 export type BenchmarkLanguage = 'typescript' | 'csharp';
 export type BenchmarkCategory =
-  'symbol-discovery' | 'call-relationships' | 'file-dependencies';
+  | 'symbol-discovery'
+  | 'call-relationships'
+  | 'file-dependencies'
+  | 'feature-investigation';
 export type BenchmarkStrategy =
   | 'search-symbol'
   | 'list-callers'
@@ -163,9 +166,12 @@ export function validateBenchmarkManifest(
       !nonEmptyText(scenario.id) ||
       ids.has(scenario.id) ||
       !['typescript', 'csharp'].includes(scenario.language) ||
-      !['symbol-discovery', 'call-relationships', 'file-dependencies'].includes(
-        scenario.category,
-      ) ||
+      ![
+        'symbol-discovery',
+        'call-relationships',
+        'file-dependencies',
+        'feature-investigation',
+      ].includes(scenario.category) ||
       ![
         'search-symbol',
         'list-callers',

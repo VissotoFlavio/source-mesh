@@ -19,6 +19,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Added a sanitized five-run external C# benchmark observation and its
   reproducible public report (#165).
 
+- Added a sanitized real-world feature-investigation benchmark observation,
+  false-positive diagnosis, and staging coverage for declared resources (#165).
+
 ### Changed
 
 - Made every C# `--project` selection exact, including a single project, and

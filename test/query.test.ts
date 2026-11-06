@@ -409,6 +409,49 @@ test('search and file/call relations are deterministic and directional', () => {
   );
 });
 
+test('searchSymbols documents substring matches as candidates, not exact selection', () => {
+  const snapshot = fixture();
+  const caller = node(snapshot, 'function', 'caller');
+  const module = node(snapshot, 'module', 'a');
+  const substringCandidate = {
+    ...caller,
+    id: nodeId(
+      'function',
+      caller.path,
+      `${snapshot.nodes[0]!.id}/${fileId(caller.path)}/${module.id}#scope=module:${module.qualifiedName}`,
+      'user-caller',
+      'none',
+    ),
+    name: 'user-caller',
+    qualifiedName: 'user-caller',
+  };
+  const extended = {
+    ...snapshot,
+    nodes: [...snapshot.nodes, substringCandidate],
+    edges: [
+      ...snapshot.edges,
+      {
+        id: edgeId('contains', module.id, substringCandidate.id),
+        kind: 'contains' as const,
+        from: module.id,
+        to: substringCandidate.id,
+        resolutionStatus: 'resolved' as const,
+      },
+    ],
+  } satisfies SnapshotV1;
+  const searched = createGraphQueryService(extended).searchSymbols({
+    operation: 'searchSymbols',
+    query: 'caller',
+    kind: 'function',
+  });
+  assert.ok('operation' in searched, JSON.stringify(searched));
+  const symbols = response(searched, 'searchSymbols');
+  assert.deepEqual(
+    symbols.page.items.map((item) => item.name),
+    ['caller', 'user-caller'],
+  );
+});
+
 test('ambiguity and cursor pagination remain bounded and typed', () => {
   const service = createGraphQueryService(fixture());
   const ambiguous = queryError(
