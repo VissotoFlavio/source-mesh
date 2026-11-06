@@ -34,10 +34,10 @@ repository information with it.
 
 ## Quick start: installed package
 
-The supported installed package is a Windows x64 prerelease for a machine with
+The supported installed package is a Windows x64 release for a machine with
 the .NET 10 runtime, Node.js 22.13+ within Node 22 or Node.js 24, and npm.
 Download a matching `.tgz` and `.tgz.sha256` pair from the selected GitHub
-[prerelease](https://github.com/VissotoFlavio/source-mesh/releases), then check
+[release](https://github.com/VissotoFlavio/source-mesh/releases), then check
 the downloaded asset before installing it. The package is not installed from
 the npm registry.
 
@@ -303,8 +303,9 @@ limitations are in
 
 ## Project status
 
-SourceMesh is pre-release. Package publication, releases, hosted processing, and
-compatibility changes require separate authorization and issue-backed work.
+SourceMesh 0.1.0 is the first public release. Package publication, hosted
+processing, and compatibility changes require separate authorization and
+issue-backed work.
 
 See
 [the contribution workflow](https://github.com/VissotoFlavio/source-mesh/blob/develop/CONTRIBUTING.md),
