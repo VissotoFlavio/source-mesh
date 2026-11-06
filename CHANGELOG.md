@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Changed
+
+- Reworked the public README around installed-package onboarding, the local
+  privacy boundary, MCP limits, and a safe incremental workflow for AI agents
+  (#155).
+
 ## [0.0.1-alpha.1] - 2026-11-06
 
 ### Changed

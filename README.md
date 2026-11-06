@@ -1,23 +1,125 @@
 # SourceMesh
 
-SourceMesh is an experimental, local-first project for building a deterministic structural graph of source code. Its goal is to give developers and software agents a compact view of code structure and relationships without sending repository data to a hosted service.
+SourceMesh is an experimental, local-first tool that turns an explicitly
+selected source-code boundary into a deterministic structural graph. It gives
+developers and AI agents a compact way to navigate symbols and inspect direct
+local relationships without sending repository data to a hosted analysis
+service.
 
-The local CLI can analyze an explicitly selected TypeScript/JavaScript or C#/.NET repository into a contained snapshot and query symbols, files, and direct call relationships without a hosted service.
+Use it to answer bounded questions such as "where is this symbol declared?",
+"which local files directly depend on this file?", and "which proven local
+functions call this function?". SourceMesh exposes those queries through a
+local CLI and a read-only MCP server over `stdio`. It currently supports
+explicit TypeScript/JavaScript and C#/.NET source selections.
 
-C# analysis is syntax-only: it parses only the selected local source files and
-never restores packages, compiles, or executes the target. Resolved C# graph
-relationships carry syntactic evidence; targets that cannot be proved local are
-reported as external or unresolved diagnostics instead of guessed edges.
+## What SourceMesh does and does not prove
 
-## Privacy boundary
+SourceMesh analyzes only the repository root and source selection you provide.
+It records structural relationships that its local analysis can establish and
+returns unresolved or external diagnostics instead of guessing.
 
-SourceMesh repository analysis is required to run locally and without runtime network access. SourceMesh itself must not transmit source code, file paths, graph data, derived metadata, prompts, or analysis results through telemetry, logging, analytics, tracing, error reporting, hosted language models, or visualization services.
+- It does not send source code, paths, graph data, prompts, or results over the
+  network at runtime.
+- It does not provide a complete semantic model of a whole system, dynamic
+  runtime behavior, or external dependencies.
+- C# analysis parses only selected local source files. It never restores NuGet
+  packages, compiles or executes the target, or reports compiler diagnostics.
+- A relationship to an unselected project, external package, dynamic target, or
+  unresolved target is not a proven local graph edge.
 
-Installing development dependencies can contact the npm registry. That installation traffic is separate from future repository analysis. Any future SourceMesh feature that requires network access must be opt-in and approved through a separate, documented decision before implementation.
+SourceMesh's local boundary does not govern an MCP host, editor, agent, or model
+provider. A connected consumer can process or transmit its MCP schemas,
+arguments, and results under its own policy. Review that consumer before sharing
+repository information with it.
 
-These requirements cover SourceMesh itself. An editor, agent, model provider, script, or other external consumer of SourceMesh output has its own data-processing and network boundary. Review that consumer independently before giving it repository information or generated graph data.
+## Quick start: installed package
 
-## Local development
+The supported installed package is a Windows x64 prerelease for a machine with
+the .NET 10 runtime, Node.js 22.13+ within Node 22 or Node.js 24, and npm.
+Download a matching `.tgz` and `.tgz.sha256` pair from the selected GitHub
+[prerelease](https://github.com/VissotoFlavio/source-mesh/releases), then check
+the downloaded asset before installing it. The package is not installed from
+the npm registry.
+
+```powershell
+$tarball = '.\vissotoflavio-source-mesh-<version>.tgz'
+$checksum = "$tarball.sha256"
+$expected = (Get-Content -LiteralPath $checksum -Raw).Trim().Split(' ')[0]
+$actual = (Get-FileHash -LiteralPath $tarball -Algorithm SHA256).Hash.ToLowerInvariant()
+if ($actual -ne $expected) { throw 'SourceMesh package checksum mismatch.' }
+npm install --global --offline --ignore-scripts $tarball
+sourcemesh --help
+```
+
+The checksum sidecar detects a corrupted or mismatched download; it is not an
+independent authentication mechanism when both assets come from a compromised
+release. Obtain the release from a GitHub repository identity you trust before
+installing or running the package.
+
+Create a fresh, explicit snapshot before starting MCP. Choose one selection
+mode: a legacy solution, one project, or a repeated list of projects. Do not
+combine `--solution` and `--project`.
+
+```powershell
+sourcemesh analyze --root <repository-root> --language csharp --solution <relative-solution-path> --snapshot-id csharp-<run-id>
+```
+
+For one deliberately selected project, replace `--solution` with
+`--project <relative-project-path>`. For a bounded multi-project snapshot,
+repeat `--project` once per selected root-relative `.csproj`. Use a new,
+lowercase snapshot ID for every analysis: snapshot creation is create-only.
+
+Start MCP with the same root and the snapshot just created:
+
+```powershell
+sourcemesh mcp --root <repository-root> --snapshot .sourcemesh/snapshots/csharp-<run-id>.json
+```
+
+An MCP host should run that command with an explicit Node executable and the
+installed CLI path. The full host configuration, supported-environment details,
+snapshot selection rules, source-encoding guidance, and handover procedure are
+in the packaged [installation and MCP guide](docs/csharp-mcp-snapshot-package-guide.md).
+
+The server opens one immutable snapshot and exposes only six read-only tools:
+`searchSymbols`, `getSymbol`, `listFileDependencies`, `listFileDependents`,
+`listCallers`, and `listCallees`. It never creates, replaces, or deletes a
+snapshot. To use a later analysis, create a different snapshot ID and start a
+new MCP process; a running process remains pinned to its original snapshot.
+
+For local language-pack installation and offline compatibility rules, see the
+[local language-pack installation guide](docs/local-language-pack-installation.md).
+
+## Guidance for AI agents
+
+Treat the MCP server as a bounded, read-only view of one existing snapshot.
+Before querying, confirm that the intended repository root and snapshot were
+selected by a local operator or another authorized workflow. Do not ask MCP to
+analyze a repository or create a snapshot.
+
+Use an incremental query flow:
+
+1. Start with `searchSymbols` and narrow by `kind`, `path`, or `containerId`
+   when the target is not unique.
+2. Use a returned symbol `id` as `getSymbol`'s `nodeId`, or provide a
+   sufficiently specific selector. If a selector is ambiguous, refine it; do
+   not pick a result.
+3. Use `listFileDependencies` or `listFileDependents` for direct file
+   relationships, and `listCallers` or `listCallees` for direct function-call
+   relationships.
+4. Keep cursors opaque and use them only with the same query. Results are
+   bounded: request a `limit` from 1 through 100 and follow a continuation only
+   when more results are needed.
+5. `allowPartial` defaults to `false`. Use it only when a partial snapshot is
+   acceptable for the question, and report that limitation with the result.
+
+Do not infer compilation success, NuGet/package resolution, external calls,
+dynamic dispatch, or relationships that the snapshot does not explicitly
+return. An optional, separately installed agent skill may provide this operating
+guidance in `SKILL.md` form, but no skill is required to use MCP.
+
+## Maintainer workflow
+
+### Local development
 
 Prerequisites:
 
@@ -48,27 +150,9 @@ npm run offline:check
 npm run pack:check
 ```
 
-## Install an official prerelease
+### Verify package distribution from a checkout
 
-The supported installed package is a Windows x64 prerelease asset for a machine
-with the .NET 10 runtime already installed. Download the selected GitHub
-prerelease tarball and its SHA-256 checksum, verify it, install it globally,
-and configure an MCP host without requiring a SourceMesh checkout. The complete
-user and AI-host procedure is in the packaged
-[installation and MCP guide](docs/csharp-mcp-snapshot-package-guide.md).
-
-The package is private and is not installed from the npm registry. Installation
-is a local `npm install --global --ignore-scripts <downloaded-tarball>` step;
-runtime analysis does not restore, compile, download dependencies, update
-itself, or contact a registry.
-
-Language-pack selection is likewise local and explicit. The
-[local language-pack installation guide](docs/local-language-pack-installation.md)
-defines the closed configuration, exact-version resolution, compatibility
-matrix, and offline update validation; repository analysis never downloads or
-dynamically loads a pack.
-
-## Verify package distribution from a checkout
+The remaining maintainer instructions require a SourceMesh repository checkout.
 
 Maintainers build the helper from the committed offline NuGet feed and validate
 the complete package with:
@@ -85,26 +169,28 @@ checkout validation guard.
 
 The exact payload allowlist, approved dependency SHA-256 values, package
 versions, and size bounds are recorded in
-[scripts/package-manifest.json](scripts/package-manifest.json). The package
+[scripts/package-manifest.json](https://github.com/VissotoFlavio/source-mesh/blob/develop/scripts/package-manifest.json).
+The package
 build writes a per-tarball integrity manifest for the compiled helper DLL.
 Third-party license and integrity inventory is in
 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md). See
-[docs/package-distribution.md](docs/package-distribution.md) for the supported
-contract and exclusions.
+[the package-distribution contract](https://github.com/VissotoFlavio/source-mesh/blob/develop/docs/package-distribution.md)
+for the supported contract and exclusions.
 
 For checkout-only Windows x64 beta validation, see
-[docs/beta-checkout.md](docs/beta-checkout.md).
+[the beta checkout guide](https://github.com/VissotoFlavio/source-mesh/blob/develop/docs/beta-checkout.md).
 
 For the ordered beta gates, safe execution rules, outcomes, and tester evidence
-limits, see the [beta validation runbook](docs/beta-validation-runbook.md).
+limits, see the
+[beta validation runbook](https://github.com/VissotoFlavio/source-mesh/blob/develop/docs/beta-validation-runbook.md).
 
 For SemVer beta candidates, release metadata timing, promotion gates, evidence,
 rollback, and authorization limits, see the
-[beta versioning and promotion policy](docs/beta-version-promotion.md).
+[beta versioning and promotion policy](https://github.com/VissotoFlavio/source-mesh/blob/develop/docs/beta-version-promotion.md).
 
 For the authorized GitHub workflow that turns an eligible release pull request
 into an immutable private package candidate, see
-[immutable package candidates](docs/package-candidate-recovery.md).
+[immutable package candidates](https://github.com/VissotoFlavio/source-mesh/blob/develop/docs/package-candidate-recovery.md).
 
 From a checkout after a build, analyze and query a repository locally:
 
@@ -207,15 +293,23 @@ npm run measure:e2e -- --runs 5
 The command reports raw analyze, CLI-query, and MCP-call samples together with
 Node.js, OS, commit, fixture counts, and snapshot bytes. These measurements are
 fixture- and host-specific; they are not production capacity, latency SLOs, or
-arbitrary-repository scale claims. The complete validation record and limitations
-are in [docs/mvp-validation.md](docs/mvp-validation.md).
+arbitrary-repository scale claims. The complete validation record and
+limitations are in
+[the MVP validation record](https://github.com/VissotoFlavio/source-mesh/blob/develop/docs/mvp-validation.md).
 
 ## Project status
 
 SourceMesh is pre-release. Package publication, releases, hosted processing, and
 compatibility changes require separate authorization and issue-backed work.
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for the development workflow, [the technical baseline](docs/decisions/0001-technical-baseline.md) for the current stack decision, [the source graph MVP architecture](docs/decisions/0002-source-graph-mvp-architecture.md) for the accepted graph and query contracts, and [the local language-pack architecture](docs/decisions/0005-local-language-pack-architecture.md) for the approved extensibility and isolation model.
+See
+[the contribution workflow](https://github.com/VissotoFlavio/source-mesh/blob/develop/CONTRIBUTING.md),
+[the technical baseline](https://github.com/VissotoFlavio/source-mesh/blob/develop/docs/decisions/0001-technical-baseline.md),
+[the source graph MVP architecture](https://github.com/VissotoFlavio/source-mesh/blob/develop/docs/decisions/0002-source-graph-mvp-architecture.md),
+and
+[the local language-pack architecture](https://github.com/VissotoFlavio/source-mesh/blob/develop/docs/decisions/0005-local-language-pack-architecture.md)
+for the development workflow, stack decision, accepted graph/query contracts,
+and approved extensibility and isolation model.
 
 ## License
 
