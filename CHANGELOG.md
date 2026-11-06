@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- Added reproducible synthetic TypeScript and C# benchmark suites, structured
+  JSON/CSV reporting, optional imported token telemetry, and benchmark
+  methodology/highlights documentation (#161).
+
 ## [0.1.0] - 2026-11-06
 
 ### Added

@@ -32,6 +32,21 @@ provider. A connected consumer can process or transmit its MCP schemas,
 arguments, and results under its own policy. Review that consumer before sharing
 repository information with it.
 
+## Benchmarks
+
+SourceMesh includes a reproducible synthetic benchmark suite for bounded symbol,
+direct-call, and direct-file-relationship investigations. It compares a
+documented textual-search/file-inspection baseline with local snapshot queries,
+and separately records discovery, analysis, snapshot, MCP-initialization, and
+warm-query costs. It does not claim token savings unless an operator imports
+real, controlled agent telemetry.
+
+Run `npm run benchmark` from a checkout, then interpret the report with the
+[benchmark methodology](docs/benchmarks.md). The methodology records the exact
+fixtures, ground truth, limitations, and a balanced comparison with traditional
+code search. Reusable publication guidance is in
+[benchmark highlights](docs/benchmark-highlights.md).
+
 ## Quick start: installed package
 
 The supported installed package is a Windows x64 release for a machine with
