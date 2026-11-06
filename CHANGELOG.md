@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- Added a reproducible, quality-aware manual protocol and sanitized aggregation
+  infrastructure for real AI-agent A/B benchmarks, without fabricating Codex
+  telemetry or publishing private target details (#167).
+
 - Added reproducible synthetic TypeScript and C# benchmark suites, structured
   JSON/CSV reporting, optional imported token telemetry, and benchmark
   methodology/highlights documentation (#161).

@@ -53,6 +53,12 @@ An operator may import real, sanitized agent telemetry with `--token-metrics <re
 
 For an agent A/B run, use the same model, reasoning configuration, commit, question set, context budget, conventional tools, and completion criteria. Add the prepared SourceMesh MCP only in the SourceMesh mode. Keep cache conditions explicit and report unavailable metrics as unavailable. Hosted-model execution is opt-in operator work; it is not part of the SourceMesh runtime or CI.
 
+For a real-agent A/B protocol, including private ground truth, manual Codex
+telemetry import, quality-aware comparison, cold/warm treatment, and public
+sanitization, see [SourceMesh with AI Agents](ai-agent-benchmark.md). The
+protocol does not publish a token or end-to-end completion claim until it has
+imported real, equivalent session observations.
+
 ## Interpretation and limits
 
 Separate cold start from warm queries. A snapshot has a real discovery, analysis, persistence, and MCP-initialization cost; a fast MCP call alone is not the cost of SourceMesh. Compare total workflow cost only for a stated number of queries and repository boundary. The report exposes the raw values needed to calculate a break-even point for a particular workflow.
