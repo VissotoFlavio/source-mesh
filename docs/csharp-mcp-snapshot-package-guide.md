@@ -43,10 +43,15 @@ $checksum = "$tarball.sha256"
 $expected = (Get-Content -LiteralPath $checksum -Raw).Trim().Split(' ')[0]
 $actual = (Get-FileHash -LiteralPath $tarball -Algorithm SHA256).Hash.ToLowerInvariant()
 if ($actual -ne $expected) { throw 'SourceMesh package checksum mismatch.' }
-npm install --global --ignore-scripts $tarball
+npm install --global --offline --ignore-scripts $tarball
 npm list --global --depth=0 @vissotoflavio/source-mesh
 sourcemesh --help
 ```
+
+The checksum sidecar detects a corrupted or mismatched download; it is not an
+independent authentication mechanism when both assets come from a compromised
+release. Obtain the release from a GitHub repository identity you trust before
+installing or running the package.
 
 `npm install --global` replaces the installed version with the selected local
 asset. To remove SourceMesh, run:
