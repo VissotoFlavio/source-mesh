@@ -8,6 +8,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Changed
 
+- Restricted official package-candidate generation to an explicit
+  `/generate-candidate` comment on an eligible release or hotfix pull request,
+  while retaining sanitized success and failure feedback on that pull request
+  (#151).
+
 - Replaced C# compilation-backed extraction with deterministic local syntax-tree
   analysis. C# snapshots now use schema v3 provenance and mark resolved local
   relationships as syntactic evidence; package references, target compilation,

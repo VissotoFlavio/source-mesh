@@ -1,9 +1,12 @@
 # Immutable package candidates
 
-The `Generate immutable package candidate` workflow creates a private GitHub
-Pre-release only from an open, same-repository `release/<SemVer>` pull request
-to `master`. It is an artifact-generation workflow: it does not publish to npm,
-deploy software, or process an application repository.
+The `Generate immutable package candidate` check creates a private GitHub
+Pre-release only after the repository owner comments `/generate-candidate` on
+an open, same-repository `release/<SemVer>` or
+`hotfix/<issue-id>-<slug>` pull request to `master`. Opening or updating a pull
+request never generates a package by itself. The check is an artifact-generation
+workflow: it does not publish to npm, deploy software, or process an
+application repository.
 
 ## Authorization and guards
 
@@ -13,8 +16,8 @@ asset unless all of the following are true:
 
 - the pull request is open, targets `master`, and its head belongs to this
   repository;
-- the release branch, `package.json`, both lockfile roots, and exactly one dated
-  changelog heading use the same valid SemVer value;
+- a release branch's SemVer, or a hotfix branch's declared package SemVer, and
+  both lockfile roots and exactly one dated changelog heading agree;
 - `package.json#private` is `true`;
 - the current head SHA has a successful CI workflow containing the Node 22,
   Node 24, and Windows package jobs; and
@@ -31,12 +34,12 @@ creates `npm pack` output from the captured SHA. The workflow computes a
 SHA-256 checksum and publishes the tarball plus `<tarball>.sha256` in the
 GitHub Pre-release `v<version>`, with the tag targeting that exact SHA.
 
-The workflow summary and the outcome comment on the triggering release pull
-request contain only the version, SHA, gate outcomes, digest, asset URLs, and
-workflow run URL. They must never contain source snapshots, analyzed repository
-data, credentials, absolute private paths, or raw command output. A successful
-comment identifies the exact candidate and both release assets; a failed comment
-contains only a concise stage status and the workflow run URL.
+The workflow summary and the outcome comment on the triggering release or
+hotfix pull request contain only the version, SHA, gate outcomes, digest, asset
+URLs, and workflow run URL. They must never contain source snapshots, analyzed
+repository data, credentials, absolute private paths, or raw command output. A
+successful comment identifies the exact candidate and both release assets; a
+failed comment contains only a concise stage status and the workflow run URL.
 
 ## Recovery
 

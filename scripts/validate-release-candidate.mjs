@@ -31,12 +31,19 @@ function parseJson(value, code) {
   }
 }
 
-function candidateVersion(branch) {
-  if (!branch.startsWith('release/')) fail('branch_invalid');
-  const version = branch.slice('release/'.length);
-  if (version.length === 0 || version.includes('/') || !semver.test(version))
-    fail('branch_invalid');
-  return version;
+function candidateVersion(branch, declaredVersion) {
+  if (branch.startsWith('release/')) {
+    const version = branch.slice('release/'.length);
+    if (version.length === 0 || version.includes('/') || !semver.test(version))
+      fail('branch_invalid');
+    return version;
+  }
+  if (
+    /^hotfix\/[1-9]\d*-[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(branch) &&
+    semver.test(declaredVersion)
+  )
+    return declaredVersion;
+  fail('branch_invalid');
 }
 
 function hasCandidateHeading(changelog, version) {
@@ -55,7 +62,6 @@ async function validateReleaseCandidate({
   packageLockPath,
   changelogPath,
 }) {
-  const version = candidateVersion(branch);
   const [packageJsonText, packageLockText, changelog] = await Promise.all([
     readFile(packageJsonPath, 'utf8').catch(() => fail('package_json_missing')),
     readFile(packageLockPath, 'utf8').catch(() => fail('package_lock_missing')),
@@ -65,8 +71,10 @@ async function validateReleaseCandidate({
   const packageLock = parseJson(packageLockText, 'package_lock_invalid');
   const lockRoot = packageLock.packages;
 
+  if (typeof packageJson.version !== 'string') fail('version_mismatch');
+  const version = candidateVersion(branch, packageJson.version);
+
   if (
-    typeof packageJson.version !== 'string' ||
     typeof packageLock.version !== 'string' ||
     lockRoot === null ||
     typeof lockRoot !== 'object' ||
