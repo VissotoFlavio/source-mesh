@@ -6,7 +6,7 @@ snapshot first, then start MCP against that exact snapshot.
 
 Generate the snapshot before configuring or starting MCP.
 
-This guide is included in every official prerelease package. It is for a user
+This guide is included in every official package. It is for a user
 or an AI host that has installed the package and does not have a SourceMesh
 checkout.
 
@@ -19,7 +19,7 @@ checkout.
 
 SourceMesh performs repository analysis locally. It has no runtime registry
 access, update check, telemetry, network listener, or hosted analysis service.
-Downloading a prerelease asset is separate setup traffic. A connected editor,
+Downloading a release asset is separate setup traffic. A connected editor,
 agent, or model provider has its own data-processing policy and can transmit
 MCP arguments or results; assess that host separately before selecting a
 repository.
@@ -28,14 +28,14 @@ Use an approved regular local repository directory. Do not select a UNC/remote
 path or a reparse point, and keep the selected repository quiescent while
 creating a snapshot and starting MCP.
 
-## Install an official prerelease
+## Install an official release
 
 Download exactly the `.tgz` asset and its matching `.tgz.sha256` asset from the
-chosen GitHub prerelease. Do not use an arbitrary tarball, npm registry package,
+chosen GitHub release. Do not use an arbitrary tarball, npm registry package,
 or a package rebuilt from source.
 
 In PowerShell, verify the checksum before installing. Replace `<version>` with
-the selected prerelease version:
+the selected release version:
 
 ```powershell
 $tarball = '.\vissotoflavio-source-mesh-<version>.tgz'
@@ -43,10 +43,15 @@ $checksum = "$tarball.sha256"
 $expected = (Get-Content -LiteralPath $checksum -Raw).Trim().Split(' ')[0]
 $actual = (Get-FileHash -LiteralPath $tarball -Algorithm SHA256).Hash.ToLowerInvariant()
 if ($actual -ne $expected) { throw 'SourceMesh package checksum mismatch.' }
-npm install --global --ignore-scripts $tarball
+npm install --global --offline --ignore-scripts $tarball
 npm list --global --depth=0 @vissotoflavio/source-mesh
 sourcemesh --help
 ```
+
+The checksum sidecar detects a corrupted or mismatched download; it is not an
+independent authentication mechanism when both assets come from a compromised
+release. Obtain the release from a GitHub repository identity you trust before
+installing or running the package.
 
 `npm install --global` replaces the installed version with the selected local
 asset. To remove SourceMesh, run:

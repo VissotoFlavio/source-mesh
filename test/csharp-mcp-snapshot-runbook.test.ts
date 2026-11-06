@@ -67,7 +67,7 @@ test('installed C# MCP snapshot guide gives a generic user and AI-host flow', as
     content,
     /external or unresolved targets remain graph diagnostics/u,
   );
-  assert.match(content, /npm install --global --ignore-scripts/u);
+  assert.match(content, /npm install --global --offline --ignore-scripts/u);
   assert.match(content, /npm uninstall --global/u);
   assert.match(content, /"command": "<absolute-node-path>"/u);
   assert.match(content, /sourcemesh analyze/u);

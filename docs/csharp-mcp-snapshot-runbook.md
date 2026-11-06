@@ -5,7 +5,7 @@ queries. It does not run C# analysis, create a snapshot, or replace one.
 Generate a snapshot before configuring or starting MCP.
 
 This repository-facing runbook uses a built checkout. For an installed
-prerelease package, use
+release package, use
 [the installed-package guide](csharp-mcp-snapshot-package-guide.md) instead.
 
 ## Create a snapshot

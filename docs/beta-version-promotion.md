@@ -5,9 +5,8 @@ SourceMesh beta candidate. It is a release procedure, not an authorization to
 create a release branch, merge a release, create a tag, publish a package, or
 create a GitHub Release. Those actions require separate explicit approval.
 
-The current repository remains pre-release. This documentation does not change
-`package.json`, does not select a final release version, and does not remove
-`private: true`.
+This documentation does not change `package.json`, does not select a final
+release version, and does not remove `private: true`.
 
 ## Version policy
 
