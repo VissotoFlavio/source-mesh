@@ -39,10 +39,9 @@ payload. Do not restore from another feed or compile the helper during runtime.
 
 ## Analyze before starting MCP
 
-Choose exactly one explicit selection mode and a fresh snapshot ID: a legacy
-relative solution, an intentionally single relative project, or a bounded set
-of relative C# projects supplied with repeatable `--project` options. The
-output is always the create-only
+Choose exactly one selection mode and a fresh snapshot ID: a relative solution
+or an exact set of one or more relative C# projects supplied with repeatable
+`--project` options. The output is always the create-only
 `.sourcemesh/snapshots/<id>.json`; `--overwrite` is not supported.
 
 Node 24 requires a `file:///` URI for an absolute preload path. Resolve it once
@@ -53,11 +52,11 @@ $offlineGuardUri = [System.Uri]::new((Resolve-Path -LiteralPath '.\scripts\deny-
 node --import $offlineGuardUri .\dist\cli.js analyze --root <repository-root> --language csharp --solution <relative-solution-path> --snapshot-id csharp-<run-id>
 ```
 
-For an intentionally single-project target, replace `--solution` with
-`--project <relative-project-path>`. For a TypeScript/JavaScript target, omit
-the C# selector. Use `--source-encoding windows-1252` only when a target is
-known to require it. The C# helper parses only the selected local source files;
-it does not restore packages, compile the target, or report compiler
+For an exact project selection, replace `--solution` with one or more
+`--project <relative-project-path>` options. For a TypeScript/JavaScript target,
+omit the C# selector. Use `--source-encoding windows-1252` only when a target
+is known to require it. The C# helper parses only the selected local source
+files; it does not restore packages, compile the target, or report compiler
 diagnostics.
 
 For an approved local application subset, repeat `--project` once for each

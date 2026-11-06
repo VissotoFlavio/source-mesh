@@ -517,8 +517,7 @@ function cloneLegacyManifest(value: CSharpManifest): CSharpManifest {
     ]) ||
     candidate.language !== 'csharp' ||
     !closedObject(candidate.selection, ['kind', 'path']) ||
-    (candidate.selection.kind !== 'solution' &&
-      candidate.selection.kind !== 'project') ||
+    candidate.selection.kind !== 'solution' ||
     !safePath(candidate.selection.path) ||
     !Array.isArray(candidate.projects)
   )
@@ -556,32 +555,28 @@ function cloneLegacyManifest(value: CSharpManifest): CSharpManifest {
       projects: Object.freeze([...candidate.solution.projects]),
     });
   }
-  const paths = new Set(projects.map((project) => project.path));
   if (
     projects.some((project) =>
       project.references.some((reference) => reference === project.path),
     )
   )
     fail('input_invalid');
-  if (candidate.selection.kind === 'solution') {
-    if (
-      solution === undefined ||
-      solution.path !== candidate.selection.path ||
-      solution.projects.length !== projects.length ||
-      solution.projects.some(
-        (project, index) => project !== projects[index]!.path,
-      )
+  if (
+    solution === undefined ||
+    solution.path !== candidate.selection.path ||
+    solution.projects.length !== projects.length ||
+    solution.projects.some(
+      (project, index) => project !== projects[index]!.path,
     )
-      fail('input_invalid');
-  } else if (solution !== undefined || !paths.has(candidate.selection.path))
+  )
     fail('input_invalid');
   return Object.freeze({
     language: 'csharp',
     selection: Object.freeze({
-      kind: candidate.selection.kind,
+      kind: 'solution',
       path: candidate.selection.path,
     }),
-    ...(solution === undefined ? {} : { solution }),
+    solution,
     projects: Object.freeze(projects),
   });
 }

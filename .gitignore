@@ -10,6 +10,7 @@ tools/sourcemesh-roslyn/obj/
 .eslintcache
 *.tsbuildinfo
 .npm/
+benchmarks/local/
 
 # Local configuration and secrets
 .env

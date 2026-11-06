@@ -79,9 +79,9 @@ interface AnalyzeCommand {
   readonly tsconfig?: string;
   readonly language?: 'csharp';
   readonly solution?: string;
-  readonly project?: string;
   readonly explicitProjectSelection?: CSharpExplicitProjectSelection;
   readonly sourceEncoding?: 'windows-1252';
+  readonly diagnostics: boolean;
   readonly output: OutputFormat;
 }
 
@@ -276,6 +276,15 @@ function analysisFailure(): CliFailure {
   );
 }
 
+function diagnostic(
+  command: AnalyzeCommand,
+  io: CliIO,
+  stage: string,
+  code: string,
+): void {
+  if (command.diagnostics) io.stderr(`[diagnostic] ${stage}: ${code}\n`);
+}
+
 function sourceEncodingFailure(relativePath: string): CliFailure {
   return new CliFailure(
     'source_encoding_invalid',
@@ -343,7 +352,7 @@ function helpText(command?: CommandName): string {
     ].join('\n');
   const usage: Record<CommandName, string> = {
     analyze:
-      'sourcemesh analyze --root <path> --snapshot-id <id> [--tsconfig <relative>] [--language csharp --solution <relative>|--project <relative> [--project <relative> ...] [--source-encoding windows-1252]] [--output human|json]',
+      'sourcemesh analyze --root <path> --snapshot-id <id> [--tsconfig <relative>] [--language csharp --solution <relative>|--project <relative> [--project <relative> ...] [--source-encoding windows-1252]] [--diagnostics] [--output human|json]',
     mcp: 'sourcemesh mcp --root <path> --snapshot <relative>',
     symbol:
       'sourcemesh symbol --root <path> --snapshot <relative> --query <text> [--kind <kind>] [--path <relative>] [--container-id <node-id>] [--limit <1..100>] [--cursor <token>] [--allow-partial] [--output human|json]',
@@ -384,6 +393,7 @@ function optionKinds(command: CommandName): ReadonlyMap<string, OptionKind> {
       ['--solution', 'value'],
       ['--project', 'value'],
       ['--source-encoding', 'value'],
+      ['--diagnostics', 'flag'],
     ]);
   const query: [string, OptionKind][] = [
     ['--limit', 'value'],
@@ -521,8 +531,6 @@ function parseArguments(argv: readonly string[]): ParsedCommand {
         : normalizeRelativePath(tsconfigValue, 'tsconfig');
     const languageValue = valueOf(values, '--language');
     const solutionValue = valueOf(values, '--solution');
-    const projectValue =
-      projectValues.length === 1 ? projectValues[0] : undefined;
     const sourceEncodingValue = valueOf(values, '--source-encoding');
     if (languageValue === undefined) {
       if (
@@ -533,7 +541,11 @@ function parseArguments(argv: readonly string[]): ParsedCommand {
         throw invalid('language');
     } else {
       if (languageValue !== 'csharp') throw invalid('language');
-      if ((solutionValue === undefined) === (projectValues.length === 0))
+      if (
+        Number(solutionValue !== undefined) +
+          Number(projectValues.length > 0) !==
+        1
+      )
         throw invalid('selection');
     }
     if (
@@ -545,12 +557,8 @@ function parseArguments(argv: readonly string[]): ParsedCommand {
       solutionValue === undefined
         ? undefined
         : normalizeRelativePath(solutionValue, 'solution');
-    const project =
-      projectValue === undefined
-        ? undefined
-        : normalizeRelativePath(projectValue, 'project');
     const explicitProjectSelection =
-      projectValues.length < 2
+      projectValues.length === 0
         ? undefined
         : createCSharpExplicitProjectSelection(projectValues);
     if (
@@ -565,13 +573,13 @@ function parseArguments(argv: readonly string[]): ParsedCommand {
       ...(tsconfig === undefined ? {} : { tsconfig }),
       ...(languageValue === undefined ? {} : { language: 'csharp' as const }),
       ...(solution === undefined ? {} : { solution }),
-      ...(project === undefined ? {} : { project }),
       ...(explicitProjectSelection === undefined
         ? {}
         : { explicitProjectSelection: explicitProjectSelection.selection }),
       ...(sourceEncodingValue === undefined
         ? {}
         : { sourceEncoding: sourceEncodingValue }),
+      diagnostics: values.has('--diagnostics'),
       output: outputValue,
     };
   }
@@ -737,25 +745,28 @@ function functionSelector(command: CallRelationCommand): FunctionSelectorV1 {
 async function executeAnalyze(
   command: AnalyzeCommand,
   services: CliServices,
+  io: CliIO,
 ): Promise<AnalyzeResult> {
   try {
     if (command.language === 'csharp') {
       const manifest =
         command.explicitProjectSelection === undefined
           ? await services.discoverCSharpManifest(command.root, {
-              ...(command.solution === undefined
-                ? {}
-                : { solution: command.solution }),
-              ...(command.project === undefined
-                ? {}
-                : { project: command.project }),
+              solution: command.solution!,
             })
           : await services.discoverCSharpExplicitProjectManifest(
               command.root,
               command.explicitProjectSelection,
             );
-      if (manifest.manifest === undefined || manifest.diagnostics.length > 0)
+      if (manifest.manifest === undefined || manifest.diagnostics.length > 0) {
+        diagnostic(
+          command,
+          io,
+          'csharp.discovery',
+          manifest.diagnostics.map((item) => item.code).join(',') || 'failed',
+        );
         throw analysisFailure();
+      }
       if (
         services.analyzeCSharpManifest === undefined ||
         services.extractCSharpDeclarationGraph === undefined
@@ -838,8 +849,17 @@ async function executeAnalyze(
       error instanceof CSharpWorkerError &&
       error.code === 'source_encoding_invalid' &&
       error.relativePath !== undefined
-    )
+    ) {
+      diagnostic(command, io, 'csharp.worker', error.code);
       throw sourceEncodingFailure(error.relativePath);
+    }
+    if (error instanceof CSharpWorkerError)
+      diagnostic(command, io, 'csharp.worker', error.code);
+    else if (
+      !(error instanceof CliFailure) &&
+      !(error instanceof SnapshotError)
+    )
+      diagnostic(command, io, 'analyze', 'unexpected');
     throw analysisFailure();
   }
 }
@@ -1137,7 +1157,7 @@ export async function main(
     }
     const result =
       parsed.command === 'analyze'
-        ? await executeAnalyze(parsed, services)
+        ? await executeAnalyze(parsed, services, io)
         : await executeQuery(parsed, services);
     emitSuccess(parsed, result, io);
     return 0;

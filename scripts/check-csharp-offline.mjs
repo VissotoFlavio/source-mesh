@@ -95,7 +95,11 @@ try {
   );
   const manifest = {
     language: 'csharp',
-    selection: { kind: 'project', path: 'App.csproj' },
+    selection: {
+      version: 1,
+      kind: 'explicit-projects',
+      projects: ['App.csproj'],
+    },
     projects: [{ path: 'App.csproj', references: [], files: ['src/App.cs'] }],
   };
   const result = await analyzeCSharpManifest(root, manifest);

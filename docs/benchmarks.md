@@ -83,3 +83,32 @@ after the snapshot had been prepared. This observation does **not** show a time
 or token reduction: on this small fixture, the baseline's in-process textual
 scan was faster, and snapshot/MCP preparation dominates a one-off workflow. No
 hosted model was run, so the report contains no token metrics.
+
+## External C# project benchmark
+
+The optional `external-csharp` suite accepts an absolute local target root and
+one or more explicit root-relative `--project` values. Before analysis it uses
+the C# selection contract to stage only approved `.cs` and `.csproj` files in a
+temporary directory. SourceMesh never writes to, executes, restores, builds, or
+tests the target project.
+
+The suite uses the CLI's exact-selection mode internally, so a single selected
+project does not expand its `ProjectReference` graph during analysis.
+
+The scenario manifest and detailed report must be local ignored files. The
+public report contains only the generic `external-csharp-medium` label and
+aggregated metrics; it omits source identifiers, paths, expected values, query
+values, errors, and per-run detailed scenarios.
+
+```powershell
+npm run benchmark -- -- --suite external-csharp --target-root "D:\\path\\to\\project" --project "src\\Api\\Api.csproj" --runs 5 --scenario-file benchmarks/local/scenarios.json --local-output benchmarks/local/detail.json --output benchmarks/results/external-csharp.json
+```
+
+Repeat `--project` for each intentionally selected project. The local manifest
+uses the normal benchmark schema but must be curated and independently verified
+by the operator; it is never committed. Agent/token comparison remains an
+import-only protocol and requires separate authorization for hosted models.
+
+Append `--diagnostics` while investigating a failed run. It writes bounded
+stage, exit-code, and sanitized diagnostic-code events to stderr; it never
+prints target paths, source content, queries, or expected values.

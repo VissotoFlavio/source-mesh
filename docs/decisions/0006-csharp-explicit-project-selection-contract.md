@@ -4,6 +4,10 @@
 
 Accepted as the selection-contract foundation for [#114](https://github.com/VissotoFlavio/source-mesh/issues/114).
 
+Amended on 2026-11-06: `--project` now always creates the exact v1 selection,
+including when it is supplied once. The temporary single-project legacy mode
+and its alternate `--explicit-project` spelling were removed.
+
 ## Context
 
 The existing C# command accepts exactly one `--project` or one `--solution`.
@@ -31,32 +35,20 @@ before it discovers any project.
 
 The modes are mutually exclusive:
 
-- the legacy `--solution <relative-solution-path>` retains its current
-  solution behavior;
-- one legacy `--project <relative-project-path>` retains its current
-  single-project behavior; and
-- explicit-project selection has no `--solution` and never infers projects
-  from a solution or `ProjectReference`.
-
-This change only publishes the versioned in-process selection value. The CLI
-does not yet accept repeated `--project` values, and the existing discovery
-function does not accept this new value. Until the canonical selected-project
-manifest is implemented, preserving that rejection is intentional: no new CLI
-spelling can partially discover or analyze a multiple-project selection.
+- `--solution <relative-solution-path>` preserves solution selection; and
+- one or more repeatable `--project <relative-project-path>` options create
+  an explicit-project selection, never inferring projects from a solution or
+  `ProjectReference`.
 
 ## Consequences
 
-- The later manifest boundary consumes a canonical ordered selection and owns
+- The manifest boundary consumes a canonical ordered selection and owns
   filesystem validation plus the rule that unselected project references are
   external boundaries.
-- That boundary publishes a separate explicit-project manifest representation;
-  the legacy manifest and Roslyn worker contract remain unchanged until their
-  explicit-selection handoff.
-- Existing one-project and solution callers retain their exact parser and
-  discovery behavior during the transition.
-- A future CLI implementation must parse repeatable options into the v1 value
-  before filesystem discovery and expose versioned diagnostics from this
-  contract; it must not add an alternate implicit selection mode.
+- The explicit-project manifest representation is the sole project-selection
+  input to the Roslyn worker.
+- The CLI parses every `--project` into the v1 selection before filesystem
+  discovery and exposes its versioned diagnostics.
 
 ## Rejected alternatives
 

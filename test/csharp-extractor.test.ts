@@ -5,15 +5,18 @@ import {
   createGraphQueryService,
   extractCSharpDeclarationGraph,
   type CSharpExplicitProjectManifest,
-  type CSharpManifest,
   type CSharpWorkerRelationship,
   type CSharpWorkerResult,
   type CSharpWorkerSymbol,
 } from '../src/index.js';
 
-const manifest: CSharpManifest = {
+const manifest: CSharpExplicitProjectManifest = {
   language: 'csharp',
-  selection: { kind: 'project', path: 'App.csproj' },
+  selection: {
+    version: 1,
+    kind: 'explicit-projects',
+    projects: ['App.csproj'],
+  },
   projects: [
     {
       path: 'App.csproj',

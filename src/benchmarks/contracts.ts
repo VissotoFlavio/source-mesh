@@ -32,7 +32,11 @@ export interface BenchmarkManifest {
   readonly fixture: string;
   readonly analysis:
     | { readonly language: 'typescript'; readonly tsconfig: string }
-    | { readonly language: 'csharp'; readonly solution: string };
+    | {
+        readonly language: 'csharp';
+        readonly solution?: string;
+        readonly projects?: readonly string[];
+      };
   readonly scenarios: readonly BenchmarkScenario[];
 }
 
@@ -48,6 +52,7 @@ export interface AccuracyMetrics {
 
 export interface OperationMetrics {
   readonly elapsedMs: number;
+  readonly preparationOperations: number;
   readonly operations: number;
   readonly filesExamined: number;
   readonly returnedBytes: number;
@@ -109,6 +114,7 @@ export interface BenchmarkReport {
     readonly languages: readonly BenchmarkLanguage[];
   };
   readonly runs: readonly TimingSample[];
+  readonly scenarioRuns: readonly (readonly ScenarioRun[])[];
   readonly scenarios: readonly ScenarioRun[];
   readonly summaries: Readonly<Record<string, number>>;
   readonly tokenMetrics: readonly ImportedTokenMetric[];
@@ -140,7 +146,13 @@ export function validateBenchmarkManifest(
     (manifest.analysis.language === 'typescript' &&
       nonEmptyText(manifest.analysis.tsconfig)) ||
     (manifest.analysis.language === 'csharp' &&
-      nonEmptyText(manifest.analysis.solution))
+      ((manifest.analysis.solution !== undefined &&
+        nonEmptyText(manifest.analysis.solution) &&
+        manifest.analysis.projects === undefined) ||
+        (manifest.analysis.projects !== undefined &&
+          manifest.analysis.projects.length > 0 &&
+          manifest.analysis.projects.every(nonEmptyText) &&
+          manifest.analysis.solution === undefined)))
   ))
     throw new TypeError('manifest');
   const ids = new Set<string>();

@@ -173,7 +173,11 @@ function fragment(
 function implicitManifest(paths: readonly string[]): CSharpAnalysisManifest {
   return {
     language: 'csharp',
-    selection: { kind: 'project', path: 'SourceMesh.csproj' },
+    selection: {
+      version: 1,
+      kind: 'explicit-projects',
+      projects: ['SourceMesh.csproj'],
+    },
     projects: [{ path: 'SourceMesh.csproj', references: [], files: paths }],
   };
 }

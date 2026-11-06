@@ -25,10 +25,7 @@ export const CSHARP_MAX_EXPLICIT_OPERATIONS = 8192;
 export const CSHARP_MAX_AGGREGATE_READ_BYTES = 256 * 1024 * 1024;
 export const CSHARP_MAX_READ_OPERATIONS = 16_384;
 
-/**
- * The version of the future explicit-project CLI selection contract. This is
- * intentionally separate from the legacy single-project and solution modes.
- */
+/** The versioned contract for every explicit C# project selection. */
 export const CSHARP_EXPLICIT_PROJECT_SELECTION_VERSION = 1;
 
 export interface CSharpExplicitProjectSelection {
@@ -171,11 +168,10 @@ export function createCSharpExplicitProjectSelection(
   };
 }
 
-export type CSharpSelectionKind = 'solution' | 'project';
+export type CSharpSelectionKind = 'solution';
 
 export interface CSharpDiscoverySelection {
-  readonly solution?: string;
-  readonly project?: string;
+  readonly solution: string;
 }
 
 export interface CSharpProjectManifest {
@@ -217,9 +213,9 @@ export interface CSharpExplicitProjectManifest {
 }
 
 /**
- * A C# manifest accepted by the local, offline analysis pipeline. The legacy
- * form preserves single-project and solution behavior; the explicit form
- * analyzes exactly its selected projects.
+ * A C# manifest accepted by the local, offline analysis pipeline. Solution
+ * selection is distinct from explicit project selection, which analyzes
+ * exactly the named projects.
  */
 export type CSharpAnalysisManifest =
   CSharpManifest | CSharpExplicitProjectManifest;

@@ -6,7 +6,7 @@ import { afterEach, test } from 'node:test';
 import {
   createCSharpExplicitProjectSelection,
   discoverCSharpExplicitProjectManifest,
-  discoverCSharpManifest,
+  discoverCSharpManifest as discoverCSharpSolutionManifest,
 } from '../src/index.js';
 import { main, type CliIO, type CliServices } from '../src/cli.js';
 import {
@@ -23,7 +23,11 @@ import {
   type DiscoveryDirent,
   type DiscoveryFileSystem,
 } from '../src/discovery.js';
-import type { CSharpExplicitProjectSelection } from '../src/csharp/contracts.js';
+import type {
+  CSharpExplicitProjectManifestResult,
+  CSharpExplicitProjectSelection,
+  CSharpManifestResult,
+} from '../src/csharp/contracts.js';
 
 const roots: string[] = [];
 
@@ -49,6 +53,38 @@ function write(root: string, relative: string, content: string | Buffer): void {
   const file = path.join(root, relative);
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, content, 'utf8');
+}
+
+async function discoverCSharpManifest(
+  root: string,
+  selection: { readonly project?: string; readonly solution?: string },
+  options?: { readonly filesystem?: DiscoveryFileSystem },
+): Promise<CSharpManifestResult | CSharpExplicitProjectManifestResult> {
+  if (selection.project === undefined)
+    return await discoverCSharpSolutionManifest(
+      root,
+      { solution: selection.solution! },
+      options,
+    );
+  const explicit = createCSharpExplicitProjectSelection([selection.project]);
+  if ('diagnostic' in explicit)
+    return {
+      diagnostics: [
+        {
+          code:
+            explicit.diagnostic.code === 'resource_limit'
+              ? 'resource_limit'
+              : 'path_invalid',
+          severity: 'error' as const,
+          message: 'The C# selection is invalid.',
+        },
+      ],
+    } satisfies CSharpExplicitProjectManifestResult;
+  return await discoverCSharpExplicitProjectManifest(
+    root,
+    explicit.selection,
+    options,
+  );
 }
 
 function capture(): CliIO & {
@@ -78,7 +114,7 @@ afterEach(() => {
     fs.rmSync(roots.pop()!, { recursive: true, force: true });
 });
 
-test('csharp project discovery builds a contained reference closure and compile manifest', async () => {
+test('csharp project discovery keeps an exact project boundary and compile manifest', async () => {
   const root = fixture();
   write(
     root,
@@ -110,7 +146,7 @@ test('csharp project discovery builds a contained reference closure and compile 
   assert.equal(Object.isFrozen(result.manifest), true);
   assert.deepEqual(
     result.manifest.projects.map((item) => item.path),
-    ['src/App/App.csproj', 'src/Lib/Lib.csproj'],
+    ['src/App/App.csproj'],
   );
   assert.deepEqual(result.manifest.projects[0]!.files, [
     'src/App/Extra.cs',
@@ -535,7 +571,7 @@ test('csharp solution discovery resolves contained project paths deterministical
   write(root, 'src/App/App.cs', 'class App {}');
   write(root, 'src/Unlisted/Unlisted.csproj', '<Project />');
 
-  const result = await discoverCSharpManifest(root, {
+  const result = await discoverCSharpSolutionManifest(root, {
     solution: 'solutions/App.sln',
   });
   assert.deepEqual(result.diagnostics, []);
@@ -789,7 +825,7 @@ test('csharp discovery deduplicates includes before bounded reads and caps repet
     { filesystem },
   );
   assert.deepEqual(result.manifest?.projects[0]?.files, ['App.cs']);
-  assert.equal(readFileCalls, 5);
+  assert.equal(readFileCalls, 3);
 
   const repeated = Array.from(
     { length: 4097 },
@@ -808,7 +844,7 @@ test('csharp discovery deduplicates includes before bounded reads and caps repet
   );
   assert.equal(result.manifest, undefined);
   assert.equal(result.diagnostics[0]?.code, 'resource_limit');
-  assert.equal(readFileCalls, 3);
+  assert.equal(readFileCalls, 1);
 });
 
 test('csharp CLI keeps the discovery-only service seam explicit', async () => {
@@ -820,7 +856,7 @@ test('csharp CLI keeps the discovery-only service seam explicit', async () => {
   );
   write(root, 'App.cs', 'class App {}');
   const discoveryOnlyServices = {
-    discoverCSharpManifest,
+    discoverCSharpExplicitProjectManifest,
   } as unknown as CliServices;
   const jsonIO = capture();
   assert.equal(
@@ -942,6 +978,15 @@ test('csharp CLI selection is explicit and unambiguous', async () => {
       '--solution',
       'App.sln',
       '--project',
+      'App.csproj',
+    ],
+    [
+      'analyze',
+      '--root',
+      '/repo',
+      '--language',
+      'csharp',
+      '--explicit-project',
       'App.csproj',
     ],
   ]) {
