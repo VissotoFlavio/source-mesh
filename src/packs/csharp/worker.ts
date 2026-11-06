@@ -41,7 +41,6 @@ export type CSharpSourceEncoding = 'windows-1252';
 
 export interface CSharpWorkerOptions {
   readonly sourceEncoding?: CSharpSourceEncoding;
-  readonly maxDiagnostics?: number;
   /**
    * Optional automation deadline. Local analysis deliberately has no implicit
    * wall-clock limit because elapsed time depends on the repository and host.
@@ -70,7 +69,9 @@ export class CSharpWorkerError extends Error {
       | 'input_invalid'
       | 'process_failed'
       | 'protocol_invalid'
-      | 'resource_limit',
+      | 'resource_limit'
+      | 'source_encoding_invalid',
+    readonly relativePath?: string,
   ) {
     super('The local C# analysis helper could not complete.');
     this.name = 'CSharpWorkerError';
@@ -1355,12 +1356,6 @@ async function executeWorker(
   const helper = await verifyHelperAt(artifact);
   const verifiedHost = await verifyDotnetHost(host);
   if (
-    options.maxDiagnostics !== undefined &&
-    (!positiveInteger(options.maxDiagnostics) ||
-      options.maxDiagnostics > 100_000)
-  )
-    fail('resource_limit');
-  if (
     options.timeoutMs !== undefined &&
     (!positiveInteger(options.timeoutMs) ||
       options.timeoutMs > CSHARP_WORKER_MAX_TIMEOUT_MS)
@@ -1373,9 +1368,6 @@ async function executeWorker(
       ...(options.sourceEncoding === undefined
         ? {}
         : { sourceEncoding: options.sourceEncoding }),
-      ...(options.maxDiagnostics === undefined
-        ? {}
-        : { maxDiagnostics: options.maxDiagnostics }),
       sources: sourcePlans.map(({ path: sourcePath, staged }) => ({
         path: sourcePath,
         staged,

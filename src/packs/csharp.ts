@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { promises as fs } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 import {
@@ -19,6 +20,7 @@ import type {
   CSharpWorkerOptions,
   CSharpWorkerResult,
 } from './csharp/worker.js';
+import { CSharpWorkerError } from './csharp/worker.js';
 
 const manifest: LanguagePackManifest = {
   contractVersion: 1,
@@ -27,7 +29,7 @@ const manifest: LanguagePackManifest = {
   extensions: ['.cs'],
   executionMode: 'local-worker',
   workerProtocolVersion: LOCAL_WORKER_PROTOCOL_VERSION,
-  capabilities: ['project-manifest', 'source-analysis', 'semantic-relations'],
+  capabilities: ['project-manifest', 'source-analysis'],
 };
 
 const bridge = fileURLToPath(
@@ -125,6 +127,21 @@ async function analyzeManifest(
   analysisManifest: CSharpAnalysisManifest,
   options: CSharpWorkerOptions = {},
 ): Promise<CSharpWorkerResult> {
+  if (options.sourceEncoding === undefined) {
+    const files = [
+      ...new Set(analysisManifest.projects.flatMap((item) => item.files)),
+    ].sort();
+    for (const file of files) {
+      const bytes = await fs.readFile(
+        path.join(repositoryRoot, ...file.split('/')),
+      );
+      try {
+        new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+      } catch {
+        throw new CSharpWorkerError('source_encoding_invalid', file);
+      }
+    }
+  }
   const response = await invoke(
     {
       kind: 'manifest',

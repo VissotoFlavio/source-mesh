@@ -99,10 +99,10 @@ a new ID.
 
 UTF-8 is the normal source policy. Use `--source-encoding windows-1252` only
 when the target repository has been confirmed to need that compatibility mode;
-it is not an automatic fallback. The C# worker defaults to a maximum of 4096
-compiler diagnostics. If a target exceeds that budget, select an explicit
-`--max-diagnostics` value from `1` to `100000`; do not change the global default
-merely for one repository.
+it is not an automatic fallback. C# analysis parses the selected source files
+locally without restoring packages, compiling the target, or reporting compiler
+diagnostics. It records only supported syntactic declarations and conservative
+local relationships; external or unresolved targets remain graph diagnostics.
 
 ## Configure an MCP host
 

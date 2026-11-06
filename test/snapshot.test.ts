@@ -18,6 +18,7 @@ import {
   encodeSnapshot,
   MAX_PACK_METADATA_BYTES,
   MAX_PACK_PROVENANCE_TEXT_BYTES,
+  MAX_V3_NODE_TEXT_BYTES,
   openValidatedSnapshot,
   snapshotDigest,
   writeSnapshot,
@@ -831,6 +832,110 @@ describe('schema-v2 snapshots', () => {
 });
 
 describe('schema-v3 pack metadata snapshots', () => {
+  it('accepts UTF-8 node text through the v3 transport budget', () => {
+    const text = 'é'.repeat(MAX_V3_NODE_TEXT_BYTES / 2);
+    const pathText = 's'.repeat(MAX_V3_NODE_TEXT_BYTES);
+    const repository = {
+      id: repositoryIdV2(),
+      kind: 'repository' as const,
+      root: '.' as const,
+      name: 'repository',
+    };
+    const project = {
+      id: nodeIdV2(
+        'project',
+        pathText,
+        `${repository.id}#scope=root`,
+        text,
+        text,
+        'none',
+      ),
+      kind: 'project' as const,
+      name: text,
+      path: pathText,
+      qualifiedName: text,
+      memberRole: 'none' as const,
+      locations: [
+        {
+          path: pathText,
+          start: { line: 1, column: 1 },
+          end: { line: 1, column: 2 },
+        },
+      ],
+      packId: 'csharp-pack',
+      language: 'csharp',
+    };
+    const graph: SnapshotV3 = {
+      schemaVersion: 3,
+      completeness: 'complete',
+      repository: { root: '.', name: 'repository' },
+      metadata: {
+        verification: 'unverified',
+        packs: [
+          {
+            id: 'csharp-pack',
+            language: 'csharp',
+            version: '1.0.0',
+            capabilities: [],
+          },
+        ],
+      },
+      nodes: [repository, project],
+      edges: [
+        {
+          id: edgeIdV2('contains', repository.id, project.id),
+          kind: 'contains',
+          from: repository.id,
+          to: project.id,
+          resolutionStatus: 'resolved',
+        },
+      ],
+      diagnostics: [],
+    };
+    assert.equal(Buffer.byteLength(text, 'utf8'), MAX_V3_NODE_TEXT_BYTES);
+    assert.equal(Buffer.byteLength(pathText, 'utf8'), MAX_V3_NODE_TEXT_BYTES);
+    const decoded = decodeSnapshot(encodeSnapshot(graph), 3) as SnapshotV3;
+    const result = decoded.nodes.find((node) => node.kind === 'project');
+    if (result === undefined || result.kind !== 'project')
+      throw new Error('missing project node');
+    assert.equal(result.name, text);
+    assert.equal(result.path, pathText);
+    assert.equal(result.qualifiedName, text);
+    assert.equal(result.locations?.[0]?.path, pathText);
+  });
+
+  it('rejects v3 node text above the UTF-8 transport budget', () => {
+    const graph = snapshotV3();
+    const overBudget = 'é'.repeat(MAX_V3_NODE_TEXT_BYTES / 2 + 1);
+    const projectIndex = graph.nodes.findIndex(
+      (node) => node.kind === 'project',
+    );
+    assert.notEqual(projectIndex, -1);
+    for (const patch of [
+      { name: overBudget },
+      { path: overBudget },
+      { qualifiedName: overBudget },
+      {
+        locations: [
+          {
+            path: overBudget,
+            start: { line: 1, column: 1 },
+            end: { line: 1, column: 2 },
+          },
+        ],
+      },
+    ]) {
+      const nodes = graph.nodes.map((node, index) =>
+        index === projectIndex ? { ...node, ...patch } : node,
+      );
+      assert.throws(
+        () => encodeSnapshot({ ...graph, nodes }),
+        (error: unknown) =>
+          (error as { code?: string }).code === 'invalid_snapshot',
+      );
+    }
+  });
+
   it('canonicalizes pack metadata and validates provenance without rewriting v1/v2', () => {
     const graph = snapshotV3();
     const bytes = encodeSnapshot({
@@ -942,7 +1047,7 @@ describe('schema-v3 pack metadata snapshots', () => {
           nodes: graph.nodes.map((node) =>
             node.kind === 'repository'
               ? node
-              : { ...node, name: 'n'.repeat(65) },
+              : { ...node, name: 'n'.repeat(MAX_V3_NODE_TEXT_BYTES + 1) },
           ),
         }),
       /v3 node name/i,

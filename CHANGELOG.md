@@ -6,6 +6,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.0.1-alpha.1] - 2026-11-06
+
+### Changed
+
+- Restricted official package-candidate generation to an explicit
+  `/generate-candidate` comment on an eligible release or hotfix pull request,
+  while retaining sanitized success and failure feedback on that pull request
+  (#151).
+
+- Replaced C# compilation-backed extraction with deterministic local syntax-tree
+  analysis. C# snapshots now use schema v3 provenance and mark resolved local
+  relationships as syntactic evidence; package references, target compilation,
+  and compiler diagnostics no longer gate snapshot creation (#140).
+
+### Fixed
+
+- Supported bounded long C# paths and qualified names in schema-v3 snapshots,
+  including chunked local-worker responses and explicit partial-result handling
+  when a declaration exceeds the transport budget (#148).
+
+- Report the repository-relative C# source file when it is not valid UTF-8,
+  with guidance for the explicit Windows-1252 compatibility mode (#138).
+
 ## [0.1.0-beta.7] - 2026-10-31
 
 ### Added

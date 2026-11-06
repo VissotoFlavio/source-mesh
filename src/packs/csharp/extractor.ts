@@ -10,11 +10,16 @@ import {
   type DiagnosticV2,
   type EdgeKindV2,
   type EdgeV2,
+  type EdgeV3,
   type LocationV1,
   type NodeKindV2,
   type NodeV2,
 } from '../../graph.js';
-import type { SnapshotV2 } from '../../snapshot/types.js';
+import {
+  MAX_V3_NODE_TEXT_BYTES,
+  MAX_V3_QUERY_LOCATIONS_PER_NODE,
+} from '../../snapshot/codec.js';
+import type { SnapshotV3 } from '../../snapshot/types.js';
 import type {
   CSharpAnalysisManifest,
   CSharpManifest,
@@ -102,6 +107,19 @@ function location(value: CSharpWorkerLocation): LocationV1 {
     start: { ...value.start },
     end: { ...value.end },
   };
+}
+function fitsV3NodeTransportBudget(
+  value: LogicalSymbol,
+  locations: readonly LocationV1[],
+): boolean {
+  return [
+    value.name,
+    value.path,
+    value.qualifiedName,
+    ...locations
+      .slice(0, MAX_V3_QUERY_LOCATIONS_PER_NODE)
+      .map((location) => location.path),
+  ].every((text) => Buffer.byteLength(text, 'utf8') <= MAX_V3_NODE_TEXT_BYTES);
 }
 
 function candidateSymbol(
@@ -215,7 +233,7 @@ function relationDiagnostic(
 
 export function extractCSharpDeclarationGraph(
   request: ExtractCSharpDeclarationGraphRequest,
-): SnapshotV2 {
+): SnapshotV3 {
   // The root is intentionally not used in identity construction. All paths
   // reaching this adapter have already crossed the contained discovery gate.
   void request.repositoryRoot;
@@ -354,6 +372,21 @@ export function extractCSharpDeclarationGraph(
     if (collisionKeys.has(key)) return undefined;
     const candidate = candidates.get(key);
     if (candidate === undefined) return undefined;
+    const normalizedLocations = sortLocations(candidate.locations);
+    if (!fitsV3NodeTransportBudget(candidate.symbol, normalizedLocations)) {
+      addDiagnostic({
+        code: 'unsupported_declaration',
+        // The omission changes the graph, so callers must explicitly opt in
+        // to using the resulting partial snapshot.
+        severity: 'error',
+        message: messages.unsupported_declaration,
+        path: candidate.symbol.path,
+        ...(candidate.locations[0] === undefined
+          ? {}
+          : { location: candidate.locations[0] }),
+      });
+      return undefined;
+    }
     const parent = ensureNode(candidate.parentKey);
     if (parent === undefined) return undefined;
     const value = candidate.symbol;
@@ -368,7 +401,6 @@ export function extractCSharpDeclarationGraph(
             value.qualifiedName,
             value.memberRole,
           );
-    const normalizedLocations = sortLocations(candidate.locations);
     const node: NodeV2 =
       value.kind === 'file'
         ? {
@@ -509,21 +541,54 @@ export function extractCSharpDeclarationGraph(
   const diagnostics = [...pendingDiagnostics.values()]
     .map((item) => ({ ...item, id: diagnosticId(item) }) as DiagnosticV2)
     .sort((left, right) => ordinal(left.id, right.id));
-  const completeness = diagnostics.some(
+  const completeness: SnapshotV3['completeness'] = diagnostics.some(
     (diagnostic) => diagnostic.severity === 'error',
   )
     ? 'partial'
     : 'complete';
-  return {
-    schemaVersion: 2,
+  const snapshot = {
+    schemaVersion: 2 as const,
     completeness,
-    repository: { root: '.', name: repository.name },
+    repository: { root: '.' as const, name: repository.name },
     nodes: nodes.sort(
       (left, right) =>
         ordinal(left.kind, right.kind) || ordinal(left.id, right.id),
     ),
     edges,
     diagnostics,
+  };
+  return {
+    ...snapshot,
+    schemaVersion: 3,
+    metadata: {
+      verification: 'unverified',
+      packs: [
+        {
+          id: 'csharp',
+          language: 'csharp',
+          version: '1.0.0',
+          capabilities: ['project-manifest', 'source-analysis'],
+        },
+      ],
+    },
+    nodes: snapshot.nodes.map((node) => {
+      if (node.kind === 'repository') return node;
+      const locations = node.locations?.slice(
+        0,
+        MAX_V3_QUERY_LOCATIONS_PER_NODE,
+      );
+      return {
+        ...node,
+        ...(locations === undefined ? {} : { locations }),
+        packId: 'csharp',
+        language: 'csharp',
+      };
+    }),
+    edges: snapshot.edges.map((edge): EdgeV3 =>
+      edge.kind === 'contains'
+        ? (edge as EdgeV3)
+        : { ...edge, packId: 'csharp', evidence: 'syntactic' as const },
+    ),
   };
 }
 

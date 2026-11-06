@@ -3,7 +3,12 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { test } from 'node:test';
-import { fileId, openValidatedSnapshot, repositoryIdV2 } from '../src/index.js';
+import {
+  fileId,
+  openValidatedSnapshot,
+  repositoryIdV2,
+  SnapshotError,
+} from '../src/index.js';
 import type { CliIO, CliServices } from '../src/cli.js';
 import { main } from '../src/cli.js';
 import type {
@@ -17,7 +22,7 @@ import type {
   QueryResponseV1,
   SearchResponseV1,
   Snapshot,
-  SnapshotV2,
+  SnapshotV3,
 } from '../src/index.js';
 
 function capture(): CliIO & {
@@ -295,6 +300,44 @@ test('analyze derives a versioned create-only path and rejects overwrite', async
   assert.deepEqual(writes, ['.sourcemesh/snapshots/result-1.json']);
 });
 
+test('analyze reports a sanitized snapshot publication failure', async () => {
+  const io = capture();
+  assert.equal(
+    await main(
+      [
+        'analyze',
+        '--root',
+        '/repo',
+        '--snapshot-id',
+        'invalid-publication',
+        '--output',
+        'json',
+      ],
+      injectedServices({
+        writeSnapshot: async () => {
+          throw new SnapshotError(
+            'invalid_snapshot',
+            'Internal validation details must not be exposed.',
+          );
+        },
+      }),
+      io,
+    ),
+    1,
+  );
+  assert.equal(io.stdoutValue, '');
+  assert.deepEqual(JSON.parse(io.stderrValue), {
+    schemaVersion: 1,
+    command: 'analyze',
+    error: {
+      code: 'invalid_snapshot',
+      message: 'The snapshot is invalid.',
+    },
+  });
+  assert.equal(io.stderrValue.includes('analysis_failed'), false);
+  assert.equal(io.stderrValue.includes('Internal validation details'), false);
+});
+
 test('analyze rejects unsafe snapshot IDs before invoking services', async () => {
   for (const snapshotId of [
     '../escape',
@@ -555,14 +598,14 @@ test(
   },
 );
 
-test('csharp analyze writes a v2 versioned create-only snapshot', async () => {
+test('csharp analyze writes a v3 versioned create-only snapshot', async () => {
   const manifest = {
     language: 'csharp' as const,
     selection: { kind: 'project' as const, path: 'App.csproj' },
     projects: [{ path: 'App.csproj', references: [], files: ['App.cs'] }],
   };
-  const snapshot: SnapshotV2 = {
-    schemaVersion: 2,
+  const snapshot: SnapshotV3 = {
+    schemaVersion: 3,
     completeness: 'complete',
     repository: { root: '.', name: 'repository' },
     nodes: [
@@ -575,8 +618,9 @@ test('csharp analyze writes a v2 versioned create-only snapshot', async () => {
     ],
     edges: [],
     diagnostics: [],
+    metadata: { verification: 'unverified', packs: [] },
   };
-  for (const snapshotId of ['csharp-v2']) {
+  for (const snapshotId of ['csharp-v3']) {
     let writes = 0;
     const io = capture();
     assert.equal(
@@ -603,8 +647,8 @@ test('csharp analyze writes a v2 versioned create-only snapshot', async () => {
           extractCSharpDeclarationGraph: () => snapshot,
           writeSnapshot: async (_root, value, options) => {
             writes += 1;
-            assert.equal(value.schemaVersion, 2);
-            assert.equal(options.path, '.sourcemesh/snapshots/csharp-v2.json');
+            assert.equal(value.schemaVersion, 3);
+            assert.equal(options.path, '.sourcemesh/snapshots/csharp-v3.json');
             return {
               path: '/repo/.sourcemesh/result.json',
               digest: 'b'.repeat(64),
@@ -618,18 +662,18 @@ test('csharp analyze writes a v2 versioned create-only snapshot', async () => {
     );
     assert.equal(writes, 1);
     assert.equal(io.stderrValue, '');
-    assert.equal(JSON.parse(io.stdoutValue).schemaVersion, 2);
+    assert.equal(JSON.parse(io.stdoutValue).schemaVersion, 3);
   }
 });
 
-test('csharp analyze forwards public compiler options and reports compiler diagnostics', async () => {
+test('csharp analyze forwards its source-encoding option without compiler diagnostics', async () => {
   const manifest = {
     language: 'csharp' as const,
     selection: { kind: 'project' as const, path: 'App.csproj' },
     projects: [{ path: 'App.csproj', references: [], files: ['App.cs'] }],
   };
-  const snapshot: SnapshotV2 = {
-    schemaVersion: 2,
+  const snapshot: SnapshotV3 = {
+    schemaVersion: 3,
     completeness: 'complete',
     repository: { root: '.', name: 'repository' },
     nodes: [
@@ -642,6 +686,7 @@ test('csharp analyze forwards public compiler options and reports compiler diagn
     ],
     edges: [],
     diagnostics: [],
+    metadata: { verification: 'unverified', packs: [] },
   };
   let receivedOptions: unknown;
   const io = capture();
@@ -659,8 +704,6 @@ test('csharp analyze forwards public compiler options and reports compiler diagn
         'App.csproj',
         '--source-encoding',
         'windows-1252',
-        '--max-diagnostics',
-        '100000',
         '--output',
         'json',
       ],
@@ -670,18 +713,7 @@ test('csharp analyze forwards public compiler options and reports compiler diagn
           receivedOptions = options;
           return {
             projects: [],
-            diagnostics: [
-              {
-                project: 'App.csproj',
-                code: 'compiler_error',
-                severity: 'error',
-              },
-              {
-                project: 'App.csproj',
-                code: 'compiler_warning',
-                severity: 'warning',
-              },
-            ],
+            diagnostics: [],
           };
         },
         extractCSharpDeclarationGraph: () => snapshot,
@@ -692,7 +724,6 @@ test('csharp analyze forwards public compiler options and reports compiler diagn
   );
   assert.deepEqual(receivedOptions, {
     sourceEncoding: 'windows-1252',
-    maxDiagnostics: 100_000,
   });
   assert.deepEqual(JSON.parse(io.stdoutValue).result, {
     snapshotPath: '.sourcemesh/snapshots/csharp-options.json',
@@ -701,7 +732,6 @@ test('csharp analyze forwards public compiler options and reports compiler diagn
     bytes: 12,
     handover:
       'Start a new MCP process with --snapshot .sourcemesh/snapshots/csharp-options.json; existing MCP processes remain pinned to their original snapshot.',
-    compilerDiagnostics: { total: 2, errors: 1, warnings: 1 },
   });
 });
 

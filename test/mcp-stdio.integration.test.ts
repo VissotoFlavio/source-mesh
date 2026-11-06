@@ -16,6 +16,7 @@ import {
   fileIdV2,
   MAX_PACK_PROVENANCE_TEXT_BYTES,
   MAX_RELATION_EVIDENCE_PER_COUNTERPART,
+  MAX_V3_NODE_TEXT_BYTES,
   nodeIdV2,
   openValidatedSnapshot,
   repositoryIdV2,
@@ -934,6 +935,90 @@ test('MCP search output requires metadata for schema-v3 pages', async () => {
   assert.equal('issues' in withMetadata, false);
 });
 
+test('MCP v3 output contracts admit UTF-8 node text through the transport budget', async () => {
+  const text = 'é'.repeat(MAX_V3_NODE_TEXT_BYTES / 2);
+  const pathText = 's'.repeat(MAX_V3_NODE_TEXT_BYTES);
+  const result = await TOOL_SCHEMAS.searchSymbols.output['~standard'].validate({
+    operation: 'searchSymbols',
+    metadata: { verification: 'unverified', packs: [] },
+    page: {
+      schemaVersion: 3,
+      completeness: 'complete',
+      items: [
+        {
+          id: `n:${'0'.repeat(64)}`,
+          kind: 'namespace',
+          name: text,
+          path: pathText,
+          qualifiedName: text,
+          memberRole: 'none',
+          locations: [
+            {
+              path: pathText,
+              start: { line: 1, column: 1 },
+              end: { line: 1, column: 2 },
+            },
+          ],
+          packId: 'csharp-pack',
+          language: 'csharp',
+        },
+      ],
+      total: 1,
+      truncated: false,
+    },
+  });
+  assert.equal('issues' in result, false);
+});
+
+test('MCP v3 output contracts enforce UTF-8 node text and location limits', async () => {
+  const withinBudget = 'é'.repeat(MAX_V3_NODE_TEXT_BYTES / 2);
+  const overBudget = `${withinBudget}é`;
+  const response = {
+    operation: 'searchSymbols' as const,
+    metadata: { verification: 'unverified' as const, packs: [] },
+    page: {
+      schemaVersion: 3 as const,
+      completeness: 'complete' as const,
+      items: [
+        {
+          id: `n:${'0'.repeat(64)}`,
+          kind: 'namespace',
+          name: withinBudget,
+          path: withinBudget,
+          qualifiedName: withinBudget,
+          memberRole: 'none',
+          locations: [
+            {
+              path: withinBudget,
+              start: { line: 1, column: 1 },
+              end: { line: 1, column: 2 },
+            },
+          ],
+          packId: 'csharp-pack',
+          language: 'csharp',
+        },
+      ],
+      total: 1,
+      truncated: false,
+    },
+  };
+  const validate = TOOL_SCHEMAS.searchSymbols.output['~standard'].validate;
+  assert.equal('issues' in (await validate(response)), false);
+  for (const field of ['name', 'path', 'qualifiedName'] as const) {
+    const invalid = structuredClone(response);
+    invalid.page.items[0]![field] = overBudget;
+    assert.equal('issues' in (await validate(invalid)), true);
+  }
+  const invalidLocationPath = structuredClone(response);
+  invalidLocationPath.page.items[0]!.locations[0]!.path = overBudget;
+  assert.equal('issues' in (await validate(invalidLocationPath)), true);
+  const invalidLocations = structuredClone(response);
+  invalidLocations.page.items[0]!.locations.push(
+    structuredClone(invalidLocations.page.items[0]!.locations[0]!),
+  );
+  assert.equal('issues' in (await validate(invalidLocations)), true);
+});
+
 test('MCP transports bounded v3 metadata without an internal error', async () => {
   const metadata = {
     verification: 'unverified' as const,
@@ -1010,9 +1095,9 @@ test('MCP transports maximal escaped v3 pages without an internal error', async 
   const packId = escapedText;
   const language = escapedText;
   const maximumSymbolText = (index: number) =>
-    `t${String(index).padStart(3, '0')}${escapedText.slice(0, 60)}`;
+    `t${String(index).padStart(3, '0')}${'"'.repeat(MAX_V3_NODE_TEXT_BYTES - 4)}`;
   const maximumPath = (index: number) =>
-    `${'"'.repeat(60)}${String(index).padStart(4, '0')}`;
+    `${'"'.repeat(MAX_V3_NODE_TEXT_BYTES - 4)}${String(index).padStart(4, '0')}`;
   const repository = {
     id: repositoryIdV2(),
     kind: 'repository' as const,

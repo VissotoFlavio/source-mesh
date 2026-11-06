@@ -82,13 +82,13 @@ if [[ "$(jq -r '.state' <<<"$pr")" != "open" ||
   "$(jq -r '.base.ref' <<<"$pr")" != "master" ||
   "$(jq -r '.base.repo.full_name' <<<"$pr")" != "$REPOSITORY" ||
   "$(jq -r '.head.repo.full_name' <<<"$pr")" != "$REPOSITORY" ]]; then
-  fail "The pull request is not an open same-repository release pull request targeting master."
+  fail "The pull request is not an open same-repository release or hotfix pull request targeting master."
 fi
 
 HEAD_BRANCH="$(jq -r '.head.ref' <<<"$pr")"
 HEAD_SHA="$(jq -r '.head.sha' <<<"$pr")"
-if [[ ! "$HEAD_BRANCH" =~ ^release/[^/]+$ || ! "$HEAD_SHA" =~ ^[[:xdigit:]]{40}$ ]]; then
-  fail "The pull request head is not a valid release branch and commit SHA."
+if [[ ! "$HEAD_BRANCH" =~ ^release/[^/]+$ && ! "$HEAD_BRANCH" =~ ^hotfix/[1-9][0-9]*-[a-z0-9]+(-[a-z0-9]+)*$ || ! "$HEAD_SHA" =~ ^[[:xdigit:]]{40}$ ]]; then
+  fail "The pull request head is not a valid release or hotfix branch and commit SHA."
 fi
 if [[ -n "${EXPECTED_HEAD_SHA:-}" && "$HEAD_SHA" != "$EXPECTED_HEAD_SHA" ]]; then
   fail "The pull request head changed after candidate validation."
