@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
   encodeSnapshot,
+  createGraphQueryService,
   extractCSharpDeclarationGraph,
   type CSharpExplicitProjectManifest,
   type CSharpManifest,
@@ -149,6 +150,146 @@ test('C# extraction emits a codec-valid v3 graph with syntactic evidence and pre
   );
   assert.equal(snapshot.metadata.packs[0]?.id, 'csharp');
   assert.doesNotThrow(() => encodeSnapshot(snapshot));
+});
+
+test('C# extraction bounds repeated declaration locations for v3 query transport', () => {
+  const source = worker();
+  const repeated = {
+    ...source,
+    projects: source.projects.map((project) => ({
+      ...project,
+      declarations: [...(project.declarations ?? []), declaration(run, app, 9)],
+    })),
+  };
+  const snapshot = extractCSharpDeclarationGraph({
+    repositoryRoot: 'C:/one',
+    manifest,
+    worker: repeated,
+  });
+  const functionNode = snapshot.nodes.find(
+    (node) => node.kind === 'function' && node.name === 'Run',
+  );
+  if (functionNode === undefined || functionNode.kind !== 'function')
+    throw new Error('missing function node');
+  assert.equal(functionNode.locations?.length, 1);
+  assert.doesNotThrow(() => encodeSnapshot(snapshot));
+});
+
+test('C# extraction omits declarations beyond the v3 text transport budget', () => {
+  const overBudget = symbol('function', 'Run', 'A'.repeat(257), 'instance');
+  const source = worker();
+  const limited = {
+    ...source,
+    projects: source.projects.map((project) => ({
+      ...project,
+      declarations: [
+        ...(project.declarations ?? []),
+        declaration(overBudget, app, 9),
+      ],
+    })),
+  };
+  const snapshot = extractCSharpDeclarationGraph({
+    repositoryRoot: 'C:/one',
+    manifest,
+    worker: limited,
+  });
+  assert.equal(
+    snapshot.nodes.some(
+      (node) =>
+        node.kind === 'function' &&
+        node.qualifiedName === overBudget.qualifiedName,
+    ),
+    false,
+  );
+  assert.equal(
+    snapshot.diagnostics.some(
+      (diagnostic) => diagnostic.code === 'unsupported_declaration',
+    ),
+    true,
+  );
+  assert.equal(snapshot.completeness, 'partial');
+  assert.doesNotThrow(() => encodeSnapshot(snapshot));
+  const service = createGraphQueryService(snapshot);
+  const rejected = service.searchSymbols({
+    operation: 'searchSymbols',
+    query: 'Run',
+  });
+  assert.equal('code' in rejected, true);
+  if (!('code' in rejected)) throw new Error('expected partial rejection');
+  assert.equal(rejected.code, 'partial_not_allowed');
+  const allowed = service.searchSymbols({
+    operation: 'searchSymbols',
+    query: 'Run',
+    allowPartial: true,
+  });
+  assert.equal('code' in allowed, false);
+  if ('code' in allowed || allowed.operation !== 'searchSymbols')
+    throw new Error('expected partial result');
+  assert.equal(allowed.page.completeness, 'partial');
+});
+
+test('C# extraction omits declarations with a v3 location path beyond the transport budget', () => {
+  const locationBudgetSymbol = symbol(
+    'function',
+    'LongLocation',
+    'App.App.LongLocation',
+    'instance',
+  );
+  const overBudgetLocation = {
+    path: 'a'.repeat(257),
+    start: { line: 9, column: 1 },
+    end: { line: 9, column: 10 },
+  };
+  const source = worker();
+  const limited = {
+    ...source,
+    projects: source.projects.map((project) => ({
+      ...project,
+      declarations: [
+        ...(project.declarations ?? []),
+        {
+          ...declaration(locationBudgetSymbol, app, 9),
+          locations: [overBudgetLocation],
+        },
+      ],
+    })),
+  };
+  const snapshot = extractCSharpDeclarationGraph({
+    repositoryRoot: 'C:/one',
+    manifest,
+    worker: limited,
+  });
+  assert.equal(
+    snapshot.nodes.some(
+      (node) =>
+        node.kind === 'function' &&
+        node.qualifiedName === locationBudgetSymbol.qualifiedName,
+    ),
+    false,
+  );
+  const diagnostic = snapshot.diagnostics.find(
+    (item) => item.code === 'unsupported_declaration',
+  );
+  assert.equal(diagnostic?.severity, 'error');
+  assert.equal(snapshot.completeness, 'partial');
+  assert.doesNotThrow(() => encodeSnapshot(snapshot));
+  const service = createGraphQueryService(snapshot);
+  const rejected = service.searchSymbols({
+    operation: 'searchSymbols',
+    query: 'LongLocation',
+  });
+  assert.equal('code' in rejected, true);
+  if (!('code' in rejected)) throw new Error('expected partial rejection');
+  assert.equal(rejected.code, 'partial_not_allowed');
+  const allowed = service.searchSymbols({
+    operation: 'searchSymbols',
+    query: 'LongLocation',
+    allowPartial: true,
+  });
+  assert.equal('code' in allowed, false);
+  if ('code' in allowed || allowed.operation !== 'searchSymbols')
+    throw new Error('expected partial result');
+  assert.equal(allowed.page.completeness, 'partial');
 });
 
 test('C# extraction is independent of repository roots and worker order', () => {

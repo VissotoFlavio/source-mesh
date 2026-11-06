@@ -4,6 +4,7 @@ import {
   type StandardSchemaV1,
   type StandardSchemaWithJSON,
 } from '@modelcontextprotocol/server';
+import { MAX_V3_NODE_TEXT_BYTES } from '../snapshot/codec.js';
 import type {
   CallRelationRequestV1,
   FileRelationRequestV1,
@@ -71,6 +72,20 @@ const SCHEMA_VERSION_SCHEMA = {
 };
 const PATH_SCHEMA = { type: 'string', pattern: RELATIVE_PATH_PATTERN };
 const TEXT_SCHEMA = { type: 'string' };
+// JSON Schema's maxLength counts Unicode code points, not UTF-8 bytes. Every
+// string admitted by the codec's node-text ceiling is at most that many code points,
+// so this advertises a compatible outer bound. The output contract below also
+// validates the exact UTF-8 byte budget.
+const V3_NODE_TEXT_SCHEMA = {
+  type: 'string',
+  maxLength: MAX_V3_NODE_TEXT_BYTES,
+};
+const V3_NODE_PATH_SCHEMA = {
+  type: 'string',
+  pattern: RELATIVE_PATH_PATTERN,
+  maxLength: MAX_V3_NODE_TEXT_BYTES,
+};
+const V3_NODE_TEXT_FIELDS = ['name', 'path', 'qualifiedName'] as const;
 
 const selectorProperties = {
   kind: {
@@ -142,6 +157,13 @@ const locationSchema = {
         column: { type: 'integer', minimum: 1 },
       },
     },
+  },
+} as const;
+const locationV3Schema = {
+  ...locationSchema,
+  properties: {
+    ...locationSchema.properties,
+    path: V3_NODE_PATH_SCHEMA,
   },
 } as const;
 
@@ -233,19 +255,54 @@ const snapshotMetadataV3Schema = {
   },
 } as const;
 const fileSummaryV3Schema = {
-  ...fileSummarySchema,
-  required: [...fileSummarySchema.required, 'packId', 'language'],
+  type: 'object',
+  additionalProperties: false,
+  required: ['id', 'kind', 'name', 'path', 'packId', 'language'],
   properties: {
-    ...fileSummarySchema.properties,
+    id: NODE_ID_SCHEMA,
+    kind: { const: 'file' },
+    name: V3_NODE_TEXT_SCHEMA,
+    path: V3_NODE_PATH_SCHEMA,
+    locations: { type: 'array', maxItems: 1, items: locationV3Schema },
     packId: TEXT_SCHEMA,
     language: TEXT_SCHEMA,
   },
 } as const;
 const symbolSummaryV3Schema = {
-  ...symbolSummarySchema,
-  required: [...symbolSummarySchema.required, 'packId', 'language'],
+  type: 'object',
+  additionalProperties: false,
+  required: [
+    'id',
+    'kind',
+    'name',
+    'path',
+    'qualifiedName',
+    'memberRole',
+    'packId',
+    'language',
+  ],
   properties: {
-    ...symbolSummarySchema.properties,
+    id: NODE_ID_SCHEMA,
+    kind: {
+      type: 'string',
+      enum: [
+        'solution',
+        'project',
+        'module',
+        'namespace',
+        'class',
+        'interface',
+        'function',
+        'variable',
+        'type',
+        'parameter',
+      ],
+    },
+    name: V3_NODE_TEXT_SCHEMA,
+    path: V3_NODE_PATH_SCHEMA,
+    qualifiedName: V3_NODE_TEXT_SCHEMA,
+    memberRole: { type: 'string', enum: ['none', 'static', 'instance'] },
+    locations: { type: 'array', maxItems: 1, items: locationV3Schema },
     packId: TEXT_SCHEMA,
     language: TEXT_SCHEMA,
   },
@@ -373,23 +430,74 @@ function responseSchema(response: JsonSchemaType): JsonSchemaType {
   return { oneOf: [response, errorSchema] };
 }
 
-function sanitizedSchema<T>(schema: JsonSchemaType): StandardSchemaWithJSON<T> {
+function isV3NodeSummary(value: Record<string, unknown>): boolean {
+  return (
+    typeof value.id === 'string' &&
+    typeof value.name === 'string' &&
+    typeof value.path === 'string' &&
+    typeof value.packId === 'string' &&
+    typeof value.language === 'string'
+  );
+}
+
+function hasBoundedV3NodeText(value: unknown, inV3Response = false): boolean {
+  if (Array.isArray(value))
+    return value.every((item) => hasBoundedV3NodeText(item, inV3Response));
+  if (value === null || typeof value !== 'object') return true;
+  const record = value as Record<string, unknown>;
+  const isV3Response = inV3Response || record.schemaVersion === 3;
+  if (isV3Response && isV3NodeSummary(record)) {
+    if (
+      V3_NODE_TEXT_FIELDS.some((field) => {
+        const text = record[field];
+        return (
+          typeof text === 'string' &&
+          Buffer.byteLength(text, 'utf8') > MAX_V3_NODE_TEXT_BYTES
+        );
+      })
+    )
+      return false;
+    if (
+      Array.isArray(record.locations) &&
+      record.locations.some((location) => {
+        if (location === null || typeof location !== 'object') return false;
+        const path = (location as Record<string, unknown>).path;
+        return (
+          typeof path === 'string' &&
+          Buffer.byteLength(path, 'utf8') > MAX_V3_NODE_TEXT_BYTES
+        );
+      })
+    )
+      return false;
+  }
+  return Object.values(record).every((item) =>
+    hasBoundedV3NodeText(item, isV3Response),
+  );
+}
+
+function sanitizedSchema<T>(
+  schema: JsonSchemaType,
+  isAllowed: (value: unknown) => boolean = () => true,
+): StandardSchemaWithJSON<T> {
   const standard = fromJsonSchema<T>(schema);
   const validate = standard['~standard'].validate;
   const sanitize = (
     result: StandardSchemaV1.Result<T>,
+    value: unknown,
   ): StandardSchemaV1.Result<T> =>
     'issues' in result && result.issues !== undefined
       ? { issues: [{ message: 'invalid_request' }] }
-      : result;
+      : !isAllowed(value)
+        ? { issues: [{ message: 'invalid_request' }] }
+        : result;
   return {
     '~standard': {
       ...standard['~standard'],
       validate: (value, options) => {
         const result = validate(value, options);
         return result instanceof Promise
-          ? result.then(sanitize)
-          : sanitize(result);
+          ? result.then((validated) => sanitize(validated, value))
+          : sanitize(result, value);
       },
     },
   };
@@ -641,13 +749,13 @@ export const TOOL_SCHEMAS = {
     input: inputContracts.searchSymbols.advertised,
     output: sanitizedSchema<
       QueryResponseV1 | QueryResponseV2 | QueryResponseV3 | McpToolError
-    >(responseSchema(searchResponseSchema)),
+    >(responseSchema(searchResponseSchema), hasBoundedV3NodeText),
   },
   getSymbol: {
     input: inputContracts.getSymbol.advertised,
     output: sanitizedSchema<
       QueryResponseV1 | QueryResponseV2 | QueryResponseV3 | McpToolError
-    >(responseSchema(getSymbolResponseSchema)),
+    >(responseSchema(getSymbolResponseSchema), hasBoundedV3NodeText),
   },
   listFileDependencies: {
     input: inputContracts.listFileDependencies.advertised,
@@ -661,6 +769,7 @@ export const TOOL_SCHEMAS = {
           fileSummarySchema,
         ),
       ),
+      hasBoundedV3NodeText,
     ),
   },
   listFileDependents: {
@@ -675,6 +784,7 @@ export const TOOL_SCHEMAS = {
           fileSummarySchema,
         ),
       ),
+      hasBoundedV3NodeText,
     ),
   },
   listCallers: {
@@ -689,6 +799,7 @@ export const TOOL_SCHEMAS = {
           symbolSummarySchema,
         ),
       ),
+      hasBoundedV3NodeText,
     ),
   },
   listCallees: {
@@ -703,6 +814,7 @@ export const TOOL_SCHEMAS = {
           symbolSummarySchema,
         ),
       ),
+      hasBoundedV3NodeText,
     ),
   },
 } as const;

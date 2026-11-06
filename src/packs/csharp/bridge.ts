@@ -2,6 +2,15 @@ import { promises as fs } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
+import {
+  LOCAL_WORKER_MAX_MESSAGE_BYTES,
+  LOCAL_WORKER_MAX_RESPONSE_BYTES,
+  LOCAL_WORKER_MAX_RESPONSE_CHUNK_BYTES,
+  LOCAL_WORKER_MAX_RESPONSE_MANIFEST_BYTES,
+  LOCAL_WORKER_PROTOCOL_VERSION,
+  LOCAL_WORKER_RESPONSE_MANIFEST,
+  LOCAL_WORKER_RESPONSE_VERSION,
+} from '../../local-worker.js';
 import type { GraphFragment } from '../../packs.js';
 import type { SnapshotV3 } from '../../snapshot/types.js';
 import type { CSharpAnalysisManifest } from './contracts.js';
@@ -11,9 +20,6 @@ import {
   type CSharpWorkerOptions,
   type CSharpWorkerResult,
 } from './worker.js';
-
-const VERSION = 1;
-const MAX_MESSAGE_BYTES = 2 * 1024 * 1024;
 
 interface AnalysisPayload {
   readonly kind: 'analysis-request';
@@ -32,9 +38,21 @@ interface ManifestPayload {
   readonly options?: CSharpWorkerOptions;
 }
 type Payload = AnalysisPayload | ManifestPayload;
+interface ResponseTarget {
+  readonly version: typeof LOCAL_WORKER_RESPONSE_VERSION;
+  readonly directory: string;
+}
 
 function object(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+function closedObject(
+  value: unknown,
+  allowed: readonly string[],
+): value is Record<string, unknown> {
+  return (
+    object(value) && Object.keys(value).every((key) => allowed.includes(key))
+  );
 }
 function safePath(value: unknown): value is string {
   return (
@@ -66,14 +84,26 @@ function validPayload(value: unknown): value is Payload {
     )
   );
 }
+function validResponseTarget(value: unknown): value is ResponseTarget {
+  return (
+    closedObject(value, ['version', 'directory']) &&
+    value.version === LOCAL_WORKER_RESPONSE_VERSION &&
+    typeof value.directory === 'string' &&
+    path.isAbsolute(value.directory)
+  );
+}
 
-async function input(): Promise<unknown> {
+async function input(): Promise<{
+  readonly payload: Payload;
+  readonly response: ResponseTarget;
+}> {
   const chunks: Buffer[] = [];
   let bytes = 0;
   for await (const chunk of process.stdin) {
     const buffer = Buffer.from(chunk);
     bytes += buffer.byteLength;
-    if (bytes > MAX_MESSAGE_BYTES) throw new Error('invalid input');
+    if (bytes > LOCAL_WORKER_MAX_MESSAGE_BYTES)
+      throw new Error('invalid input');
     chunks.push(buffer);
   }
   const frame = new TextDecoder('utf-8', { fatal: true }).decode(
@@ -84,12 +114,16 @@ async function input(): Promise<unknown> {
   const request: unknown = JSON.parse(frame);
   if (
     !object(request) ||
-    request.version !== VERSION ||
+    request.version !== LOCAL_WORKER_PROTOCOL_VERSION ||
     request.packId !== 'csharp' ||
-    !validPayload(request.payload)
+    !validPayload(request.payload) ||
+    !validResponseTarget(request.response)
   )
     throw new Error('invalid input');
-  return request.payload;
+  return {
+    payload: request.payload as Payload,
+    response: request.response as ResponseTarget,
+  };
 }
 
 function fragment(
@@ -198,12 +232,76 @@ async function run(payload: Payload): Promise<{
   return { worker, result: fragment(snapshot, paths) };
 }
 
-try {
-  const payload = await input();
-  const result = await run(payload as Payload);
-  process.stdout.write(
-    `${JSON.stringify({ version: VERSION, fragment: result.result, payload: result.worker })}\n`,
+async function writeResponse(
+  value: {
+    readonly worker: CSharpWorkerResult;
+    readonly result: GraphFragment;
+  },
+  target: ResponseTarget,
+): Promise<string> {
+  const directory = await fs.lstat(target.directory);
+  if (!directory.isDirectory() || directory.isSymbolicLink())
+    throw new Error('invalid response directory');
+  const response = Buffer.from(
+    `${JSON.stringify({
+      version: LOCAL_WORKER_PROTOCOL_VERSION,
+      fragment: value.result,
+      payload: value.worker,
+    })}\n`,
+    'utf8',
   );
+  if (
+    response.byteLength === 0 ||
+    response.byteLength > LOCAL_WORKER_MAX_RESPONSE_BYTES
+  )
+    throw new Error('response limit');
+  const chunks: { index: number; name: string; bytes: number }[] = [];
+  for (let offset = 0, index = 0; offset < response.byteLength; index += 1) {
+    const name = `chunk-${String(index).padStart(6, '0')}.bin`;
+    const chunk = response.subarray(
+      offset,
+      offset + LOCAL_WORKER_MAX_RESPONSE_CHUNK_BYTES,
+    );
+    await fs.writeFile(path.join(target.directory, name), chunk, {
+      flag: 'wx',
+    });
+    chunks.push({ index, name, bytes: chunk.byteLength });
+    offset += chunk.byteLength;
+  }
+  const manifest = Buffer.from(
+    JSON.stringify({
+      version: LOCAL_WORKER_RESPONSE_VERSION,
+      chunks,
+      bytes: response.byteLength,
+    }),
+    'utf8',
+  );
+  if (
+    manifest.byteLength === 0 ||
+    manifest.byteLength > LOCAL_WORKER_MAX_RESPONSE_MANIFEST_BYTES
+  )
+    throw new Error('manifest limit');
+  await fs.writeFile(
+    path.join(target.directory, LOCAL_WORKER_RESPONSE_MANIFEST),
+    manifest,
+    {
+      flag: 'wx',
+    },
+  );
+  return `${JSON.stringify({
+    version: LOCAL_WORKER_PROTOCOL_VERSION,
+    response: {
+      version: LOCAL_WORKER_RESPONSE_VERSION,
+      manifest: LOCAL_WORKER_RESPONSE_MANIFEST,
+      bytes: manifest.byteLength,
+    },
+  })}\n`;
+}
+
+try {
+  const request = await input();
+  const result = await run(request.payload);
+  process.stdout.write(await writeResponse(result, request.response));
 } catch {
   process.exitCode = 1;
 }

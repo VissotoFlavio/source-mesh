@@ -15,6 +15,10 @@ import {
   type NodeKindV2,
   type NodeV2,
 } from '../../graph.js';
+import {
+  MAX_V3_NODE_TEXT_BYTES,
+  MAX_V3_QUERY_LOCATIONS_PER_NODE,
+} from '../../snapshot/codec.js';
 import type { SnapshotV3 } from '../../snapshot/types.js';
 import type {
   CSharpAnalysisManifest,
@@ -103,6 +107,19 @@ function location(value: CSharpWorkerLocation): LocationV1 {
     start: { ...value.start },
     end: { ...value.end },
   };
+}
+function fitsV3NodeTransportBudget(
+  value: LogicalSymbol,
+  locations: readonly LocationV1[],
+): boolean {
+  return [
+    value.name,
+    value.path,
+    value.qualifiedName,
+    ...locations
+      .slice(0, MAX_V3_QUERY_LOCATIONS_PER_NODE)
+      .map((location) => location.path),
+  ].every((text) => Buffer.byteLength(text, 'utf8') <= MAX_V3_NODE_TEXT_BYTES);
 }
 
 function candidateSymbol(
@@ -355,6 +372,21 @@ export function extractCSharpDeclarationGraph(
     if (collisionKeys.has(key)) return undefined;
     const candidate = candidates.get(key);
     if (candidate === undefined) return undefined;
+    const normalizedLocations = sortLocations(candidate.locations);
+    if (!fitsV3NodeTransportBudget(candidate.symbol, normalizedLocations)) {
+      addDiagnostic({
+        code: 'unsupported_declaration',
+        // The omission changes the graph, so callers must explicitly opt in
+        // to using the resulting partial snapshot.
+        severity: 'error',
+        message: messages.unsupported_declaration,
+        path: candidate.symbol.path,
+        ...(candidate.locations[0] === undefined
+          ? {}
+          : { location: candidate.locations[0] }),
+      });
+      return undefined;
+    }
     const parent = ensureNode(candidate.parentKey);
     if (parent === undefined) return undefined;
     const value = candidate.symbol;
@@ -369,7 +401,6 @@ export function extractCSharpDeclarationGraph(
             value.qualifiedName,
             value.memberRole,
           );
-    const normalizedLocations = sortLocations(candidate.locations);
     const node: NodeV2 =
       value.kind === 'file'
         ? {
@@ -540,11 +571,19 @@ export function extractCSharpDeclarationGraph(
         },
       ],
     },
-    nodes: snapshot.nodes.map((node) =>
-      node.kind === 'repository'
-        ? node
-        : { ...node, packId: 'csharp', language: 'csharp' },
-    ),
+    nodes: snapshot.nodes.map((node) => {
+      if (node.kind === 'repository') return node;
+      const locations = node.locations?.slice(
+        0,
+        MAX_V3_QUERY_LOCATIONS_PER_NODE,
+      );
+      return {
+        ...node,
+        ...(locations === undefined ? {} : { locations }),
+        packId: 'csharp',
+        language: 'csharp',
+      };
+    }),
     edges: snapshot.edges.map((edge): EdgeV3 =>
       edge.kind === 'contains'
         ? (edge as EdgeV3)

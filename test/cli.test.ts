@@ -3,7 +3,12 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { test } from 'node:test';
-import { fileId, openValidatedSnapshot, repositoryIdV2 } from '../src/index.js';
+import {
+  fileId,
+  openValidatedSnapshot,
+  repositoryIdV2,
+  SnapshotError,
+} from '../src/index.js';
 import type { CliIO, CliServices } from '../src/cli.js';
 import { main } from '../src/cli.js';
 import type {
@@ -293,6 +298,44 @@ test('analyze derives a versioned create-only path and rejects overwrite', async
     2,
   );
   assert.deepEqual(writes, ['.sourcemesh/snapshots/result-1.json']);
+});
+
+test('analyze reports a sanitized snapshot publication failure', async () => {
+  const io = capture();
+  assert.equal(
+    await main(
+      [
+        'analyze',
+        '--root',
+        '/repo',
+        '--snapshot-id',
+        'invalid-publication',
+        '--output',
+        'json',
+      ],
+      injectedServices({
+        writeSnapshot: async () => {
+          throw new SnapshotError(
+            'invalid_snapshot',
+            'Internal validation details must not be exposed.',
+          );
+        },
+      }),
+      io,
+    ),
+    1,
+  );
+  assert.equal(io.stdoutValue, '');
+  assert.deepEqual(JSON.parse(io.stderrValue), {
+    schemaVersion: 1,
+    command: 'analyze',
+    error: {
+      code: 'invalid_snapshot',
+      message: 'The snapshot is invalid.',
+    },
+  });
+  assert.equal(io.stderrValue.includes('analysis_failed'), false);
+  assert.equal(io.stderrValue.includes('Internal validation details'), false);
 });
 
 test('analyze rejects unsafe snapshot IDs before invoking services', async () => {
