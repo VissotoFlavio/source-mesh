@@ -112,3 +112,26 @@ import-only protocol and requires separate authorization for hosted models.
 Append `--diagnostics` while investigating a failed run. It writes bounded
 stage, exit-code, and sanitized diagnostic-code events to stderr; it never
 prints target paths, source content, queries, or expected values.
+
+## Observed external C# result
+
+The public [five-run report](../benchmarks/results/external-csharp-medium-rerun.json)
+records an explicitly selected, single external C# application project under
+the generic label `external-csharp-medium`. It contains no target source,
+identifiers, absolute paths, prompts, or detailed local scenario records.
+
+| Measurement                    |          Median |
+| ------------------------------ | --------------: |
+| File discovery                 |   2,273.7962 ms |
+| Analysis and snapshot creation |   5,887.1876 ms |
+| MCP initialization             |   1,665.9437 ms |
+| Warm SourceMesh query          |       1.6218 ms |
+| Snapshot size                  | 4,758,563 bytes |
+
+The documented textual baseline examined 202 files and used 203 operations per
+scenario. SourceMesh used one query operation after preparation. Across the 20
+scenario runs, both strategies had recall 1.0; baseline precision was 1.0 and
+SourceMesh precision was 0.875 because one query produced a false positive.
+No token metrics were collected. These host-specific observations do not prove
+an end-to-end workflow or token improvement; the snapshot and MCP preparation
+costs remain part of any comparison.
