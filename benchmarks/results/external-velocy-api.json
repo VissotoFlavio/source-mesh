@@ -1,0 +1,190 @@
+{
+  "schemaVersion": 1,
+  "benchmark": "SourceMesh external C# benchmark",
+  "generatedAt": "2026-11-06T21:11:52.411Z",
+  "environment": {
+    "node": "v24.13.0",
+    "os": "win32 10.0.26200 x64",
+    "sourceMeshCommit": "f537c3b93c96cec0c02d676caf718296b5b575a4"
+  },
+  "manifest": {
+    "id": "external-csharp-medium",
+    "fixture": "external-csharp-medium",
+    "languages": [
+      "csharp"
+    ]
+  },
+  "scenarios": [
+    {
+      "scenarioId": "scenario-1",
+      "baseline": {
+        "elapsedMs": 96.56499999999505,
+        "preparationOperations": 0,
+        "operations": 203,
+        "filesExamined": 202,
+        "returnedBytes": 80,
+        "accuracy": {
+          "expected": 1,
+          "returned": 1,
+          "correct": 1,
+          "falsePositives": 0,
+          "falseNegatives": 0,
+          "precision": 1,
+          "recall": 1
+        },
+        "status": "complete"
+      },
+      "sourceMesh": {
+        "elapsedMs": 13.961000000002969,
+        "preparationOperations": 0,
+        "operations": 1,
+        "filesExamined": 0,
+        "returnedBytes": 725,
+        "accuracy": {
+          "expected": 1,
+          "returned": 1,
+          "correct": 1,
+          "falsePositives": 0,
+          "falseNegatives": 0,
+          "precision": 1,
+          "recall": 1
+        },
+        "status": "complete"
+      }
+    },
+    {
+      "scenarioId": "scenario-2",
+      "baseline": {
+        "elapsedMs": 79.092899999996,
+        "preparationOperations": 0,
+        "operations": 203,
+        "filesExamined": 202,
+        "returnedBytes": 72,
+        "accuracy": {
+          "expected": 1,
+          "returned": 1,
+          "correct": 1,
+          "falsePositives": 0,
+          "falseNegatives": 0,
+          "precision": 1,
+          "recall": 1
+        },
+        "status": "complete"
+      },
+      "sourceMesh": {
+        "elapsedMs": 1.8752000000022235,
+        "preparationOperations": 0,
+        "operations": 1,
+        "filesExamined": 0,
+        "returnedBytes": 1166,
+        "accuracy": {
+          "expected": 1,
+          "returned": 2,
+          "correct": 1,
+          "falsePositives": 1,
+          "falseNegatives": 0,
+          "precision": 0.5,
+          "recall": 1
+        },
+        "status": "complete"
+      }
+    },
+    {
+      "scenarioId": "scenario-3",
+      "baseline": {
+        "elapsedMs": 82.94380000000092,
+        "preparationOperations": 0,
+        "operations": 203,
+        "filesExamined": 202,
+        "returnedBytes": 80,
+        "accuracy": {
+          "expected": 1,
+          "returned": 1,
+          "correct": 1,
+          "falsePositives": 0,
+          "falseNegatives": 0,
+          "precision": 1,
+          "recall": 1
+        },
+        "status": "complete"
+      },
+      "sourceMesh": {
+        "elapsedMs": 1.5300999999963096,
+        "preparationOperations": 0,
+        "operations": 1,
+        "filesExamined": 0,
+        "returnedBytes": 732,
+        "accuracy": {
+          "expected": 1,
+          "returned": 1,
+          "correct": 1,
+          "falsePositives": 0,
+          "falseNegatives": 0,
+          "precision": 1,
+          "recall": 1
+        },
+        "status": "complete"
+      }
+    },
+    {
+      "scenarioId": "scenario-4",
+      "baseline": {
+        "elapsedMs": 97.23460000000341,
+        "preparationOperations": 0,
+        "operations": 203,
+        "filesExamined": 202,
+        "returnedBytes": 102,
+        "accuracy": {
+          "expected": 1,
+          "returned": 1,
+          "correct": 1,
+          "falsePositives": 0,
+          "falseNegatives": 0,
+          "precision": 1,
+          "recall": 1
+        },
+        "status": "complete"
+      },
+      "sourceMesh": {
+        "elapsedMs": 1.6705999999976484,
+        "preparationOperations": 0,
+        "operations": 1,
+        "filesExamined": 0,
+        "returnedBytes": 775,
+        "accuracy": {
+          "expected": 1,
+          "returned": 1,
+          "correct": 1,
+          "falsePositives": 0,
+          "falseNegatives": 0,
+          "precision": 1,
+          "recall": 1
+        },
+        "status": "complete"
+      }
+    }
+  ],
+  "summaries": {
+    "runs": 5,
+    "scenarios": 20,
+    "discovery.medianMs": 2650.398000000001,
+    "analysisAndSnapshot.medianMs": 6184.437299999998,
+    "mcpInitialization.medianMs": 1741.6480999999985,
+    "warmQuery.medianMs": 1.7829999999985375,
+    "warmQuery.p95Ms": 13.961000000002969,
+    "snapshot.medianBytes": 4758563,
+    "baseline.operations.mean": 203,
+    "sourceMesh.operations.mean": 1,
+    "baseline.precision.mean": 1,
+    "sourceMesh.precision.mean": 0.875,
+    "sourceMesh.recall.mean": 1,
+    "failures": 0
+  },
+  "tokenMetrics": [],
+  "limitations": [
+    "Timing is host-specific and is not a latency SLO or a production-capacity claim.",
+    "The baseline is a documented textual search and file-inspection procedure, not every possible agent workflow.",
+    "File-relation scenarios use a fixture-known file ID because the current MCP surface accepts file IDs for those operations.",
+    "No hosted model is invoked and no token metric is inferred when no imported telemetry is supplied."
+  ]
+}

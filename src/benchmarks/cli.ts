@@ -272,7 +272,7 @@ export async function main(
   process.stdout.write(`Benchmark report written to ${parsed.output}\n`);
 }
 
-function sanitizeExternalReport(
+export function sanitizeExternalReport(
   report: Awaited<ReturnType<typeof runBenchmark>>,
 ) {
   const sanitizeStrategy = (
@@ -287,23 +287,52 @@ function sanitizeExternalReport(
     status: result.status,
   });
   return {
-    ...report,
-    environment: { ...report.environment, fixtureCommit: 'private' },
+    schemaVersion: report.schemaVersion,
+    benchmark: 'SourceMesh external C# benchmark',
+    generatedAt: report.generatedAt,
+    environment: {
+      node: report.environment.node,
+      os: report.environment.os,
+      sourceMeshCommit: report.environment.sourceMeshCommit,
+    },
     manifest: {
       id: 'external-csharp-medium',
       fixture: 'external-csharp-medium',
       languages: ['csharp'],
     },
-    scenarioRuns: undefined,
     scenarios: report.scenarios.map((scenario, index) => ({
       scenarioId: `scenario-${index + 1}`,
       baseline: sanitizeStrategy(scenario.baseline),
       sourceMesh: sanitizeStrategy(scenario.sourceMesh),
     })),
+    summaries: report.summaries,
     tokenMetrics: report.tokenMetrics.map((metric, index) => ({
-      ...metric,
       scenarioId: `scenario-${index + 1}`,
+      mode: metric.mode,
+      origin: metric.origin,
+      ...(metric.inputTokens === undefined
+        ? {}
+        : { inputTokens: metric.inputTokens }),
+      ...(metric.outputTokens === undefined
+        ? {}
+        : { outputTokens: metric.outputTokens }),
+      ...(metric.cachedInputTokens === undefined
+        ? {}
+        : { cachedInputTokens: metric.cachedInputTokens }),
+      ...(metric.reasoningTokens === undefined
+        ? {}
+        : { reasoningTokens: metric.reasoningTokens }),
+      ...(metric.totalTokens === undefined
+        ? {}
+        : { totalTokens: metric.totalTokens }),
+      ...(metric.toolCalls === undefined
+        ? {}
+        : { toolCalls: metric.toolCalls }),
+      ...(metric.elapsedMs === undefined
+        ? {}
+        : { elapsedMs: metric.elapsedMs }),
     })),
+    limitations: report.limitations,
   };
 }
 

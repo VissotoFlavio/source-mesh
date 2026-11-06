@@ -13,8 +13,31 @@ import {
   validateImportedTokenMetrics,
 } from '../src/benchmarks/report.js';
 import { stageExternalCSharpProject } from '../src/benchmarks/external-csharp.js';
+import { sanitizeExternalReport } from '../src/benchmarks/cli.js';
 import { OFFICIAL_SYNTHETIC_MANIFEST } from '../src/benchmarks/scenarios.js';
 import path from 'node:path';
+
+async function fileTree(
+  root: string,
+  relative = '',
+): Promise<readonly string[]> {
+  const directory = path.join(root, relative);
+  const entries = await fs.readdir(directory, { withFileTypes: true });
+  const tree: string[] = [];
+  for (const entry of entries.sort((left, right) =>
+    left.name.localeCompare(right.name, 'en'),
+  )) {
+    const child = path.join(relative, entry.name);
+    if (entry.isDirectory()) tree.push(...(await fileTree(root, child)));
+    else if (entry.isFile()) {
+      const contents = await fs.readFile(path.join(root, child));
+      tree.push(
+        `${child.replaceAll(path.sep, '/')}=${contents.toString('base64')}`,
+      );
+    }
+  }
+  return tree;
+}
 
 test('benchmark manifests reject duplicate scenario ids and invalid analyses', () => {
   validateBenchmarkManifest(OFFICIAL_SYNTHETIC_MANIFEST);
@@ -151,6 +174,7 @@ test('token metrics require a declared source and CSV keeps failures visible', (
 
 test('external C# staging copies only the explicit selection into a temporary root', async () => {
   const source = path.join(process.cwd(), 'test', 'fixtures', 'csharp-project');
+  const before = await fileTree(source);
   await assert.rejects(
     () =>
       stageExternalCSharpProject({
@@ -172,4 +196,47 @@ test('external C# staging copies only the explicit selection into a temporary ro
   } finally {
     await staged.cleanup();
   }
+  assert.deepEqual(await fileTree(source), before);
+});
+
+test('external C# public reports retain only sanitized aggregate data', () => {
+  const report = {
+    schemaVersion: 1,
+    benchmark: 'SourceMesh official synthetic benchmark',
+    generatedAt: '2026-01-01T00:00:00.000Z',
+    environment: {
+      node: 'v24',
+      os: 'test',
+      sourceMeshCommit: 'commit',
+      fixtureCommit: 'private-fixture-commit',
+    },
+    manifest: {
+      id: 'private-manifest',
+      fixture: 'private-fixture',
+      languages: ['csharp'] as const,
+    },
+    runs: [
+      {
+        run: 1,
+        discoveryMs: 1,
+        analysisAndSnapshotMs: 2,
+        snapshotBytes: 3,
+        mcpInitializationMs: 4,
+        baselineQueryMs: [5],
+        warmQueryMs: [6],
+      },
+    ],
+    scenarioRuns: [],
+    scenarios: [],
+    summaries: { runs: 1 },
+    tokenMetrics: [],
+    limitations: [],
+  } satisfies BenchmarkReport;
+  const sanitized = JSON.stringify(sanitizeExternalReport(report));
+  assert.equal(sanitized.includes('private-manifest'), false);
+  assert.equal(sanitized.includes('private-fixture'), false);
+  assert.equal(sanitized.includes('private-fixture-commit'), false);
+  assert.equal(sanitized.includes('baselineQueryMs'), false);
+  assert.equal(sanitized.includes('warmQueryMs'), false);
+  assert.match(sanitized, /external-csharp-medium/u);
 });
