@@ -145,14 +145,14 @@ export function validateBenchmarkManifest(
   if (!(
     (manifest.analysis.language === 'typescript' &&
       nonEmptyText(manifest.analysis.tsconfig)) ||
-      (manifest.analysis.language === 'csharp' &&
-        ((manifest.analysis.solution !== undefined &&
-          nonEmptyText(manifest.analysis.solution) &&
-          manifest.analysis.projects === undefined) ||
-          (manifest.analysis.projects !== undefined &&
-            manifest.analysis.projects.length > 0 &&
-            manifest.analysis.projects.every(nonEmptyText) &&
-            manifest.analysis.solution === undefined)))
+    (manifest.analysis.language === 'csharp' &&
+      ((manifest.analysis.solution !== undefined &&
+        nonEmptyText(manifest.analysis.solution) &&
+        manifest.analysis.projects === undefined) ||
+        (manifest.analysis.projects !== undefined &&
+          manifest.analysis.projects.length > 0 &&
+          manifest.analysis.projects.every(nonEmptyText) &&
+          manifest.analysis.solution === undefined)))
   ))
     throw new TypeError('manifest');
   const ids = new Set<string>();
