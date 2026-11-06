@@ -56,6 +56,18 @@ test('release candidate validation emits a version only for coherent private met
   }
 });
 
+test('hotfix candidate validation uses the coherent declared package version', async () => {
+  const root = await fixture();
+  try {
+    const result = validate(root, 'hotfix/151-release-candidate-command');
+    assert.equal(result.status, 0);
+    assert.equal(result.stdout, 'version=0.1.0-beta.4\ntag=v0.1.0-beta.4\n');
+    assert.equal(result.stderr, '');
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
 test('release candidate validation fails closed for untrusted release metadata', async () => {
   const root = await fixture();
   try {
@@ -102,6 +114,10 @@ test('release candidate validation fails closed for untrusted release metadata',
     const invalidBranch = validate(root, 'release/0.1.0-beta.04');
     assert.equal(invalidBranch.status, 1);
     assert.match(invalidBranch.stderr, /branch_invalid/u);
+
+    const untrustedBranch = validate(root, 'feature/151-release-candidate');
+    assert.equal(untrustedBranch.status, 1);
+    assert.match(untrustedBranch.stderr, /branch_invalid/u);
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }
