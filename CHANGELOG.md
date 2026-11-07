@@ -16,6 +16,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   MCP runs were exercised, but the conventional baseline could not start its
   local read-only tools, so no comparative efficiency claim is published (#169).
 
+- Added sanitized valid Baseline A structural-investigation evidence from
+  official per-turn JSONL telemetry, while retaining the boundary that the
+  existing MCP artifacts are not content-equivalent enough for an A/B claim
+  (#169).
+
 - Added reproducible synthetic TypeScript and C# benchmark suites, structured
   JSON/CSV reporting, optional imported token telemetry, and benchmark
   methodology/highlights documentation (#161).

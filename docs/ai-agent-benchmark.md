@@ -7,9 +7,9 @@ advantage or yield worse results.
 
 ## Status and telemetry boundary
 
-No A/B result is published by this repository yet. Existing external C# results
-measure structural discovery and snapshot cost, not Codex task completion or
-token savings.
+No comparable A/B result is published by this repository yet. Existing external
+C# results measure structural discovery and snapshot cost, not Codex task
+completion or token savings.
 
 Codex does not expose a repository-safe automatic per-session metric feed to
 this benchmark. Its documented account-usage API is account/daily-summary level,
@@ -79,6 +79,33 @@ Raw prompts, session events, answers, target paths, snapshot provenance, and
 ground truth remain local and ignored. Re-run the baselines in a host where
 the conventional read-only tools start successfully before publishing any
 comparative metric.
+
+## 2026-11-06 valid structural Baseline A observation
+
+A fresh, sequential conventional-tools baseline completed three structural
+scenarios after a successful read/search probe. Each scenario used an
+independent `codex exec --json` process with the same recovered prompt, model,
+high reasoning setting, read-only sandbox, and an explicitly disabled
+SourceMesh MCP server. The target's relevant-file fingerprints and pre-existing
+working-tree state were unchanged across the observation; the JSONL records
+each contained one official `turn.completed` event and no SourceMesh MCP call.
+
+| Generic scenario |   Input | Cached input | Output |   Total | Reasoning | Duration | Tool calls | Quality result                                                     |
+| ---------------- | ------: | -----------: | -----: | ------: | --------: | -------: | ---------: | ------------------------------------------------------------------ |
+| scenario-1       | 126,974 |       92,160 |    990 | 127,964 |        93 | 23.479 s |          3 | required target facts correct; similar-name set is relevance-based |
+| scenario-2       |  81,263 |       71,936 |    920 |  82,183 |       236 | 17.270 s |          2 | direct-edge precision/recall 100%                                  |
+| scenario-3       | 107,321 |       99,328 |    956 | 108,277 |       227 | 26.723 s |          3 | direct-edge precision/recall 100%                                  |
+
+`Total` is `input + output`; cached input is a subset of input and reasoning is
+a subset of output, so neither is added again. The scenario-1 similar-name list
+has no objective recall denominator, therefore no artificial precision/recall
+percentage is published for that relevance judgment.
+
+This is valid Baseline A evidence, not an A/B efficiency finding. Prior MCP
+artifacts do not record an equivalent target-content fingerprint, so they
+cannot support a percentage reduction, a causal claim, or a direct comparison
+with this baseline. Raw prompts, answers, JSONL, source identifiers, paths,
+fingerprints, and ground truth remain local and ignored.
 
 Report cold and warm separately. Cold includes target staging, snapshot creation,
 and MCP initialization. Warm starts only after an immutable snapshot and MCP
