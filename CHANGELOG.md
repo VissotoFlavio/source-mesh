@@ -12,6 +12,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   infrastructure for real AI-agent A/B benchmarks, without fabricating Codex
   telemetry or publishing private target details (#167).
 
+- Added a sanitized record of an invalid structural MCP-use observation: the
+  MCP runs were exercised, but the conventional baseline could not start its
+  local read-only tools, so no comparative efficiency claim is published (#169).
+
 - Added reproducible synthetic TypeScript and C# benchmark suites, structured
   JSON/CSV reporting, optional imported token telemetry, and benchmark
   methodology/highlights documentation (#161).

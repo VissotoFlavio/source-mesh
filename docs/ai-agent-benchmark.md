@@ -57,6 +57,29 @@ Evaluate correctness, coverage, code evidence, limitations, false positives,
 unsupported claims, tokens, time, tool calls, files read, and received data
 together. A smaller number is not an efficiency result when quality is lower.
 
+## 2026-11-06 structural MCP-use observation
+
+One local, sequential three-scenario observation was attempted with the same
+model and high reasoning setting in both modes. The MCP-enabled runs made
+successful `searchSymbols`, `getSymbol`, `listCallers`, and `listCallees`
+calls against a fresh, partial C# snapshot. This confirms MCP use, but it does
+not establish an A/B result: all three conventional baseline runs were unable
+to start their local read-only inspection tools in the host environment.
+
+Consequently, this observation publishes no token, duration, tool-call, or
+quality comparison and makes no efficiency claim. Its aggregate findings are:
+
+| Generic scenario | Baseline validity                     | MCP use          | Classification |
+| ---------------- | ------------------------------------- | ---------------- | -------------- |
+| scenario-1       | invalid: local inspection unavailable | symbol discovery | not comparable |
+| scenario-2       | invalid: local inspection unavailable | caller discovery | not comparable |
+| scenario-3       | invalid: local inspection unavailable | callee discovery | not comparable |
+
+Raw prompts, session events, answers, target paths, snapshot provenance, and
+ground truth remain local and ignored. Re-run the baselines in a host where
+the conventional read-only tools start successfully before publishing any
+comparative metric.
+
 Report cold and warm separately. Cold includes target staging, snapshot creation,
 and MCP initialization. Warm starts only after an immutable snapshot and MCP
 process are ready. Calculate amortization for 1, 5, 10, or 20 tasks only with
