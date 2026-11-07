@@ -21,6 +21,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   existing MCP artifacts are not content-equivalent enough for an A/B claim
   (#169).
 
+- Added a sanitized Codex Desktop SourceMesh observation for a newly frozen
+  three-scenario structural suite, including a partial-snapshot coverage gap
+  and no unsupported token or A/B efficiency claim (#169).
+
 - Added reproducible synthetic TypeScript and C# benchmark suites, structured
   JSON/CSV reporting, optional imported token telemetry, and benchmark
   methodology/highlights documentation (#161).

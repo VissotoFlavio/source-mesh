@@ -107,6 +107,34 @@ cannot support a percentage reduction, a causal claim, or a direct comparison
 with this baseline. Raw prompts, answers, JSONL, source identifiers, paths,
 fingerprints, and ground truth remain local and ignored.
 
+## 2026-11-06 recovered Desktop B observation
+
+A new local three-scenario structural suite was frozen after the former prompts
+were lost. The Codex Desktop session made nine successful SourceMesh calls:
+four symbol searches, three symbol-detail reads, one caller query, and one
+callee query. The target checkout and relevant fingerprints remained unchanged.
+The snapshot was schema 3 but `partial` and `unverified`, with no declared
+commit or provenance.
+
+| Generic scenario | SourceMesh calls | Scoped quality result | MCP round-trip |
+| ---------------- | ---------------: | --------------------- | -------------: |
+| scenario-1       |                3 | precision/recall 100% |          63 ms |
+| scenario-2       |                3 | precision/recall 100% |          64 ms |
+| scenario-3       |                3 | recall 0%; empty set  |          62 ms |
+
+The third query returned no direct relationships despite static ground truth
+containing direct calls; because its snapshot was partial, this is recorded as
+a coverage limitation rather than as an absence of calls in source. Codex
+Desktop exposed no official per-scenario token or end-to-end duration telemetry,
+so all such values remain unavailable. The displayed elapsed times measure only
+MCP round trips. This is not comparable with the earlier Baseline A: the frozen
+prompts are different, the Desktop scenarios did not have independent context
+isolation, and no per-scenario official token measurements exist.
+
+The new prompts, answers, detailed ground truth, paths, fingerprints, and raw
+local evidence remain ignored. They are reserved unchanged for a future
+same-prompt conventional baseline.
+
 Report cold and warm separately. Cold includes target staging, snapshot creation,
 and MCP initialization. Warm starts only after an immutable snapshot and MCP
 process are ready. Calculate amortization for 1, 5, 10, or 20 tasks only with
