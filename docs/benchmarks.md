@@ -47,6 +47,26 @@ Output paths must be repository-relative and cannot traverse upward. JSON contai
 
 ## Tokens and agent comparison
 
+The token benchmark has a separate frozen contract in
+`src/benchmarks/token-consumption/`. Its manifest version is independent from
+the timing benchmark and freezes the fixture revision/fingerprint, exact
+prompts, selected C# project scope, operation/read/payload limits, tokenizer
+encoding configuration, snapshot state, stopping criteria, and independently
+verified ground-truth evidence. The committed C# scenario covers
+`LookupVehiclePlateHandler.ProjectAsync(VehiclePlateEntity, CancellationToken)`,
+four local direct callers, and three directly verifiable calls from the method
+body. It explicitly excludes dynamic, indirect, transitive, extension, and
+namespace-level relationships.
+
+This contract does not run a tokenizer or an investigation recipe. A future
+runner must capture exact UTF-8 model-visible payloads before tokenization and
+must keep question tokens, tool-result tokens, optional tool-definition proxy
+tokens, and cold snapshot preparation separate. The quality gate rejects
+incorrect, incomplete, unsupported, or unverified pairs; partial results are
+never valid token savings. The manifest currently records `o200k_base` and the
+planned `tiktoken` package version without adding that package or implementing
+the measurement path in this contract-only change.
+
 The deterministic suites do not invoke an AI model and therefore do not report token savings. This is intentional: bytes, characters, tokenizer estimates, and provider-reported tokens are different metrics.
 
 An operator may import real, sanitized agent telemetry with `--token-metrics <relative-json-path>`. The file is an array of records with a scenario ID, `baseline` or `sourceMesh` mode, an explicit origin (`provider`, `tokenizer-estimate`, or `unknown`), and any available input, output, cached, reasoning, total-token, tool-call, and elapsed-time counts. It must not contain prompts, source code, paths, credentials, or other private text.
