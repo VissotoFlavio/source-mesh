@@ -8,6 +8,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- Added a versioned, isolated context-token benchmark contract with frozen
+  prompts, fixture fingerprints, independent C#/TypeScript ground truth,
+  bounded scopes, snapshot state, stopping criteria, and an equivalence quality
+  gate (#171).
+
 - Added reproducible synthetic TypeScript and C# benchmark suites, structured
   JSON/CSV reporting, optional imported token telemetry, and benchmark
   methodology/highlights documentation (#161).
