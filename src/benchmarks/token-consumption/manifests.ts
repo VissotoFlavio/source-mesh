@@ -118,7 +118,7 @@ export const TOKEN_BENCHMARK_MANIFEST: TokenBenchmarkManifest = {
           evidence: [
             {
               path: 'src/LookupVehiclePlate/LookupVehiclePlateHandler.cs',
-              anchor: '=> ProjectAsync(entity, cancellationToken)',
+              anchor: `${name}(VehiclePlateEntity entity, CancellationToken cancellationToken)\n        => ProjectAsync(entity, cancellationToken)`,
               kind: 'direct-caller' as const,
             },
           ],
